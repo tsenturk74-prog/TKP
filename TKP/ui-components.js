@@ -1473,9 +1473,15 @@ function couponVariantCompactHTML(res, shortTitle){
     const visiblePicks=picks;
     const chips = visiblePicks.map(p=>{
       // Kuponun resmi eküri kapsamı legHit'te değerlendirilir; bu at rozeti ise
-      // yalnız atın kendi resmi 1.liğini gösterir. Eküri ortağı kazanmışsa ikisi
-      // birden yeşil/kazançlı görünmez.
-      const isWinner = hasResult && (Number(p.winner)===1 || Number(p.finish_position)===1);
+      // Eküri resmi olarak birlikte değerlendirildiği için ortaklardan biri
+      // kazandığında kupondaki seçili diğer ortak da kazanmış işaretlenir.
+      const officialWinner = hasResult && (x.r.horses||[]).find(h=>Number(h.winner)===1 || Number(h.finish_position)===1);
+      const isWinner = !!(officialWinner && (
+        Number(p.winner)===1 ||
+        Number(p.finish_position)===1 ||
+        String(p.horse_no)===String(officialWinner.horse_no) ||
+        sameEkuri(p.horse_no,officialWinner.horse_no)
+      ));
       const badge = ekuriBadgeForHorse(p,x.r);
       // horse_no zaten 7-E1 biçimindeyken yanına ikinci kez E1 rozeti eklenmesin.
       // Görselde tablodakiyle aynı şekilde "7 + E1 rozeti"; veri/No özetinde 7-E1 korunur.

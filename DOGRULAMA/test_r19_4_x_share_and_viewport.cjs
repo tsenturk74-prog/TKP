@@ -26,4 +26,7 @@ assert(html.includes('max-width:1600px'), 'Program görünümü sınırlı merke
 assert(html.includes('.couponPickChip.couponPickChipWin{background:#dcfce7'), 'Kazanan kupon seçimi yeşil görünmeli');
 assert(html.includes('.couponLegStatus.hit{background:#bbf7d0'), 'Tutan ayak yeşil görünmeli');
 assert(html.includes('.couponLegStatus.miss{background:#fee2e2'), 'Tutmayan ayak kırmızı görünmeli');
+const ui=fs.readFileSync(path.join(root,'TKP','ui-components.js'),'utf8');
+assert(ui.includes('sameEkuri(p.horse_no,officialWinner.horse_no)'), 'Eküri ortağı kazanımı kupon seçiminde işaretlenmeli');
+assert(html.includes('font-size:9.5px!important;line-height:16px'), 'Kupon numara rozetleri kompakt olmalı');
 console.log('PASS r19.4 X share + viewport lock');
