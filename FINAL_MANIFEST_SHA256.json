@@ -1,0 +1,707 @@
+{
+  "release": "TKP CORE V1.1.333 · R19.4 X SHARE VIEWPORT FINAL",
+  "generated_at_utc": "2026-09-16T20:04:40.254206+00:00",
+  "file_count": 140,
+  "files": [
+    {
+      "path": "BASLAT.bat",
+      "bytes": 72,
+      "sha256": "1e247287ecf45371a8f0d515f31d78a583605113e988782e152077ea7c81d539"
+    },
+    {
+      "path": "DOGRULAMA/test_r19_2_integrity_ui.py",
+      "bytes": 5728,
+      "sha256": "a07a5c1e9f0a00e375f8fc8bad42b3608b6fbdcdfbe616c2dc10b6cc6c37fb8b"
+    },
+    {
+      "path": "DOGRULAMA/test_r19_2_runtime_unit.cjs",
+      "bytes": 1473,
+      "sha256": "924ecec33ff0e1386daf01b1c0a123055fc6d02b0b5f5a5920d1437ca1079091"
+    },
+    {
+      "path": "DOGRULAMA/test_r19_4_x_share_and_viewport.cjs",
+      "bytes": 1873,
+      "sha256": "5f57ec3cbc451c46547befc315cb8bc4136b6ca0186ffa785a4704b79b750a0f"
+    },
+    {
+      "path": "DOGRULAMA/test_r19_rowwide_table_ui.py",
+      "bytes": 1946,
+      "sha256": "c1a8325150461d7fdd3b96c4ac8c5ae78c0c803db223e1e278fdc29865bad656"
+    },
+    {
+      "path": "DOGRULAMA/tools/ARCHIVE_INTEGRITY_REPAIR.cjs",
+      "bytes": 13716,
+      "sha256": "7c614ffc063855224c916487060896b165561939c61cd78928bef5158801861f"
+    },
+    {
+      "path": "DOGRULAMA/tools/R15_4_FINALIZE_REPAIRED_ARCHIVE.cjs",
+      "bytes": 9770,
+      "sha256": "d7b6f640ce27919121cd4f6835ac48ee250291cfc7156a84f821bef1770f2606"
+    },
+    {
+      "path": "DOGRULAMA/tools/R15_6_CALIBRATION_PROVENANCE.cjs",
+      "bytes": 2519,
+      "sha256": "5500c9e6c1d1a40bbd8d449ac0a2e61005805644d77c14c5b50dc5e9bbc87e3a"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_55_SOLID_SINGLE_WALKFORWARD.cjs",
+      "bytes": 6359,
+      "sha256": "e11798c15fe02e60acde2c8349813302f089276bb7d24e1a84d99500247dc58b"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_56_MULTIMODEL_CANDIDATE_WALKFORWARD.cjs",
+      "bytes": 11028,
+      "sha256": "3e3bde18a05f219defe6fa362bd43493a00f25b7ef2903617a4420825fd6e652"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_57_NONLINEAR_ALL_HORSE_CANDIDATES.py",
+      "bytes": 6359,
+      "sha256": "bd3812faeafbbb6fe5954974455b4cf821670458d7ef2e4a9477459302c74416"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_58_GENERAL_OVERVIEW_HIT_AUDIT.cjs",
+      "bytes": 4651,
+      "sha256": "b1665e9442d53df51695d65dd1f8f518e68c467a7a760942f26d6bad839d7eb4"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_59_STRONG_SINGLE_RULE_MINER.py",
+      "bytes": 6439,
+      "sha256": "bd3b8d3c13342e7b31f69af07936e53a898069a1ac02a8baa86df6ffb4a84291"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_ALL_SNAPSHOT_WALKFORWARD.cjs",
+      "bytes": 11429,
+      "sha256": "cd32ea7c18d3b27c73eb620f01adb1cd3f7f943e87fd9595e665bf3933c11966"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_FIELD_AUDIT.py",
+      "bytes": 2197,
+      "sha256": "6613c75e4cd7d35d3844a2cb1a40c2fef01851785926944b5c75398ee974b5be"
+    },
+    {
+      "path": "DOGRULAMA/tools/R16_FIXED_HIERARCHY_5FOLD.py",
+      "bytes": 2090,
+      "sha256": "3510cfc333530975c37dd0521512aa02e2ad6d901975bf17bb0e9b51ecad36be"
+    },
+    {
+      "path": "DOGRULAMA/tools/test_tkp_r17_autogluon.py",
+      "bytes": 12782,
+      "sha256": "de988109098fd1daae38b175bb724be730dbc84bcdc3af1e6b5258ab050f8198"
+    },
+    {
+      "path": "DOGRULAMA/tools/test_tkp_r17_service.py",
+      "bytes": 1272,
+      "sha256": "e02dd2e29e8bbfed25cb38c30f3b6324c9bc958056fd115423868a23d44fdf07"
+    },
+    {
+      "path": "DOGRULAMA/tools/tkp_r17_autogluon.py",
+      "bytes": 28845,
+      "sha256": "bd9670adc717f6660f184861e92d0ae31d2f5fd033994bfad305546cfa9c2bf0"
+    },
+    {
+      "path": "DOGRULAMA/tools/tkp_r17_service.py",
+      "bytes": 5344,
+      "sha256": "6f7cfcbbd0a7eb8c8791fb8c3ac72d26fa832599faadaafbba07e9389af579c3"
+    },
+    {
+      "path": "R17_MODEL/BASLAT_R17_CANLI.bat",
+      "bytes": 705,
+      "sha256": "d70a94ee33bab21397a3c08837b842699776abba68d8ac172ecfc6f00a6b5d37"
+    },
+    {
+      "path": "R17_MODEL/EGIT_R17.bat",
+      "bytes": 1067,
+      "sha256": "5b27272e3318207a3261f4880433193ce886d10edb454186ffe62a920552cb08"
+    },
+    {
+      "path": "R17_MODEL/EGIT_R17_HIZLI.bat",
+      "bytes": 755,
+      "sha256": "c127f4eaa7834c01336f4fe4c86cc97028565e041ef8974e93010a1e5e054998"
+    },
+    {
+      "path": "R17_MODEL/KUR_AUTOGLOUON.bat",
+      "bytes": 1314,
+      "sha256": "b380ff912ed12d7b60995a74808c1f2f9e6b8a75b0454601c09ec8641196c779"
+    },
+    {
+      "path": "R17_MODEL/README_R17.txt",
+      "bytes": 6372,
+      "sha256": "1d06172f1fe859861aa969e8de41da2c57cc61271dc864590e39a490af74b902"
+    },
+    {
+      "path": "R17_MODEL/r17_form_index.json",
+      "bytes": 2469773,
+      "sha256": "4e997d9854f982b79f3b52cabbdae69f91a694dcad173cc94517d8646f1fa041"
+    },
+    {
+      "path": "R17_MODEL/r17_training_report.json",
+      "bytes": 5669,
+      "sha256": "d5919811290007d21dc045d59530d068dbb9baba7f50c8681170d9383cbfc5c1"
+    },
+    {
+      "path": "R17_MODEL/r17_training_report_R17_1_previous.json",
+      "bytes": 1578,
+      "sha256": "4d2d955e8de4817b0fe933fa3f3c3a15711d89c9143fb68179562c923fb166f7"
+    },
+    {
+      "path": "R18_MODEL/BASLAT_R18_CANLI.bat",
+      "bytes": 292,
+      "sha256": "4fca3df4b3ce87b31aaf3dddc3db773e3a5be6588ad4f102c28106c9d02117a2"
+    },
+    {
+      "path": "R18_MODEL/EGIT_R18.bat",
+      "bytes": 595,
+      "sha256": "cd79da69bbc1481f9f3a515df338429a0542c43c76046d5936c07fd411bd59e6"
+    },
+    {
+      "path": "R18_MODEL/r18_model.joblib",
+      "bytes": 27190,
+      "sha256": "8acd949567fb000071c016835b7fd59ce4fc0d48170a754bc2dc8ea5d73bd158"
+    },
+    {
+      "path": "R18_MODEL/r18_training_report.json",
+      "bytes": 12041,
+      "sha256": "484860d23e15bf308aa74072c970e7d5a8663d23d249a13f5b9479c2bca8ea5b"
+    },
+    {
+      "path": "R18_MODEL/tests/test_backtest.py",
+      "bytes": 7422,
+      "sha256": "e933a17cad14ae5a5ab663f578032d1b6152b9ba20d2b13740fd9ef1b2860e74"
+    },
+    {
+      "path": "R18_MODEL/tests/test_coupon.py",
+      "bytes": 4009,
+      "sha256": "5762c1d52868b6c11f57ee61bd35751acb52906d0ba57eb248f8a116dc2fe56e"
+    },
+    {
+      "path": "R18_MODEL/tests/test_features.py",
+      "bytes": 3294,
+      "sha256": "3e669ff01d683d78b1fddacee287945d80ca63f2d08a26137384cc7ba0f7b5fc"
+    },
+    {
+      "path": "R18_MODEL/tests/test_model.py",
+      "bytes": 3965,
+      "sha256": "64d4adcb40f16b95386227e2db2b251c97663c50b64e6378fb462ce6dabe22df"
+    },
+    {
+      "path": "R18_MODEL/tests/test_probability.py",
+      "bytes": 1418,
+      "sha256": "b93be353b3c2fca0f9f69711203dd3dbf584b864a987cc18f00705d6ff205c8c"
+    },
+    {
+      "path": "R18_MODEL/tests/test_service.py",
+      "bytes": 2774,
+      "sha256": "6ae33606438cb28f6a705b0f7575f33a0a1a8cd97eb1fd42afd34fe56f87bddd"
+    },
+    {
+      "path": "R18_MODEL/tkp_r18_backtest.py",
+      "bytes": 15905,
+      "sha256": "b7a5c9f62b4107fbd0d98cee8937e9b1f3bda5fa1d116d5a47cf31a4a2f26948"
+    },
+    {
+      "path": "R18_MODEL/tkp_r18_coupon.py",
+      "bytes": 6366,
+      "sha256": "743450b4abe62630cdd35669624adae4ebaef26a1fd033f5844818faccb7de6b"
+    },
+    {
+      "path": "R18_MODEL/tkp_r18_features.py",
+      "bytes": 5823,
+      "sha256": "d2cd2f98aea733e25bc11b773473bb9d2e0d572518265da417a1c447d3fff2e7"
+    },
+    {
+      "path": "R18_MODEL/tkp_r18_model.py",
+      "bytes": 7256,
+      "sha256": "1ddd513ab24b920e5aaf00140ad6e184daccb1ac5003523cb2f1ac2f17647258"
+    },
+    {
+      "path": "R18_MODEL/tkp_r18_probability.py",
+      "bytes": 3005,
+      "sha256": "a30857623c5c30c2b377f89caeb78d2f300ead5fe34280b1191f38a5e121b9d6"
+    },
+    {
+      "path": "R18_MODEL/tkp_r18_service.py",
+      "bytes": 6414,
+      "sha256": "374e1891aa5c5a1811cf9f558045962b9cd8694a9f3f02295afb451d58ada87e"
+    },
+    {
+      "path": "RELEASE_NOTES_R19_2.txt",
+      "bytes": 1968,
+      "sha256": "5831bca18427f68b36d01258893b8fa2fd3a28339e5fefd1a7b2b1606d6fc326"
+    },
+    {
+      "path": "RELEASE_NOTES_R19_4.txt",
+      "bytes": 919,
+      "sha256": "3a8aa6a9a087db0461df7bcfb8eb03a628b24c00727ecf2003404b86681a5ed8"
+    },
+    {
+      "path": "TKP/TKP_CORE_CLAUDE.html",
+      "bytes": 611450,
+      "sha256": "0eda62822482211c5e0786df647404a41832131a402ff5112cc159907034fd01"
+    },
+    {
+      "path": "TKP/VERSION.txt",
+      "bytes": 50,
+      "sha256": "4644f6a1c68508439ad9a8037b5efbf69526719d6a013c4c38c4075ae63da288"
+    },
+    {
+      "path": "TKP/YPUAN_export.html",
+      "bytes": 2079,
+      "sha256": "ec9bf061db639384dc428d1e880868a85eeebc5bfe6d70bdfd0faa748b29baab"
+    },
+    {
+      "path": "TKP/app-controller-r1681-baseline-v24.js",
+      "bytes": 603776,
+      "sha256": "f2527ea6ca229cd99c01b2149aa1d86b7b8e13aea3f2e4036c4bf36f69d2befd"
+    },
+    {
+      "path": "TKP/app-controller.js",
+      "bytes": 593304,
+      "sha256": "42667362ca6bc3028ef291889f3327452e5dae85c1939ab1d3cd3c637513ce5b"
+    },
+    {
+      "path": "TKP/archive-coupon-planner.js",
+      "bytes": 8294,
+      "sha256": "9cf81632eab34ea2562c4e28457c27a1b632fbf6509b16db62c2abc54e0b9878"
+    },
+    {
+      "path": "TKP/commentator-performance-engine.js",
+      "bytes": 29921,
+      "sha256": "98449a20ba17a6f2995e9f00de9517e7226de3a010c91b1426ee46376b602391"
+    },
+    {
+      "path": "TKP/core-utils.js",
+      "bytes": 53091,
+      "sha256": "5919a72ccc5ac821290b255a14e9aec8ab82614b37629ed4f6b3eb893e073c0b"
+    },
+    {
+      "path": "TKP/coupon-builder-r1681-bankroll-90k-v1.js",
+      "bytes": 438885,
+      "sha256": "62d15d1bd2b2ef1e01c19787b5744ff5edb6a97b0a2de16de95eaa2b1aea889d"
+    },
+    {
+      "path": "TKP/coupon-builder-r1681-baseline-v2.js",
+      "bytes": 450920,
+      "sha256": "ec379c4050fde07f12a4a771b4c0b4a27289a65d1fc6df33a17e838e57c16cc4"
+    },
+    {
+      "path": "TKP/coupon-builder.js",
+      "bytes": 453407,
+      "sha256": "21758bf188fc6d3b81d0ab9010dadad61662e545e1675d66176f6832b6662864"
+    },
+    {
+      "path": "TKP/coupon-policy-governance.js",
+      "bytes": 13196,
+      "sha256": "0f23a7e71f87d08061af588d39d483e4257ad0353b2400a360677a65aac6a600"
+    },
+    {
+      "path": "TKP/coupon-policy-search-engine.js",
+      "bytes": 5699,
+      "sha256": "ede70a5c9804f13c993ab22f95ff1486be39b035f34bfd401150502973c14fb0"
+    },
+    {
+      "path": "TKP/final-runtime-fixes.js",
+      "bytes": 26783,
+      "sha256": "b8658c55f7d3337018cca260b9905cb08b572337ffa43ef883f851ef9fd1ec4d"
+    },
+    {
+      "path": "TKP/fixed-scroll-grips.js",
+      "bytes": 8092,
+      "sha256": "8161f1498c797360a661bf9c7d65d40fae94826595d23bddbf12870116d9a05c"
+    },
+    {
+      "path": "TKP/historical-all-data-bridge.js",
+      "bytes": 25141,
+      "sha256": "a769f91d4ebb4ab46afa5065fc55e57fc04160be515dd809e6ce1d516cc9ce56"
+    },
+    {
+      "path": "TKP/historical-calibration.js",
+      "bytes": 48643,
+      "sha256": "5dfd932712e32dd5061cf17bb9af0e88c195e13ee2d881374c63c31f272dff0b"
+    },
+    {
+      "path": "TKP/learning-engine-v2.js",
+      "bytes": 105149,
+      "sha256": "95fb994939789db2b74ff4e8d07ac512455ef1622ed26e53e12456c562d08a44"
+    },
+    {
+      "path": "TKP/ods-export.js",
+      "bytes": 36495,
+      "sha256": "fa4804a2ca411f3fbdc29536e79ee761fc66fe58a70b79099fb2decfbd2a30ad"
+    },
+    {
+      "path": "TKP/ods-template.js",
+      "bytes": 1697873,
+      "sha256": "539eb90a67839b77d6da519fa2906aeea588e79f44bb5c5cc687152ac671ac03"
+    },
+    {
+      "path": "TKP/online-ranking-engine.js",
+      "bytes": 41273,
+      "sha256": "6cac5c1697130164d75eca4da7211e44051e08385671031f004ed8422cc29ff3"
+    },
+    {
+      "path": "TKP/package-lock.json",
+      "bytes": 692,
+      "sha256": "91f440ed2d707fb0067b61fe64bb5cbef037a5313706d385afdde423ed06c536"
+    },
+    {
+      "path": "TKP/package.json",
+      "bytes": 618,
+      "sha256": "3460377523ae14ff9cd92e51efdf101a7f0ec5a32c82ed283198a94b14de3f22"
+    },
+    {
+      "path": "TKP/performance-runtime-r1681-band-bankroll-v2.js",
+      "bytes": 53644,
+      "sha256": "bc46b536bdf8615ad7d43d494640e4ac9a902c289754f00837d2bec4d240b12c"
+    },
+    {
+      "path": "TKP/performance-runtime.js",
+      "bytes": 53644,
+      "sha256": "bc46b536bdf8615ad7d43d494640e4ac9a902c289754f00837d2bec4d240b12c"
+    },
+    {
+      "path": "TKP/prediction-engine.js",
+      "bytes": 70243,
+      "sha256": "c5db67f7569635c90b1c4bbdfc99e7d53e3a7e26ea9f29b6b91885cc94731397"
+    },
+    {
+      "path": "TKP/print-report.js",
+      "bytes": 39209,
+      "sha256": "f1c4c1e64f58bd5ccb9044c3ba52f8080571063235a23c71bbb2b70e6df6f621"
+    },
+    {
+      "path": "TKP/r16-challenger-engine.js",
+      "bytes": 19124,
+      "sha256": "ae43e32860e006bd24cf69a1e4b19d8ede5c5bd6244ee8ef449f668e90471f06"
+    },
+    {
+      "path": "TKP/r16-coupon-coverage.js",
+      "bytes": 33139,
+      "sha256": "90cd1dd6f9d3563522fa6e40813e3b0f4cbc28429403976039cf77358183357b"
+    },
+    {
+      "path": "TKP/r16-learned-features.js",
+      "bytes": 3160,
+      "sha256": "99267534785e7a7f5db31e0714fd4bd2b3673cbde9d63b2417b47c23fcb8618a"
+    },
+    {
+      "path": "TKP/r16-learned-model.js",
+      "bytes": 13980,
+      "sha256": "da97c681b558cfd6953fd5c375bd20f69990c8ea3d3674d63cd756fa543d4d1c"
+    },
+    {
+      "path": "TKP/r16-position-runtime.js",
+      "bytes": 6491,
+      "sha256": "cafe18b9d6dcf0c54df0e2a237621209b41d7071e4a8f0ace397c6d7528913c0"
+    },
+    {
+      "path": "TKP/r17-ev-roi-portfolio-engine.js",
+      "bytes": 10314,
+      "sha256": "ee85a8f309a9c142fb9290760d79676b880b637d6b4a4f4127ce862ce0ef7d7d"
+    },
+    {
+      "path": "TKP/race-data.js",
+      "bytes": 365927,
+      "sha256": "b17736e3382a5066532ed0802271e36d3ae346b0e7a4da1ed6b8072feacef6a7"
+    },
+    {
+      "path": "TKP/research-analytics.js",
+      "bytes": 23029,
+      "sha256": "3dbe075f95a02247a63eb069e16ec9644231192db0bcd5a92908a61093f560b5"
+    },
+    {
+      "path": "TKP/result-display-sync.js",
+      "bytes": 5014,
+      "sha256": "2e60c4db55bbc1a92be1f979d5adcb00ef9bf0235365b8230e929cb639a7dcf0"
+    },
+    {
+      "path": "TKP/selective-backup.js",
+      "bytes": 7844,
+      "sha256": "888c6bc77c4e40736444ae446ba5030c035fb19409b2be53f4a9785a6f420eda"
+    },
+    {
+      "path": "TKP/state.js",
+      "bytes": 136923,
+      "sha256": "96da0579ff6dfa70ed7bcae51bf0bb30c74b05554f13bbe2027c180f75410d83"
+    },
+    {
+      "path": "TKP/stats-engine.js",
+      "bytes": 155803,
+      "sha256": "5eed230d74768930431b86755d88ad1bc764281e4b1103a546f25280397a21b9"
+    },
+    {
+      "path": "TKP/strategy-lab.js",
+      "bytes": 20120,
+      "sha256": "1d0383ba9df1d1270437903c32b99a3558dd931b973c7a84b691ff3049ee1490"
+    },
+    {
+      "path": "TKP/surprise-cohort-tracker.js",
+      "bytes": 26299,
+      "sha256": "44b7a160b9025aac8001aa746cd56b08868e29fd3d284be7bda2590d7206c11d"
+    },
+    {
+      "path": "TKP/surprise-portfolio-engine.js",
+      "bytes": 10470,
+      "sha256": "ddb3e49e64ec8a54353846582149599f2a4cf5ebe0464692d67c976b99bbc27d"
+    },
+    {
+      "path": "TKP/tkp-adaptive-cache-persist.js",
+      "bytes": 8524,
+      "sha256": "4f1a68472a2288b3cb3afc1211daa3a411984abe63a5454aa818c3b7271e1dba"
+    },
+    {
+      "path": "TKP/tkp-analysis-cache.js",
+      "bytes": 5056,
+      "sha256": "0cc48889107c20ec3e66ebb04a08c8c3830a783fe376e9cb10ef66f984f75997"
+    },
+    {
+      "path": "TKP/tkp-archive-snapshot-repair.js",
+      "bytes": 4437,
+      "sha256": "ba6ebca4bcaeeb41f32440036138512b93fd37c2b09440aecff54dfc3016890a"
+    },
+    {
+      "path": "TKP/tkp-backtest-fast-r1681-surprise-band-v1.js",
+      "bytes": 115624,
+      "sha256": "8b84d2c3f8239fd5afdd2571115995963bba920d6cb79f69a41f838b88ed446c"
+    },
+    {
+      "path": "TKP/tkp-backtest-fast.js",
+      "bytes": 114986,
+      "sha256": "a0709ac693d8f7fb20a23802cffcccc2501f9526a426e915f4401915265a981b"
+    },
+    {
+      "path": "TKP/tkp-backup-import-worker.js",
+      "bytes": 30395,
+      "sha256": "aea0ebdde84728ec1487d7dae3af0c3e1de0a50645fddfa31c3ae70dac8a0d94"
+    },
+    {
+      "path": "TKP/tkp-baseline-evidence.js",
+      "bytes": 6907,
+      "sha256": "14dc7c75e902a2792b9a87ab9f40cebaf9a8341ee534af6b726dd923a90fbd10"
+    },
+    {
+      "path": "TKP/tkp-calibration-engine-r1681-bankroll-90k-v1.js",
+      "bytes": 20349,
+      "sha256": "19d51fabe292f148ee14efae92a63ecece6739ba0491948b26723a49037c5af8"
+    },
+    {
+      "path": "TKP/tkp-calibration-engine.js",
+      "bytes": 20349,
+      "sha256": "19d51fabe292f148ee14efae92a63ecece6739ba0491948b26723a49037c5af8"
+    },
+    {
+      "path": "TKP/tkp-champion-portfolio-engine.js",
+      "bytes": 27675,
+      "sha256": "b9c2b5d0fcfae500a9f7f4b2e4e7a940faa6b55749edc4208dff9e43ab723466"
+    },
+    {
+      "path": "TKP/tkp-collector-bridge.js",
+      "bytes": 165968,
+      "sha256": "391511a618d3b6bd9125fc7b29e332ba99ea70851383a0f40c2ae726e85ea056"
+    },
+    {
+      "path": "TKP/tkp-freeze-diagnostics.js",
+      "bytes": 25130,
+      "sha256": "ee7a8a0d2477d875b2317c9d9fe6984546c3e5bca04aea8db2fdb24ff691fdcf"
+    },
+    {
+      "path": "TKP/tkp-incremental-rules.js",
+      "bytes": 16154,
+      "sha256": "99f1c64e0ae40668e66dafcaaff5a1a2141e90ad973ec0393a19da30bc823765"
+    },
+    {
+      "path": "TKP/tkp-indexes.js",
+      "bytes": 11511,
+      "sha256": "6d87f9609308710a201597557fc4fed7757bad03c82a6c949067ff8f28dc735e"
+    },
+    {
+      "path": "TKP/tkp-menu-fast.js",
+      "bytes": 12896,
+      "sha256": "ffc2015a38861844e92f4577d901324e1a4e3c5b7009c12f709060d24cb8267c"
+    },
+    {
+      "path": "TKP/tkp-monte-carlo-engine.js",
+      "bytes": 8597,
+      "sha256": "d04dbe681aa3cd7b28e7f9f7125413aaf7cd5827449aafba8c6956bcb078b09f"
+    },
+    {
+      "path": "TKP/tkp-probability-portfolio-engine.js",
+      "bytes": 23420,
+      "sha256": "494ae77c68317df84f9fe2ec9e267a763fa1f0357214b459519d6466dc15529a"
+    },
+    {
+      "path": "TKP/tkp-profiler.js",
+      "bytes": 11879,
+      "sha256": "42456e34e2e31091d8c01e25b7a75a36014852154d88837c5d7dd44bf9075480"
+    },
+    {
+      "path": "TKP/tkp-r17-autogluon-bridge.js",
+      "bytes": 4293,
+      "sha256": "6f93c8d3849e713b3175b94522a12e4e4f22b6174759e0f4db95c6f8b405d03d"
+    },
+    {
+      "path": "TKP/tkp-r18-analytics-bridge.js",
+      "bytes": 4921,
+      "sha256": "10e99194f9550b29c6dbf32d44c099ea3e2f081b465189e6e25cc082e16af995"
+    },
+    {
+      "path": "TKP/tkp-r19-integrity-runtime.js",
+      "bytes": 12590,
+      "sha256": "7d38d99f5b3bc301c8d9deb8f23a706708d146c6d5c0744d32293ae0fa03a996"
+    },
+    {
+      "path": "TKP/tkp-real509-archive.js",
+      "bytes": 60107,
+      "sha256": "9b1353388878c8ede82059df15fa70206169c9aa3d0857eca9bf7e1a1657989c"
+    },
+    {
+      "path": "TKP/tkp-rescue509-engine.js",
+      "bytes": 8656,
+      "sha256": "63f4a0427c70b90e2d6b62fd71c6d726dad01aa447687db534332d39d73cfea5"
+    },
+    {
+      "path": "TKP/tkp-score-calibration.js",
+      "bytes": 12353,
+      "sha256": "e69888c03d9904611f11edbc5e8b3e3754e5217e0438bddf4349d1c143561c53"
+    },
+    {
+      "path": "TKP/tkp-segmented-idb.js",
+      "bytes": 68993,
+      "sha256": "ea4d6eeb4395b6661c6fd4fd2c6458fb8f8ddd521238e1d5d3c6187868a9eeec"
+    },
+    {
+      "path": "TKP/tkp-similar-race-engine.js",
+      "bytes": 5558,
+      "sha256": "930aa416591c2422c4584c00cc48591067f30a14bc5ec82b7773bea770579dd9"
+    },
+    {
+      "path": "TKP/tkp-smart-coupon-filter.js",
+      "bytes": 9581,
+      "sha256": "209e04cd5da8dca6cc6cc9d6106e2c0a009ba8481301a8530ad599ed941e464b"
+    },
+    {
+      "path": "TKP/tkp-v296-cost-roi-policy.js",
+      "bytes": 3448,
+      "sha256": "1241629e58f289472eca01468cc4bcfc8f6e68a4c64deb4966a4443aa68ed304"
+    },
+    {
+      "path": "TKP/tkp-v31-runtime.js",
+      "bytes": 10187,
+      "sha256": "fe5549d869c1a4547087ca54f5bf81851f891f866adeb94d78f31264ca635616"
+    },
+    {
+      "path": "TKP/tkp-v320-portfolio-engine.js",
+      "bytes": 24947,
+      "sha256": "2592c5fd46a77ca16aefba2fc0e7988543b6be77b90b12f4c2bc5b9f333bf584"
+    },
+    {
+      "path": "TKP/tkp-v321-sidebet-calibration.js",
+      "bytes": 7443,
+      "sha256": "4e610db3f372f70e085b9e5531ce18758dde5624aad0e2626019e70260fa9a80"
+    },
+    {
+      "path": "TKP/tkp-virtual-table.js",
+      "bytes": 9573,
+      "sha256": "ecb17a01b13fdc2c950e99dc93952056f5e10e659faf8601c74ad75b599a7d8d"
+    },
+    {
+      "path": "TKP/ui-components.js",
+      "bytes": 211224,
+      "sha256": "dcb12fdc8860d9a62a2cd9eeef49898d8b6ed1cefb3907076a5d7afdb2762c54"
+    },
+    {
+      "path": "TKP/v53-target15-engine.js",
+      "bytes": 142451,
+      "sha256": "4c78868c1f23ac65619d8bab8d77b2a21d3a2d260efa3fc7156d33960f251647"
+    },
+    {
+      "path": "TKP/v55-live-diagnostics.js",
+      "bytes": 64799,
+      "sha256": "04f021cd7d8001677e18d5f066d10a06e23975c13af089e28a634226c616e32c"
+    },
+    {
+      "path": "TKP/vendor/pako.min.js",
+      "bytes": 45988,
+      "sha256": "29cfa0542b9864b6640cfdcc8f15b184db6431b532db2702a3ce97e5f2a7fc1c"
+    },
+    {
+      "path": "TKP/weekly-model-tracker.js",
+      "bytes": 69831,
+      "sha256": "29f19435730156f79eca4e447ece479dae7f46b08f11dc717f2c5ff19fddf538"
+    },
+    {
+      "path": "TKP/x-kulis-engine.js",
+      "bytes": 32903,
+      "sha256": "d1ab406db84a8e05455706419d24f3e5789c30a59f42b24f52532a9a577fb21e"
+    },
+    {
+      "path": "VERI_TOPLAYICI/BASLAT.bat",
+      "bytes": 247,
+      "sha256": "ff082fca1ae09e59b25998dfca06a67a278338f7730940d22ffa441125b351b3"
+    },
+    {
+      "path": "VERI_TOPLAYICI/KUR_ONAR.bat",
+      "bytes": 324,
+      "sha256": "cbd2ec161ec48671398758381ec7a81490cffcba515bd1dedbce2bf787f3a6c2"
+    },
+    {
+      "path": "VERI_TOPLAYICI/README.txt",
+      "bytes": 2195,
+      "sha256": "7590581a03f006c26a936894fd837dee77f3de82eb9113f859e4eb4d92d8229b"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_BOOTSTRAP.ps1",
+      "bytes": 27621,
+      "sha256": "b65e8b9f12acbc61c085bd1c862d6d30b6dc3731137602c5e19916072264b3b7"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R15_AUTOSTART.tkpr",
+      "bytes": 115841,
+      "sha256": "ac34dddcfa7a7b198ea10dc383c202434e310e51c95ddb63126d11c9a6c53b7e"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R16_58_LAUNCHFIX.tkpr",
+      "bytes": 117424,
+      "sha256": "620def77e62a27af503e3d09a1db2d716c1a3df530b3487db8e710e3d9a355f4"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R16_60_BENTER_TR_RECONCILE.tkpr",
+      "bytes": 118486,
+      "sha256": "afe199b3674444b287daaa5da09275fdac529c95252c9a6424bad3275e626fea"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R16_68_LIVE_AUDIT.tkpr",
+      "bytes": 119603,
+      "sha256": "bd649dcea7103491b2298199c02eca2a393d99783ca6ea0c89b5cd7fbbd64415"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R16_69_SOURCE_RECOVERY.tkpr",
+      "bytes": 120270,
+      "sha256": "0664be45067f7bd4304f46464258ef6e859fdd5ed448ea4f22fbef48f4f157db"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R16_69_SOURCE_RECOVERY_NEW.tkpr",
+      "bytes": 348672,
+      "sha256": "be4644a06b522bc222339d420cb0824e57c519d25b44728dd8daef6e9b731919"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R16_69_SOURCE_RECOVERY_NEW2.tkpr",
+      "bytes": 348160,
+      "sha256": "48ec09bc321dd8387bcf6c906412d1475e59b06402bfef7687e4481e7dd58172"
+    },
+    {
+      "path": "VERI_TOPLAYICI/TKP_COLLECTOR_APP_1_1_333_R17_LIVE_FIX.tkpr",
+      "bytes": 118963,
+      "sha256": "5cd88927664520f461e43575e723792322f0b1efe39c803147082bbf0c437f64"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-16-r19-2-integrity-plan.md",
+      "bytes": 3678,
+      "sha256": "3b96ce73c2230c4dccb23f49234e674c628ab591c8beb4203bc231080eb58dfc"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-09-16-r19-2-integrity-design.md",
+      "bytes": 3912,
+      "sha256": "65fbcd4bd3459c84cd9a0c3323d1b9cb35e62d25637d22fdbc7aecf00811a3b5"
+    }
+  ]
+}

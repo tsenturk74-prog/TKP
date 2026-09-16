@@ -1,0 +1,20 @@
+{
+  "name": "tkp-core",
+  "version": "1.1.333",
+  "private": true,
+  "description": "TKP CORE offline at yarışı tahmin, kupon, sonuç, ikramiye ve doğrulama sistemi",
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "check": "node tests/run-all.js",
+    "baseline": "node ../DOGRULAMA/BASELINE_VALIDATE.cjs",
+    "stress:archive509": "node tests/archive509-performance.test.js",
+    "stress:backup": "node tests/backup-worker-v5.test.js",
+    "stress:10m": "node tests/synthetic-10m-stress.js"
+  },
+  "engines": {
+    "node": ">=18.12.1 <19"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  }
+}

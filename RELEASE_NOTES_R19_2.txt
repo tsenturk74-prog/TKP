@@ -1,0 +1,28 @@
+TKP CORE V1.1.333 · R19.2 INTEGRITY FINAL
+Tarih: 2026-09-16
+
+ANA DUZELTMELER
+- R19.1 tablo tabani korunarak BMB/ODB rozet geometrisi esitlenmistir.
+- BMB/ODB satir kimligi korunur; Y.PU+X icinde ayri koyu kare/yama yoktur.
+- DESTEKLER rozetleri kesilmeden sarilir; satir geometri tasmasi giderilmistir.
+- Sag tahmin panelleri kisaltilmis/daraltilmis, ana tabloya daha fazla alan birakilmistir.
+- Kupon TEK yazisi kucultulmus, normal at secimleri satirda en az 4 chip geometriye ayarlanmistir.
+- Dosyalar tablosu islem butonlari tek satira sigacak sekilde kompaktlastirilmistir.
+- Ilk Bakis guven yuzdesi kupon hazirligini beklemeden hafif/frozen kaynaktan gorunur olur.
+- Ileri Takip ve haftalik tablolar sabit 04.09 metnine bagli degildir; son resmi sonuc ve son kanitli pre-race tarih ayrilir.
+- Eksik pre-race snapshot sonuc sonrasinda uydurulmaz; sonuc sizintisi engellenir.
+- Forward tracking, weekly model, surprise cohort ve sidebet cozumleri hedefli persistence kullanir.
+- prediction-context-upgrade agir yeniden render kritik yoldan cikarilmistir.
+- V55 canli tani Test/Tuttu/Kacti/TEK/Kapsam sayilari canonical auto_coupon_log + resmi sonuc uzerinden turetilir.
+- %14TEK benzeri birlesik metinler %14 TEK olarak duzeltilmistir.
+- R19.2 integrity runtime; eski frozen TKP gorunumlerini normalize eder, forward kayitlarini resmi sonuc ile cozer, duplicate kayitlari guvenli sekilde tekillestirir ve trackerlari kooperatif olarak senkronlar.
+- Mevcut historical calibration; eski ayak/TKP/kupon/yan bahis snapshotlarini frozen kanittan tamamlama ve merkezi ogrenme modullerini besleme hattini korur.
+
+VERI KORUMA
+- IndexedDB/veri arsivi silinmez.
+- Sonuc bilindikten sonra yeni yarisoncesi kanit uretilmez.
+- Anlamli farkli snapshotlar birlestirilmez; yalniz canonical anahtar veya tam duplicate kayitlar tekillestirilir.
+- Veri degismedikce agir hesaplar tekrar baslatilmaz; cache/signature mantigi korunur.
+
+SURUM
+TKP CORE V1.1.333 · R19.2 INTEGRITY FINAL
