@@ -3,6 +3,13 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]; sys.path.insert(0,str(ROOT))
 
 class BacktestTests(unittest.TestCase):
+    def test_production_model_uses_train_and_validation_without_holdout(self):
+        import inspect
+        from tkp_r18_backtest import run_backtest
+        src=inspect.getsource(run_backtest)
+        self.assertIn("production_training=pd.concat([train,val]",src)
+        self.assertIn("holdout remains evaluation-only",src)
+
     def test_exact_hit_buckets(self):
         from tkp_r18_backtest import summarize_coupon_records
         rows=[{'hits':6,'cost':100,'singles':1,'single_hits':1},{'hits':5,'cost':80,'singles':2,'single_hits':1},{'hits':4,'cost':60,'singles':1,'single_hits':0},{'hits':3,'cost':40,'singles':1,'single_hits':1}]

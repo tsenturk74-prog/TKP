@@ -217,7 +217,16 @@ def run_backtest(tkbz,champion_json=None,budget=1500,simulations=10000,model_out
             'promotion_gate':{'normal':gates['normal'],'surprise':gates['surprise'],'expert':gates['expert'],'production_pass':bool(any((gates[f] or {}).get('production_pass') for f in ('normal','surprise','expert'))),'provenance_pass':bool(provenance.get('pass')),'circularity_pass':independent['pass']},
             'provenance':provenance,'independent_signal_check':independent,'ablation':ablation,'holdout_meeting_uids':hold_meetings}
     if model_out:
-        Path(model_out).parent.mkdir(parents=True,exist_ok=True); joblib.dump({'model':model,'calibrator':calibrator,'report':report},model_out)
+        # Holdout remains untouched for an honest report. The persisted live
+        # model, however, should learn from every historical race available
+        # before that holdout rather than discarding the validation partition.
+        production_training=pd.concat([train,val],ignore_index=True)
+        production_model=R18ModelStack(min_expert_races=25,random_state=18).fit(production_training)
+        production_report=dict(report)
+        production_report['production_training_meetings']=int(production_training.meeting_uid.nunique())
+        production_report['production_training_rows']=int(len(production_training))
+        production_report['production_model_rule']='train_plus_validation; holdout remains evaluation-only'
+        joblib.dump({'model':production_model,'calibrator':calibrator,'report':production_report},model_out)
     if report_out:
         Path(report_out).parent.mkdir(parents=True,exist_ok=True); Path(report_out).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return report,hold_scored,records
