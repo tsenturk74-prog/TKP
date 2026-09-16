@@ -65,7 +65,10 @@ def _pairwise_training_frame(df):
 class R18ModelStack:
     def __init__(self,min_expert_races=30,random_state=17):
         self.min_expert_races=int(min_expert_races); self.random_state=int(random_state)
-        self.global_model=None; self.experts={}; self.pairwise=None; self.blend=(0.20,0.20,0.20,0.15,0.25)
+        self.global_model=None; self.experts={}; self.pairwise=None
+        # The fifth slot is retained for report/model compatibility, but the
+        # frozen champion score is deliberately excluded from prediction blend.
+        self.blend=(0.30,0.30,0.25,0.15,0.0)
 
     def fit(self,train,val=None):
         tr=_market_prob(train)
@@ -129,9 +132,9 @@ class R18ModelStack:
 
     def _select_blend(self,val):
         candidates=[
-          (0.20,0.20,0.20,0.15,0.25),(0.15,0.15,0.15,0.15,0.40),(0.10,0.15,0.15,0.10,0.50),
-          (0.25,0.15,0.15,0.10,0.35),(0.15,0.25,0.15,0.10,0.35),(0.20,0.20,0.15,0.20,0.25),
-          (0.10,0.10,0.10,0.10,0.60),(0.25,0.25,0.15,0.15,0.20)
+          (0.30,0.30,0.25,0.15,0.0),(0.25,0.35,0.25,0.15,0.0),
+          (0.30,0.25,0.30,0.15,0.0),(0.25,0.25,0.25,0.25,0.0),
+          (0.35,0.25,0.20,0.20,0.0)
         ]
         components=self._component_scores(val)
         best=None

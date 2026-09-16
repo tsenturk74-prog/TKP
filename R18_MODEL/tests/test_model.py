@@ -10,6 +10,10 @@ class ModelIndependenceTests(unittest.TestCase):
         self.assertNotIn('champion_score', MODEL_FEATURES)
         self.assertNotIn('champion_score', PAIR_FEATURES)
 
+    def test_champion_score_is_not_in_prediction_blend(self):
+        from tkp_r18_model import R18ModelStack
+        self.assertEqual(R18ModelStack().blend[-1], 0.0)
+
 class ModelStackTests(unittest.TestCase):
     def fixture(self):
         rows=[]
