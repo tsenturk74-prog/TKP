@@ -11,7 +11,15 @@ FORBIDDEN_FIELDS={
 }
 FEATURE_COLUMNS=[
     'recent_form','agf','tr_puan','ypuan','g800','surface_fit','distance_fit','jockey_power','handicap_kg_score','champion_score',
-    'agf_rank','tr_rank','hndkp_rank','sp','start_no','distance','leg','prior_starts','prior_wins'
+    'agf_rank','tr_rank','hndkp_rank','sp','start_no','distance','leg','prior_starts','prior_wins',
+    # Archived table statistics that were previously retained only for display.
+    # They are pre-race fields and materially improve form/value/track modelling.
+    'tr_ganyan','tr_ganyan_rank','g800_rank','jbyg','jbyg_rank','s_value','value_score','value_rank',
+    'weight_kg','hndkp','workout_400','workout_600','workout_800',
+    'jockey_win_pct','trainer_win_pct','owner_win_pct','team_strength_pct','team_strength_rank',
+    'jockey_trainer_rank','gpr_starts','gpr_wins','gpr_strength','cond_win_starts','cond_win_wins',
+    'cond_win_pct','cond_surprise_hits','best_lb','last3_form_score','track_type_win_rate',
+    'distance_fit_score','jockey_form_30d','handicap_blend_score'
 ]
 META_COLUMNS=['race_key','race_date','file_id','race_id','meeting_uid','altili_no','leg','horse_name','horse_no_text','surface','distance_group','condition_family']
 
@@ -35,6 +43,21 @@ def _first(obj, *keys):
         if value is not None and value!='':
             return value
     return None
+
+def _horse_num(h, field):
+    aliases={
+        'cond_win_starts':('condWinStarts','condition_win_starts'),
+        'cond_win_wins':('condWinWins','condition_win_wins'),
+        'cond_win_pct':('condWinPct','condition_win_pct'),
+        'cond_surprise_hits':('condSurpriseHits','condition_surprise_hits'),
+        'best_lb':('bestLb','best_lb'),
+        'last3_form_score':('last3_form_score','last3FormScore'),
+        'track_type_win_rate':('track_type_win_rate','trackTypeWinRate'),
+        'distance_fit_score':('distance_fit_score','distanceFitScore'),
+        'jockey_form_30d':('jockey_form_30d','jockeyForm30d'),
+        'handicap_blend_score':('handicap_blend_score','handicapBlendScore'),
+    }
+    return num(_first(h,field,*aliases.get(field,())),0.0)
 
 def _flag(v):
     if isinstance(v,bool): return v
@@ -161,7 +184,7 @@ def _row_from(r,h,state):
     tr=num(h.get('tr_puan'),None)
     if tr is None: tr=num(h.get('tr_ganyan'),None)
     if tr is None: tr=num(h.get('tr'))
-    return {
+    row={
       'race_key':race_key(r),'race_date':str(r.get('race_date') or ''),'file_id':r.get('file_id'),'race_id':r.get('id'),
       'meeting_uid':str(r.get('meeting_uid') or ''),'altili_no':int(num(r.get('altili_no'),1)),'leg':int(num(r.get('leg'),0)),
       'horse_name':str(h.get('horse_name') or ''),'horse_no_text':str(h.get('horse_no') or ''),
@@ -175,6 +198,10 @@ def _row_from(r,h,state):
       'sp':num(h.get('sp')),'start_no':num(h.get('start_no')),'distance':d,
       'prior_starts':num(h.get('priorStarts'),prev.get('starts',0)),'prior_wins':num(h.get('priorWins'),prev.get('wins',0))
     }
+    for field in FEATURE_COLUMNS:
+        if field not in row and field!='champion_score':
+            row[field]=_horse_num(h,field)
+    return row
 
 def build_training_rows(races):
     rows=[]; state={}
