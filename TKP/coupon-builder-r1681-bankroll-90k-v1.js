@@ -4505,14 +4505,14 @@ function sideBetBacktest(targetRace){
       if(decision.play){out.sirali5li.total++;if(seq5.some(seq=>pools[0].includes(String(seq[0].horse_no))&&pools[1].includes(String(seq[1].horse_no))&&pools[2].includes(String(seq[2].horse_no))&&pools[3].includes(String(seq[3].horse_no))&&pools[4].includes(String(seq[4].horse_no))))out.sirali5li.ok++;}
     }
   }
-  // Gerçek kaydedilmiş tahmin sonuçları en güncel ve en değerli veridir; iki kat
-  // ağırlıkla geçmiş ODS/HTML geri testine eklenir. Tek bir yeni sonuç bütün modeli
-  // devirmesin, fakat her sonuç yan bahis oranlarını ve pencere genişliğini güncellesin.
+  // Gerçek kaydedilmiş tahmin sonuçları sonuçtan önce kilitlenmiş kanıttır.
+  // Geçmiş ODS/HTML geri testiyle aynı yarışları iki kez saymamak için her kayıt
+  // yalnızca bir kez eklenir.
   const loggedRows=logged&&logged._profile?logged._profile.rows.length:0;
   if(loggedRows){
     for(const k of ['ikili','sirali','uclu','dortlu','sirali5li']){
-      out[k].ok += (Number(logged[k]?.ok)||0)*2;
-      out[k].total += (Number(logged[k]?.total)||0)*2;
+      out[k].ok += Number(logged[k]?.ok)||0;
+      out[k].total += Number(logged[k]?.total)||0;
     }
   }
   for(const g of Object.values(out)){g.rate=g.total?g.ok/g.total:0;g.ready=g.total>=SIDE_BET_MIN_RACES;}
