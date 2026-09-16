@@ -46,8 +46,11 @@ for cls in ['.bmbBadge', '.odbBadge']:
     assert cls in block, f'{cls} final geometry missing'
 assert re.search(r'\.bmbBadge[^\{]*,\s*#tkpRoot[^\n]*\.odbBadge\s*\{[^}]*font-size:', block, re.S), 'BMB/ODB shared badge sizing missing'
 
-# Y.PU+X has no patch-inside-patch.
-assert '.ypSignalSquare' in block and 'background:transparent' in block, 'Y.PU+X transparent signal lock missing'
+# Y.PUAN must remain a plain value cell; signal squares/striped badges are not
+# allowed to reappear in the renderer.
+assert 'function ypuanSignalSquaresHTML' in ui, 'Y.PUAN renderer missing'
+signal_fn = ui.split('function ypuanSignalSquaresHTML', 1)[1].split('function ypuanSourceTitle', 1)[0]
+assert 'ypSignalSquare' not in signal_fn and 'ypuanSignalSquares' not in signal_fn, 'Y.PUAN signal squares still rendered'
 
 # Supports can grow; no half clipping.
 support = re.search(r'td\.supportCell \.supportBadges\s*\{([^}]*)\}', block, re.S)

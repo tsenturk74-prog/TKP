@@ -62,16 +62,10 @@ function signalBadgesHTML(h, opts){
 
 
 function ypuanSignalSquaresHTML(h,r){
-  const items=[];
-  if(h.bmb===1 && h.bmb_source!=='ŞABLON KURALI') items.push('<span class="ypSignalSquare bmbSq" title="BMB Sinyali">BMB</span>');
-  if(Number(h.tr_hidden_fav)===1) items.push('<span class="ypSignalSquare tkpSq" title="TR sıra 1 + AGF 4-6 · Gizli Favori">TR-FVR</span>');
-  // TR-BMB Y.PU+X hücresini genişletmez; DESTEKLER sütununda tek kez gösterilir.
-  if(typeof isOdbCandidate==='function' && isOdbCandidate(h,r)) items.push('<span class="ypSignalSquare odbSq" title="ODB · 2. sürpriz sinyali">ODB</span>');
-  // NOT (2026-08-12): pre_race_tkp_score artık üretilmiyor; kullanımdan kaldırılmış
-  // V25.15 modelinin kalıntısı ve arşivde %8,3 gerçek kazanma oranıyla (gürültü
-  // seviyesi) ölçüldü. coupon-builder.js:hasCouponTkpSignal ile tutarlı olsun diye kaldırıldı.
-  if(Number(h.tkp_signal)===1 || (historyStrengthForCandidate(h)>0 && Number(h.score||0)>=0.30)) items.push('<span class="ypSignalSquare tkpSq" title="TKP Sinyali">TKP</span>');
-  return items.length?`<div class="ypSignalSquares">${items.join('')}</div>`:'';
+  // Y.PUAN hücresi yalnız puanı göstermelidir. BMB/ODB/TKP sinyalleri satır
+  // sınıfı ve DESTEKLER sütununda zaten görünür; burada rozet/kare/çizgili
+  // dekorasyon üretmek dar hücrede okunabilirliği bozuyordu.
+  return '';
 }
 
 // X katmanı shadow modunda çalışır: ana tahmin tablosunda gerçek Y.PUAN yanında
