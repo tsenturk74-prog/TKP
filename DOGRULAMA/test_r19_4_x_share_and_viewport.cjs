@@ -20,4 +20,5 @@ assert(html.includes('id="r19-4-x-share-viewport-final"'),'R19.4 final viewport 
 assert(/#tkpRoot\s*\{[^}]*width:100%\s*!important[^}]*max-width:none\s*!important/s.test(html),'tkpRoot tam genişlik kilidi yok');
 assert(!/#tkpRoot\s*\{[^}]*zoom\s*:\s*0\./s.test(html),'tkpRoot üzerinde küçülten zoom olmamalı');
 assert(!/#tkpRoot\s*\{[^}]*transform\s*:\s*scale\s*\(\s*0\./s.test(html),'tkpRoot üzerinde küçülten scale transform olmamalı');
+assert(html.includes('calc(20% - 2px)'), 'Kupon seçim ızgarası beş atı tek satıra sığdırmalı');
 console.log('PASS r19.4 X share + viewport lock');
