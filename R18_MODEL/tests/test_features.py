@@ -4,6 +4,15 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 class FeatureContractTests(unittest.TestCase):
+    def test_nested_race_tables_are_canonicalized(self):
+        from tkp_r18_features import canonicalize_collections
+        races,audit=canonicalize_collections({'main':{'archive':[{
+            'race_date':'2026-01-01','meeting_uid':'M1','leg':1,
+            'horses':[{'horse_no':1,'finish_position':1},{'horse_no':2,'finish_position':2}]
+        }]}})
+        self.assertEqual(len(races),1)
+        self.assertIn('main.archive',audit['sources'])
+
     def test_canonicalizer_merges_tables_and_normalizes_result_aliases(self):
         from tkp_r18_features import canonicalize_collections
         races,audit=canonicalize_collections({

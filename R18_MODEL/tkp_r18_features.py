@@ -106,17 +106,31 @@ def normalize_race(race, source='races'):
 def canonicalize_collections(collections):
     """Merge race-like tables and return provenance/audit without future leakage."""
     seen={}; audit={'tables_seen':0,'races_seen':0,'races_accepted':0,'horses_seen':0,
-                   'horses_accepted':0,'unlabeled_races':0,'duplicates':0,'sources':{}}
+                   'horses_accepted':0,'unlabeled_races':0,'duplicates':0,'sources':{},
+                   'nested_sources':0}
+    def race_entries(value, source):
+        if isinstance(value,list):
+            for item in value:
+                if isinstance(item,dict) and (isinstance(item.get('horses'),list) or isinstance(item.get('rows'),list)):
+                    yield source,item
+                elif isinstance(item,(dict,list)):
+                    yield from race_entries(item,source)
+        elif isinstance(value,dict):
+            for key,item in value.items():
+                path=f'{source}.{key}'
+                if isinstance(item,(list,dict)):
+                    audit['nested_sources']+=1
+                    yield from race_entries(item,path)
     for source, values in (collections or {}).items():
-        if not isinstance(values,list):
+        if not isinstance(values,(list,dict)):
             continue
         audit['tables_seen']+=1
-        source_stats=audit['sources'].setdefault(str(source),{'rows':0,'races':0,'accepted':0,'horses':0})
-        for raw in values:
+        for entry_source,raw in race_entries(values,str(source)):
             if not isinstance(raw,dict): continue
-            race=normalize_race(raw,source)
+            race=normalize_race(raw,entry_source)
             if not race['horses']: continue
             race['result_verified_for_training']=_verified_result(race,race['horses'])
+            source_stats=audit['sources'].setdefault(str(entry_source),{'rows':0,'races':0,'accepted':0,'horses':0})
             source_stats['rows']+=1; source_stats['races']+=1
             audit['races_seen']+=1; audit['horses_seen']+=len(race['horses'])
             key=race_key(race)
@@ -135,6 +149,18 @@ def canonicalize_collections(collections):
             audit['races_accepted']+=1; audit['horses_accepted']+=len(race['horses'])
     audit['verified_races']=sum(1 for r in seen.values() if r.get('result_verified_for_training'))
     audit['label_coverage']=(audit['verified_races'] / len(seen)) if seen else 0.0
+    coverage={field:{'present':0,'total':0,'coverage':0.0} for field in FEATURE_COLUMNS}
+    for race in seen.values():
+        if not race.get('result_verified_for_training'): continue
+        for horse in race.get('horses') or []:
+            for field in FEATURE_COLUMNS:
+                value=_horse_num(horse,field) if field!='champion_score' else _horse_num(
+                    horse,'prediction_visible_tkp_snapshot')
+                coverage[field]['total']+=1
+                coverage[field]['present']+=int(value!=0.0)
+    for item in coverage.values():
+        item['coverage']=item['present']/item['total'] if item['total'] else 0.0
+    audit['feature_coverage']=coverage
     return list(seen.values()),audit
 
 def race_key(r):
