@@ -4523,20 +4523,21 @@ function sideBetPredictionLogBacktest(targetRace){
     const f1=fin.find(x=>Number(x.finish_position)===1), f2=fin.find(x=>Number(x.finish_position)===2), f3=fin.find(x=>Number(x.finish_position)===3), f4=fin.find(x=>Number(x.finish_position)===4), f5=fin.find(x=>Number(x.finish_position)===5);
     if(f1&&f2){
       const p1=pNos.p1.slice(0,5), p2=pNos.p2.slice(0,5);
-      out.ikili.total++; if((p1.includes(String(f1.horse_no))&&p2.includes(String(f2.horse_no)))||(p1.includes(String(f2.horse_no))&&p2.includes(String(f1.horse_no)))) out.ikili.ok++;
-      out.sirali.total++; if(p1.includes(String(f1.horse_no))&&p2.includes(String(f2.horse_no))) out.sirali.ok++;
+      const has=(pool,no)=>pool.some(x=>String(x)===String(no)||(typeof sameEkuri==='function'&&sameEkuri(x,no)));
+      out.ikili.total++; if((has(p1,f1.horse_no)&&has(p2,f2.horse_no))||(has(p1,f2.horse_no)&&has(p2,f1.horse_no))) out.ikili.ok++;
+      out.sirali.total++; if(has(p1,f1.horse_no)&&has(p2,f2.horse_no)) out.sirali.ok++;
     }
     if(f1&&f2&&f3){
       const p1=pNos.p1.slice(0,5), p2=pNos.p2.slice(0,5), p3=pNos.p3.slice(0,5);
-      out.uclu.total++;if(p1.includes(String(f1.horse_no))&&p2.includes(String(f2.horse_no))&&p3.includes(String(f3.horse_no)))out.uclu.ok++;
+      out.uclu.total++;if(has(p1,f1.horse_no)&&has(p2,f2.horse_no)&&has(p3,f3.horse_no))out.uclu.ok++;
     }
     if(f1&&f2&&f3&&f4){
       const p1=pNos.p1.slice(0,5), p2=pNos.p2.slice(0,5), p3=pNos.p3.slice(0,5), p4=pNos.p4.slice(0,7);
-      out.dortlu.total++;if(p1.includes(String(f1.horse_no))&&p2.includes(String(f2.horse_no))&&p3.includes(String(f3.horse_no))&&p4.includes(String(f4.horse_no)))out.dortlu.ok++;
+      out.dortlu.total++;if(has(p1,f1.horse_no)&&has(p2,f2.horse_no)&&has(p3,f3.horse_no)&&has(p4,f4.horse_no))out.dortlu.ok++;
     }
     if(f1&&f2&&f3&&f4&&f5){
       const p1=pNos.p1.slice(0,5), p2=pNos.p2.slice(0,5), p3=pNos.p3.slice(0,5), p4=pNos.p4.slice(0,7), p5=pNos.p5.slice(0,9);
-      out.sirali5li.total++;if(p1.includes(String(f1.horse_no))&&p2.includes(String(f2.horse_no))&&p3.includes(String(f3.horse_no))&&p4.includes(String(f4.horse_no))&&p5.includes(String(f5.horse_no)))out.sirali5li.ok++;
+      out.sirali5li.total++;if(has(p1,f1.horse_no)&&has(p2,f2.horse_no)&&has(p3,f3.horse_no)&&has(p4,f4.horse_no)&&has(p5,f5.horse_no))out.sirali5li.ok++;
     }
   }
   for(const g of Object.values(out)){g.rate=g.total?g.ok/g.total:0;g.ready=g.total>=SIDE_BET_MIN_RACES;}
@@ -4656,7 +4657,7 @@ function sideBetDoubleBacktestFast(targetRace,targetNextRace=null){
       return ar-br || Number(b.score||0)-Number(a.score||0);
     }).slice(0,5).map(row=>String(row.horse_no));
     const winner=group.find(row=>Number(row.finish_position)===1);
-    return !!winner && ranked.includes(String(winner.horse_no));
+    return !!winner && ranked.some(no=>String(no)===String(winner.horse_no)||(typeof sameEkuri==='function'&&sameEkuri(no,winner.horse_no)));
   };
   let ok=0,total=0;
   for(const legs of byMeeting.values()){
@@ -4717,7 +4718,7 @@ function sideBetBacktest(targetRace){
   // ağırlıkla geçmiş ODS/HTML geri testine eklenir. Tek bir yeni sonuç bütün modeli
   // devirmesin, fakat her sonuç yan bahis oranlarını ve pencere genişliğini güncellesin.
   const loggedRows=logged&&logged._profile?logged._profile.rows.length:0;
-  if(loggedRows){
+  if(loggedRows && logged?._profile?.researchOnly!==true){
     for(const k of ['ikili','sirali','uclu','dortlu','sirali5li']){
       out[k].ok += (Number(logged[k]?.ok)||0)*2;
       out[k].total += (Number(logged[k]?.total)||0)*2;

@@ -33,6 +33,15 @@ class FeatureContractTests(unittest.TestCase):
         self.assertTrue({'winner','finish_position','result_score','payouts'}.issubset(set(FORBIDDEN_FIELDS)))
         self.assertFalse(set(FEATURE_COLUMNS)&set(FORBIDDEN_FIELDS))
 
+    def test_conflicting_duplicate_results_are_quarantined(self):
+        from tkp_r18_features import canonicalize_collections
+        races,audit=canonicalize_collections({
+            'a':[{'race_id':'D','horses':[{'horse_no':'1','finish_position':1},{'horse_no':'2','finish_position':2}]}],
+            'b':[{'race_id':'D','horses':[{'horse_no':'1','finish_position':2},{'horse_no':'2','finish_position':1}]}],
+        })
+        self.assertEqual(audit['conflicting_duplicates'],1)
+        self.assertFalse(races[0]['result_verified_for_training'])
+
     def test_build_training_rows_uses_history_only(self):
         from tkp_r18_features import build_training_rows
         races=[

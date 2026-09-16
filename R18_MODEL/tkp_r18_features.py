@@ -40,6 +40,17 @@ def _flag(v):
     if isinstance(v,bool): return v
     return str(v or '').strip().lower() in {'1','true','yes','y','evet','kazandi','winner'}
 
+def _verified_result(race, horses):
+    """Accept legacy rows, but honor explicit archive verification/quarantine flags."""
+    status=_text(_first(race,'result_integrity_status','result_status','qc_status')).upper()
+    if status and any(x in status for x in ('QUARANT','REJECT','INVALID','CONFLICT','BEKLEY','PENDING')):
+        return False
+    explicit=_first(race,'result_verified','results_verified','official_result_verified','verified')
+    if explicit is not None and not _flag(explicit):
+        return False
+    winners=[h for h in horses if int(num(h.get('winner'),0))==1 or num(h.get('finish_position'),999)==1]
+    return len(winners)==1
+
 def normalize_race(race, source='races'):
     """Map archive/table aliases into the canonical race shape."""
     r=dict(race or {})
@@ -82,17 +93,25 @@ def canonicalize_collections(collections):
             if not isinstance(raw,dict): continue
             race=normalize_race(raw,source)
             if not race['horses']: continue
+            race['result_verified_for_training']=_verified_result(race,race['horses'])
             source_stats['rows']+=1; source_stats['races']+=1
             audit['races_seen']+=1; audit['horses_seen']+=len(race['horses'])
             key=race_key(race)
             if key in seen:
                 audit['duplicates']+=1
+                previous=seen[key]
+                prev_sig=tuple(sorted((str(h.get('horse_no')),int(h.get('winner') or 0),str(h.get('finish_position') or '')) for h in previous.get('horses',[])))
+                next_sig=tuple(sorted((str(h.get('horse_no')),int(h.get('winner') or 0),str(h.get('finish_position') or '')) for h in race.get('horses',[])))
+                if prev_sig!=next_sig:
+                    audit['conflicting_duplicates']=audit.get('conflicting_duplicates',0)+1
+                    previous['result_verified_for_training']=False
                 continue
-            if not any(h.get('winner')==1 or h.get('finish_position') is not None for h in race['horses']):
+            if not race['result_verified_for_training']:
                 audit['unlabeled_races']+=1
             seen[key]=race; source_stats['accepted']+=1
             audit['races_accepted']+=1; audit['horses_accepted']+=len(race['horses'])
-    audit['label_coverage']=(sum(1 for r in seen.values() if any(h.get('winner')==1 for h in r['horses'])) / len(seen)) if seen else 0.0
+    audit['verified_races']=sum(1 for r in seen.values() if r.get('result_verified_for_training'))
+    audit['label_coverage']=(audit['verified_races'] / len(seen)) if seen else 0.0
     return list(seen.values()),audit
 
 def race_key(r):

@@ -74,7 +74,8 @@ def coupon_promotion_gate(challenger,champion):
     return {'pass':passed,'material_6of6_gain':material,'equal_but_more_efficient':efficient,'single_ok':single_ok,'challenger_6of6':c6,'champion_6of6':b6}
 
 def _valid_training_frame(races):
-    df=build_training_rows(races)
+    eligible=[r for r in (races or []) if r.get('result_verified_for_training',True)]
+    df=build_training_rows(eligible)
     if df.empty: return df
     valid_races=set(df.groupby('race_key')['winner'].sum().loc[lambda x:x==1].index)
     # Training is race-level: incomplete meetings still provide valid, leakage-safe
@@ -98,7 +99,7 @@ def evaluate_candidate_coupons(scored,budget=1500):
     records={'normal':[],'surprise':[],'expert':[]}
     for meeting,g in scored.groupby('meeting_uid',sort=False):
         legs=g[['race_key','leg']].drop_duplicates()
-        if len(legs)!=6: continue
+        if len(legs)!=6 or set(pd.to_numeric(legs['leg'],errors='coerce').astype(int)) != set(range(1,7)): continue
         try: port=optimize_portfolio(g,budget=budget)
         except Exception: continue
         winners={int(leg):str(x.iloc[0].horse_no_text) for leg,x in g[g.winner==1].groupby('leg') if len(x)==1}
