@@ -1776,7 +1776,7 @@ function tkpForwardTrackingEvaluateRecord(rec,r){
     rec.main_miss_reason,rec.surprise_miss_reason,rec.single_miss_reason,rec.winner_pre_rank,rec.evaluated_at
   ]);
 }
-function tkpForwardTrackingSync(raceResults){
+function tkpForwardTrackingSync(raceResults,options={}){
   if(!db||!Array.isArray(raceResults)) return false;
   const log=tkpForwardTrackingEnsureLog(); let changed=false;
   // V1.1.282: yarış başına log.find() O(races×log) yerine tek race_key indeksi.
@@ -1906,7 +1906,7 @@ function tkpForwardTrackingSync(raceResults){
   // Gerçek ileri takip örnekleri tam tarihçedir; veri arttıkça eski kayıt silinmez.
   if(changed){
     try{if(typeof tkpInvalidateFailureLearning==='function')tkpInvalidateFailureLearning();}catch(_e){}
-    if(globalThis.__tkpBulkPipelineActive!==true)try{saveDB(false);}catch(_e){}
+    if(options.persist!==false&&globalThis.__tkpBulkPipelineActive!==true)try{saveDB(false);}catch(_e){}
   }
   return changed;
 }
@@ -1923,14 +1923,6 @@ async function tkpForwardTrackingBackfillAll(){
   if(!db || !Array.isArray(db.races)) return false;
   // Tarihsel kalibrasyon daha önce puan/sıra snapshotlarını atlara kilitledi.
   // Backfill bu donmuş sırayı kullanır; sonuçtan sonra güncel model çalıştırmaz.
-  const wrapped = db.races.map(r=>{
-    const scored=(r?.horses||[]).filter(Boolean).slice().sort((a,b)=>{
-      const ar=Number(a?.prediction_order_snapshot)||Number(a?._strategy_rank)||9999;
-      const br=Number(b?.prediction_order_snapshot)||Number(b?._strategy_rank)||9999;
-      return ar-br||(Number(b?.prediction_score_snapshot)||0)-(Number(a?.prediction_score_snapshot)||0)||TKP_TR_COLLATOR_NUM.compare(String(a?.horse_no||''),String(b?.horse_no||''));
-    });
-    return {r,scored,top:scored[0]||null,second:scored[1]||null,third:scored[2]||null};
-  });
   // R16.51 KÖK FIX (donma): tkpForwardTrackingSync, db.races'in TAMAMINI (REAL509
   // arşivinde 3000+ yarış) TEK senkron çağrıda işliyordu. historical-calibration.js
   // "forward_tracking" öğrenme adımı bunu doğrudan çağırdığından ilk kurulumda bu
@@ -1939,12 +1931,22 @@ async function tkpForwardTrackingBackfillAll(){
   // daha büyük ölçekli hali). Aynı fonksiyon, aynı veri, aynı sıra -- yalnız artık
   // yarış başına çağrılıp aralarda UI'ye nefes alma payı bırakılıyor.
   let changed=false;
-  for(const one of wrapped){
-    try{ if(tkpForwardTrackingSync([one])) changed=true; }catch(_e){}
+  for(const r of db.races){
+    const scored=(r?.horses||[]).filter(Boolean).slice().sort((a,b)=>{
+      const ar=Number(a?.prediction_order_snapshot)||Number(a?._strategy_rank)||9999;
+      const br=Number(b?.prediction_order_snapshot)||Number(b?._strategy_rank)||9999;
+      return ar-br||(Number(b?.prediction_score_snapshot)||0)-(Number(a?.prediction_score_snapshot)||0)||TKP_TR_COLLATOR_NUM.compare(String(a?.horse_no||''),String(b?.horse_no||''));
+    });
+    const one={r,scored,top:scored[0]||null,second:scored[1]||null,third:scored[2]||null};
+    try{ if(tkpForwardTrackingSync([one],{persist:false})) changed=true; }catch(_e){}
     if(typeof tkpWaitForBackgroundSafeWindow==='function') await tkpWaitForBackgroundSafeWindow({minIdleMs:0,retryMs:60});
     if(typeof tkpYieldToUi==='function') await tkpYieldToUi();
     else await new Promise(resolve=>setTimeout(resolve,0));
   }
+  if(changed)try{
+    if(typeof tkpPersistCollections==='function')tkpPersistCollections(['forward_tracking_log'],{label:'forward-tracking-backfill'});
+    else saveDB(false);
+  }catch(_e){}
   return changed;
 }
 if(typeof window!=='undefined') window.tkpForwardTrackingBackfillAll=tkpForwardTrackingBackfillAll;

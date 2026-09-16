@@ -36,6 +36,10 @@ def _first(obj, *keys):
             return value
     return None
 
+def _flag(v):
+    if isinstance(v,bool): return v
+    return str(v or '').strip().lower() in {'1','true','yes','y','evet','kazandi','winner'}
+
 def normalize_race(race, source='races'):
     """Map archive/table aliases into the canonical race shape."""
     r=dict(race or {})
@@ -60,7 +64,7 @@ def normalize_race(race, source='races'):
         h['horse_no']=_first(h,'horse_no','horseNo','no','program_no') or ''
         h['finish_position']=_first(h,'finish_position','result_position','official_position','place','finish') 
         winner=_first(h,'winner','is_winner','won')
-        h['winner']=1 if num(winner)==1 or num(h.get('finish_position'),999)==1 else 0
+        h['winner']=1 if _flag(winner) or num(h.get('finish_position'),999)==1 else 0
         normalized.append(h)
     r['horses']=normalized
     return r
