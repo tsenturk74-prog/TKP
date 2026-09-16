@@ -12,7 +12,7 @@ function checkController(src,name){
   assert(src.includes('activeCoupons.main')&&src.includes('activeCoupons.surprise')&&src.includes('activeCoupons.alt'),`${name}: üç kupon snapshotı aynı paylaşımda kullanılmıyor`);
   assert(src.includes('x.com/intent/post'),`${name}: X intent açılmıyor`);
   assert(!src.includes('𝕏 PNG Kaydet + X\'i Aç'),`${name}: yanlış yeni etiket hâlâ duruyor`);
-  assert(src.includes('tkpSharePickGrid')&&src.includes('flex:0 0 calc(20% - 2px)'),`${name}: X görselinde beşli kompakt seçim ızgarası yok`);
+  assert(src.includes("picks.map(esc).join(' - ')"),`${name}: eski sade X kupon satırı yok`);
 }
 checkController(active,'aktif controller');
 checkController(legacy,'legacy controller');
@@ -22,6 +22,7 @@ assert(/#tkpRoot\s*\{[^}]*width:100%\s*!important[^}]*max-width:none\s*!importan
 assert(!/#tkpRoot\s*\{[^}]*zoom\s*:\s*0\./s.test(html),'tkpRoot üzerinde küçülten zoom olmamalı');
 assert(!/#tkpRoot\s*\{[^}]*transform\s*:\s*scale\s*\(\s*0\./s.test(html),'tkpRoot üzerinde küçülten scale transform olmamalı');
 assert(html.includes('calc(20% - 2px)'), 'Kupon seçim ızgarası beş atı tek satıra sığdırmalı');
+assert(html.includes('max-width:1600px'), 'Program görünümü sınırlı merkez genişlikte olmalı');
 assert(html.includes('.couponPickChip.couponPickChipWin{background:#dcfce7'), 'Kazanan kupon seçimi yeşil görünmeli');
 assert(html.includes('.couponLegStatus.hit{background:#bbf7d0'), 'Tutan ayak yeşil görünmeli');
 assert(html.includes('.couponLegStatus.miss{background:#fee2e2'), 'Tutmayan ayak kırmızı görünmeli');
