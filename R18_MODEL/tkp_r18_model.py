@@ -8,8 +8,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from tkp_r18_features import FEATURE_COLUMNS
 
-MODEL_FEATURES=list(FEATURE_COLUMNS)+['market_logit','market_rank_pct']
-PAIR_FEATURES=list(FEATURE_COLUMNS)
+# champion_score is a frozen external reference, not a trainable feature.
+# Keeping it in FEATURE_COLUMNS preserves live/report schema compatibility, while
+# excluding it here prevents the challenger from learning the champion's answer.
+INDEPENDENT_FEATURES=[f for f in FEATURE_COLUMNS if f!='champion_score']
+MODEL_FEATURES=INDEPENDENT_FEATURES+['market_logit','market_rank_pct']
+PAIR_FEATURES=list(INDEPENDENT_FEATURES)
 
 def _market_prob(df):
     out=df.copy()

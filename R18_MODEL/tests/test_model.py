@@ -4,6 +4,12 @@ import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
+class ModelIndependenceTests(unittest.TestCase):
+    def test_champion_score_is_not_trainable_model_input(self):
+        from tkp_r18_model import MODEL_FEATURES, PAIR_FEATURES
+        self.assertNotIn('champion_score', MODEL_FEATURES)
+        self.assertNotIn('champion_score', PAIR_FEATURES)
+
 class ModelStackTests(unittest.TestCase):
     def fixture(self):
         rows=[]

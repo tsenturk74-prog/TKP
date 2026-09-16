@@ -165,9 +165,10 @@ def independent_signal_check(model,calibrator,hold):
     zero_metrics=probability_metrics(zero_scored,'calibrated_probability')
     market=_market_prob(hold.copy()); market_metrics=probability_metrics(market,'market_probability')
     # Payı: champion_score olmadan model, saf piyasa tabanını GERÇEKTEN
-    # (gürültü payının ötesinde) geçmeli. %2 tolerans gürültü payı içindir.
-    independent_gain=(zero_metrics['log_loss']<=market_metrics['log_loss']*0.98 and
-                       zero_metrics['top1_hit']>=market_metrics['top1_hit']*1.02)
+    # (gürültü payının ötesinde) geçmeli. Küçük örneklemde tesadüfi tek
+    # yarışlık farklar production gate'i açmamalı.
+    independent_gain=(zero_metrics['log_loss']<=market_metrics['log_loss']*0.90 and
+                       zero_metrics['top1_hit']>=market_metrics['top1_hit']+0.10)
     return {'pass':bool(independent_gain),'zeroed_champion_metrics':zero_metrics,
             'market_baseline_metrics':market_metrics,
             'reason':('champion_score hariç bağımsız sinyal saf AGF tabanını aşıyor' if independent_gain
