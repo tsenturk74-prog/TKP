@@ -46,6 +46,22 @@ def _first(obj, *keys):
 
 def _horse_num(h, field):
     aliases={
+        'weight_kg':('weightKg','weight','kilo','kg','siklet','siklet_kg'),
+        'start_no':('startNo','start','kulvar','program_no','programNo'),
+        'hndkp':('handicap','hp','handicap_score'),
+        'g800':('glp','g800_raw','workout_800'),
+        'workout_400':('g400','galop_400'),
+        'workout_600':('g600','galop_600'),
+        'workout_800':('g800','glp','galop_800'),
+        'jbyg':('j_byg','j_beygir','jockey_beygir'),
+        'jbyg_rank':('j_byg_rank','j_beygir_rank','jockey_beygir_rank'),
+        'g800_rank':('glp_rank','g800Rank'),
+        'tr_ganyan':('tr','tr_puan'),
+        'tr_ganyan_rank':('tr_rank','trRank'),
+        'agf_rank':('agfRank',),
+        'tr_rank':('trRank',),
+        'hndkp_rank':('handicap_rank','hp_rank','hndkpRank'),
+        'sp':('start_price','odds','ganyan'),
         'cond_win_starts':('condWinStarts','condition_win_starts'),
         'cond_win_wins':('condWinWins','condition_win_wins'),
         'cond_win_pct':('condWinPct','condition_win_pct'),
@@ -96,6 +112,21 @@ def normalize_race(race, source='races'):
         h['horse_name']=_first(h,'horse_name','horse','name','at_adi') or ''
         h['horse_id']=_first(h,'horse_id','horseId','id') or ''
         h['horse_no']=_first(h,'horse_no','horseNo','no','program_no') or ''
+        # Preserve legacy table aliases before feature extraction. A missing
+        # field remains missing; no synthetic value is invented here.
+        for canonical, aliases in {
+            'weight_kg':('weightKg','weight','kilo','kg','siklet','siklet_kg'),
+            'start_no':('startNo','start','kulvar','program_no','programNo'),
+            'hndkp':('handicap','hp','handicap_score'),
+            'jbyg':('j_byg','j_beygir','jockey_beygir'),
+            'jbyg_rank':('j_byg_rank','j_beygir_rank','jockey_beygir_rank'),
+            'g800':('glp','g800_raw'),
+            'tr_ganyan':('tr','tr_puan'),
+            'tr_ganyan_rank':('tr_rank','trRank'),
+        }.items():
+            if _first(h,canonical) is None:
+                value=_first(h,*aliases)
+                if value is not None: h[canonical]=value
         h['finish_position']=_first(h,'finish_position','result_position','official_position','place','finish') 
         winner=_first(h,'winner','is_winner','won')
         h['winner']=1 if _flag(winner) or num(h.get('finish_position'),999)==1 else 0

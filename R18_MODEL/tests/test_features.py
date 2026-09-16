@@ -4,6 +4,19 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 class FeatureContractTests(unittest.TestCase):
+    def test_legacy_weight_and_start_aliases_are_preserved(self):
+        from tkp_r18_features import canonicalize_collections, build_training_rows
+        races,_=canonicalize_collections({'old':[{
+            'race_id':'A','date':'2026-01-01',
+            'horses':[{'horseId':'h1','kilo':'58','kulvar':'4','finish':1},
+                      {'horseId':'h2','kg':'55','start':'7','finish':2}]
+        }]})
+        rows=build_training_rows(races)
+        self.assertEqual(float(rows.iloc[0].weight_kg),58.0)
+        self.assertEqual(float(rows.iloc[0].start_no),4.0)
+        self.assertEqual(float(rows.iloc[1].weight_kg),55.0)
+        self.assertEqual(float(rows.iloc[1].start_no),7.0)
+
     def test_nested_race_tables_are_canonicalized(self):
         from tkp_r18_features import canonicalize_collections
         races,audit=canonicalize_collections({'main':{'archive':[{
