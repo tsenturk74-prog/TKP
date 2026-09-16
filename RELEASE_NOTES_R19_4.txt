@@ -1,0 +1,18 @@
+TKP CORE V1.1.333 · R19.4 X SHARE VIEWPORT FINAL
+Tarih: 2026-09-16
+
+ANA DUZELTMELER
+- Eski davranisa uygun "3 Kuponu X'te Paylas" dugmesi geri getirildi.
+- Paylasim Normal + Uzman/Kulis + Surpriz son kupon snapshotini kullanir; kuponu yeniden hesaplamaz.
+- Paylasim oncesi son kupon snapshoti kalicilastirilir; BH/manuel son hal dahil edilir.
+- X intent penceresi kullanici tiklama zincirinde acilir; PNG manuel ekleme akisi korunur.
+- Uygulamanin sol ustte minyatur gibi kalmasini engelleyen viewport kilidi eklendi.
+- Root uygulama genisligi tam viewporta sabitlendi; compact tablo kilitleri uygulamanin tamamini kucultemez.
+
+KORUNANLAR
+- R19.2 integrity runtime ve veri tazelik/onarma hatti korunmustur.
+- R19 row-wide BMB/ODB satir rengi ve kazanan yesili onceligi korunmustur.
+- Sag panel kompaktligi korunur; yalniz uygulama genel olcegi normale cekilir.
+
+SURUM
+TKP CORE V1.1.333 · R19.4 X SHARE VIEWPORT FINAL
