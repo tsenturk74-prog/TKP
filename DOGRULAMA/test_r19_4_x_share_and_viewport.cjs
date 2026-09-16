@@ -12,6 +12,7 @@ function checkController(src,name){
   assert(src.includes('activeCoupons.main')&&src.includes('activeCoupons.surprise')&&src.includes('activeCoupons.alt'),`${name}: üç kupon snapshotı aynı paylaşımda kullanılmıyor`);
   assert(src.includes('x.com/intent/post'),`${name}: X intent açılmıyor`);
   assert(!src.includes('𝕏 PNG Kaydet + X\'i Aç'),`${name}: yanlış yeni etiket hâlâ duruyor`);
+  assert(src.includes('tkpSharePickGrid')&&src.includes('flex:0 0 calc(20% - 2px)'),`${name}: X görselinde beşli kompakt seçim ızgarası yok`);
 }
 checkController(active,'aktif controller');
 checkController(legacy,'legacy controller');
