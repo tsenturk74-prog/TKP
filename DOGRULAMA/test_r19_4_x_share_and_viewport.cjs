@@ -22,4 +22,7 @@ assert(/#tkpRoot\s*\{[^}]*width:100%\s*!important[^}]*max-width:none\s*!importan
 assert(!/#tkpRoot\s*\{[^}]*zoom\s*:\s*0\./s.test(html),'tkpRoot üzerinde küçülten zoom olmamalı');
 assert(!/#tkpRoot\s*\{[^}]*transform\s*:\s*scale\s*\(\s*0\./s.test(html),'tkpRoot üzerinde küçülten scale transform olmamalı');
 assert(html.includes('calc(20% - 2px)'), 'Kupon seçim ızgarası beş atı tek satıra sığdırmalı');
+assert(html.includes('.couponPickChip.couponPickChipWin{background:#dcfce7'), 'Kazanan kupon seçimi yeşil görünmeli');
+assert(html.includes('.couponLegStatus.hit{background:#bbf7d0'), 'Tutan ayak yeşil görünmeli');
+assert(html.includes('.couponLegStatus.miss{background:#fee2e2'), 'Tutmayan ayak kırmızı görünmeli');
 console.log('PASS r19.4 X share + viewport lock');
