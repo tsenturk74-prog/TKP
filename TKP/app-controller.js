@@ -7170,6 +7170,27 @@ $('#bulletinFile').onchange = async (e) => {
   };
 
   const buildBudgetCouponBtn = $('#buildBudgetCoupon');
+  const bindCouponShareButtonFallback = () => {
+    const button = $('#shareCouponShot');
+    if (!button || button.dataset.bound === '1') return;
+    button.dataset.bound = '1';
+    button.onclick = () => {
+      const lines = [];
+      for (const key of ['main','surprise','alt']) {
+        const coupon = activeCoupons?.[key];
+        if (!coupon || coupon.error) continue;
+        const label = key === 'main' ? 'Normal' : key === 'surprise' ? 'Uzman + Kulis' : 'Sürpriz';
+        const picks = (coupon.legs || []).slice().sort((a,b)=>Number(a.r?.leg)-Number(b.r?.leg))
+          .map(leg => `${leg.r?.leg}. ayak: ${(leg.picks || []).map(h => h.horse_no).join('-')}`)
+          .join(' | ');
+        if (picks) lines.push(`${label}: ${picks}`);
+      }
+      const text = `TKP Altılı Ganyan Tahmini\n${lines.join('\n')}`;
+      const url = 'https://x.com/intent/post?text=' + encodeURIComponent(text);
+      const popup = window.open(url, '_blank', 'noopener');
+      if (!popup) alert('X penceresi tarayıcı tarafından engellendi. Açılır pencerelere izin verip tekrar deneyin.');
+    };
+  };
   const runBudgetCouponBuild = (options={}) => {
     // Veri toplayıcı otomatik başlatırken ve kullanıcı düğmeye yeniden basarken aynı
     // kupon üretimi paralel çalışmasın. Paralel üretim hem ana thread'i iki kez
@@ -7228,8 +7249,9 @@ $('#bulletinFile').onchange = async (e) => {
           const verifiedAutomatic=typeof tkpBacktestEligibleSnapshotSource==='function'
             && tkpBacktestEligibleSnapshotSource(snapshot?.source)
             && Number(snapshot?.manual_adjustment)!==1;
-          target.innerHTML='<div class="budgetCouponTriple" id="couponTripleWrap"><div id="couponCard-main"></div><div id="couponCard-surprise"></div><div id="couponCard-alt"></div></div>';
+          target.innerHTML='<div class="couponShareToolbar"><button id="shareCouponShot" class="primary" type="button">3 Kuponu X\'te Paylaş</button><span>Normal + Uzman/Kulis + Sürpriz kuponları paylaşılır.</span></div><div class="budgetCouponTriple" id="couponTripleWrap"><div id="couponCard-main"></div><div id="couponCard-surprise"></div><div id="couponCard-alt"></div></div>';
           renderCouponCard('main');renderCouponCard('surprise');renderCouponCard('alt');
+          bindCouponShareButtonFallback();
           return {ok:true,rendered:true,restored:true,fullCouponView:true,snapshotQueued:false,snapshotPersistence:Promise.resolve(true)};
         }
         // Eski bir toplantıda snapshot yoksa ekrandaki mevcut üçlü set korunur. O da
@@ -7247,8 +7269,9 @@ $('#bulletinFile').onchange = async (e) => {
           activeCoupons.main=viewSet.main;activeCoupons.main2={disabled:true,removed:true,legs:[],cost:0};activeCoupons.alt=viewSet.alt;activeCoupons.surprise=viewSet.surprise;
           for(const key of ['main','alt','surprise']){const c=activeCoupons[key];if(c&&!c.error){c.readOnlySnapshot=true;c.snapshotSource=currentReplay?'CURRENT_ALGORITHM_REPLAY':'POST_START_DISPLAY_ONLY';c.adaptiveBudgetNote=(c.calculationLimited?c.adaptiveBudgetNote+' · ':'')+(currentReplay?'Güncel algoritma · geçmiş veride deneme; yarış öncesi tahmin değildir.':'👁️ Salt-okunur tam kupon görünümü · öğrenmeye/snapshot kaydına yazılmaz');}}
         }
-        target.innerHTML='<div class="budgetCouponTriple" id="couponTripleWrap"><div id="couponCard-main"></div><div id="couponCard-surprise"></div><div id="couponCard-alt"></div></div>';
+        target.innerHTML='<div class="couponShareToolbar"><button id="shareCouponShot" class="primary" type="button">3 Kuponu X\'te Paylaş</button><span>Normal + Uzman/Kulis + Sürpriz kuponları paylaşılır.</span></div><div class="budgetCouponTriple" id="couponTripleWrap"><div id="couponCard-main"></div><div id="couponCard-surprise"></div><div id="couponCard-alt"></div></div>';
         renderCouponCard('main');renderCouponCard('surprise');renderCouponCard('alt');
+        bindCouponShareButtonFallback();
         if(typeof refreshRecommendedHorsePanelsFromCoupon==='function')refreshRecommendedHorsePanelsFromCoupon();
         return {ok:true,rendered:true,fullCouponView:true,snapshotQueued:false,snapshotPersistence:Promise.resolve(true)};
       }
