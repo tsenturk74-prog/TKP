@@ -67,3 +67,32 @@ class ChampionSignalTests(unittest.TestCase):
         races=[{'id':1,'race_date':'2026-01-01','hippodrome':'X','leg':1,'horses':[{'horse_no':'1','horse_name':'A','prediction_visible_tkp_snapshot':88,'tkp_display_score':999,'winner':1},{'horse_no':'2','horse_name':'B','prediction_visible_tkp_snapshot':55,'tkp_display_score':999,'winner':0}]}]
         df=build_training_rows(races)
         self.assertEqual(float(df[df.horse_name=='A'].iloc[0].champion_score),88.0)
+
+class LiveFeaturePreservationTests(unittest.TestCase):
+    def test_live_rows_preserve_persisted_pre_race_aggregates(self):
+        from tkp_r18_features import prepare_live_rows
+        rows=prepare_live_rows([{
+            'id':'live-1','race_date':'2026-09-16','meeting_uid':'M',
+            'leg':1,'distance':1400,'surface':'KUM',
+            'horses':[{
+                'horse_no':'1','horse_name':'A','agf':30,
+                'recent_form':0.82,'surface_fit':0.71,'distance_fit':0.64,
+                'jockey_power':0.58,'handicap_kg_score':0.44,
+                'priorStarts':12,'priorWins':4,
+            }]
+        }])
+        row=rows.iloc[0]
+        self.assertAlmostEqual(float(row['recent_form']),0.82)
+        self.assertAlmostEqual(float(row['surface_fit']),0.71)
+        self.assertAlmostEqual(float(row['distance_fit']),0.64)
+        self.assertAlmostEqual(float(row['jockey_power']),0.58)
+        self.assertAlmostEqual(float(row['handicap_kg_score']),0.44)
+
+    def test_live_form_falls_back_to_counts_when_not_persisted(self):
+        from tkp_r18_features import prepare_live_rows
+        rows=prepare_live_rows([{
+            'id':'live-2','race_date':'2026-09-16','meeting_uid':'M',
+            'leg':1,'horses':[{'horse_no':'1','horse_name':'A',
+                              'priorStarts':8,'priorWins':4}]
+        }])
+        self.assertAlmostEqual(float(rows.iloc[0]['recent_form']),4.75/9.5)

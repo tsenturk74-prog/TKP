@@ -178,13 +178,37 @@ def build_training_rows(races):
 
 def prepare_live_rows(races):
     # Live records can only use pre-race fields already stored on the bulletin horse.
+    # Prefer persisted pre-race aggregates when available.  Rebuilding a row with
+    # an empty history otherwise silently turns trained signals into 0.5 defaults.
     rows=[]
     for r in races or []:
         for h in r.get('horses') or []:
             row=_row_from(r,h,{})
-            # Use persisted pre-race aggregates when available.
+            aliases={
+                'recent_form': ('recent_form','form_index','formScore','recentForm'),
+                'surface_fit': ('surface_fit','pist_form','surfaceForm'),
+                'distance_fit': ('distance_fit','mesafe_form','distanceForm'),
+                'jockey_power': ('jockey_power','jockeyPower'),
+                'handicap_kg_score': ('handicap_kg_score','handicapKgScore'),
+            }
+            for field, keys in aliases.items():
+                value=_first(h,*keys)
+                if value is not None:
+                    row[field]=num(value,row[field])
+            for field, keys in {
+                'agf_rank': ('agf_rank','agfRank'),
+                'tr_rank': ('tr_rank','trRank'),
+                'hndkp_rank': ('hndkp_rank','hndkpRank'),
+                'prior_starts': ('prior_starts','priorStarts'),
+                'prior_wins': ('prior_wins','priorWins'),
+            }.items():
+                value=_first(h,*keys)
+                if value is not None:
+                    row[field]=num(value,row[field])
+            # Use persisted counts only when no explicit pre-race form exists.
             ps=num(h.get('priorStarts')); pw=num(h.get('priorWins'))
-            if ps>0:
+            explicit_form=_first(h,'recent_form','form_index','formScore','recentForm')
+            if explicit_form is None and ps>0:
                 row['recent_form']=max(0.05,min(0.95,(pw+0.75)/(ps+1.5)))
             rows.append(row)
     return pd.DataFrame(rows)
