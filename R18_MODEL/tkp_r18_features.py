@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import math
+import unicodedata
 from collections import defaultdict, deque
 import pandas as pd
 
@@ -20,6 +21,75 @@ def num(v, default=0.0):
         return x if math.isfinite(x) else default
     except Exception:
         return default
+
+def _text(v):
+    return str(v or '').strip()
+
+def _identity(v):
+    text=unicodedata.normalize('NFKD',_text(v)).encode('ascii','ignore').decode('ascii')
+    return ' '.join(text.upper().split())
+
+def _first(obj, *keys):
+    for key in keys:
+        value=obj.get(key)
+        if value is not None and value!='':
+            return value
+    return None
+
+def normalize_race(race, source='races'):
+    """Map archive/table aliases into the canonical race shape."""
+    r=dict(race or {})
+    r['source_table']=_text(r.get('source_table') or source) or source
+    r['id']=_first(r,'id','race_id','raceId') or ''
+    r['file_id']=_first(r,'file_id','fileId','source_file_id') or ''
+    r['race_date']=_first(r,'race_date','date','raceDate') or ''
+    r['hippodrome']=_first(r,'hippodrome','track','venue') or ''
+    r['meeting_uid']=_first(r,'meeting_uid','meetingUid','meeting_id','meetingId') or ''
+    r['leg']=_first(r,'leg','leg_no','legNo','race_no','raceNo') or 0
+    r['distance']=_first(r,'distance','distance_m','meters') or 0
+    r['surface']=_first(r,'surface','track_surface','pist') or 'UNKNOWN'
+    r['condition_family']=_first(r,'condition_family','condition_text','condition') or ''
+    horses=r.get('horses')
+    if not isinstance(horses,list):
+        horses=r.get('rows') if isinstance(r.get('rows'),list) else []
+    normalized=[]
+    for horse in horses:
+        h=dict(horse or {})
+        h['horse_name']=_first(h,'horse_name','horse','name','at_adi') or ''
+        h['horse_id']=_first(h,'horse_id','horseId','id') or ''
+        h['horse_no']=_first(h,'horse_no','horseNo','no','program_no') or ''
+        h['finish_position']=_first(h,'finish_position','result_position','official_position','place','finish') 
+        winner=_first(h,'winner','is_winner','won')
+        h['winner']=1 if num(winner)==1 or num(h.get('finish_position'),999)==1 else 0
+        normalized.append(h)
+    r['horses']=normalized
+    return r
+
+def canonicalize_collections(collections):
+    """Merge race-like tables and return provenance/audit without future leakage."""
+    seen={}; audit={'tables_seen':0,'races_seen':0,'races_accepted':0,'horses_seen':0,
+                   'horses_accepted':0,'unlabeled_races':0,'duplicates':0,'sources':{}}
+    for source, values in (collections or {}).items():
+        if not isinstance(values,list):
+            continue
+        audit['tables_seen']+=1
+        source_stats=audit['sources'].setdefault(str(source),{'rows':0,'races':0,'accepted':0,'horses':0})
+        for raw in values:
+            if not isinstance(raw,dict): continue
+            race=normalize_race(raw,source)
+            if not race['horses']: continue
+            source_stats['rows']+=1; source_stats['races']+=1
+            audit['races_seen']+=1; audit['horses_seen']+=len(race['horses'])
+            key=race_key(race)
+            if key in seen:
+                audit['duplicates']+=1
+                continue
+            if not any(h.get('winner')==1 or h.get('finish_position') is not None for h in race['horses']):
+                audit['unlabeled_races']+=1
+            seen[key]=race; source_stats['accepted']+=1
+            audit['races_accepted']+=1; audit['horses_accepted']+=len(race['horses'])
+    audit['label_coverage']=(sum(1 for r in seen.values() if any(h.get('winner')==1 for h in r['horses'])) / len(seen)) if seen else 0.0
+    return list(seen.values()),audit
 
 def race_key(r):
     uid=str(r.get('race_uid') or '').strip()
@@ -52,7 +122,7 @@ def _recent_form(hist):
     return sum(v*w for v,w in zip(vals,weights))/sum(weights)
 
 def _row_from(r,h,state):
-    name=str(h.get('horse_name') or '').strip().upper()
+    name=_identity(h.get('horse_id') or h.get('horse_name'))
     prev=state.get(name,{})
     surface=str(r.get('surface') or 'UNKNOWN').upper()
     d=num(r.get('distance'))
@@ -92,7 +162,7 @@ def build_training_rows(races):
             row=_row_from(r,h,state); row['winner']=target(h); local.append((h,row)); rows.append(row)
         # Update history only after all rows in the race have been materialized.
         for h,row in local:
-            name=str(h.get('horse_name') or '').strip().upper()
+            name=_identity(h.get('horse_id') or h.get('horse_name'))
             s=state.setdefault(name,{'finishes':deque(maxlen=12),'surface':defaultdict(lambda:{'starts':0,'wins':0}),'distance':deque(maxlen=30),'starts':0,'wins':0})
             fp=int(num(h.get('finish_position'),99))
             if fp<99: s['finishes'].append(fp)

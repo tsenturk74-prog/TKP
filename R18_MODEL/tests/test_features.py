@@ -4,6 +4,28 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 class FeatureContractTests(unittest.TestCase):
+    def test_canonicalizer_merges_tables_and_normalizes_result_aliases(self):
+        from tkp_r18_features import canonicalize_collections
+        races,audit=canonicalize_collections({
+            'races':[{'race_id':'A','date':'2026-01-01','horses':[
+                {'horseId':'h1','name':'Şampiyon At','official_position':1},
+                {'horseId':'h2','name':'Diger','place':2}]}],
+            'side_table':[{'race_id':'A','date':'2026-01-01','horses':[
+                {'horseId':'h1','name':'Şampiyon At','place':1}]}],
+            'partial':[{'race_id':'B','date':'2026-01-02','horses':[
+                {'horseId':'h3','name':'Yeni At','result_position':1}]}],
+        })
+        self.assertEqual(len(races),2)
+        self.assertEqual(audit['duplicates'],1)
+        self.assertEqual(audit['races_accepted'],2)
+        self.assertEqual(races[0]['horses'][0]['winner'],1)
+
+    def test_incomplete_meeting_can_train_as_race(self):
+        from tkp_r18_backtest import _valid_training_frame
+        df=_valid_training_frame([{'id':'one','race_date':'2026-01-01','meeting_uid':'M','leg':1,'horses':[
+            {'horse_name':'A','finish_position':1},{'horse_name':'B','finish_position':2}]}])
+        self.assertEqual(df.race_key.nunique(),1)
+
     def test_feature_contract_exposes_required_signals_and_no_result_fields(self):
         from tkp_r18_features import FEATURE_COLUMNS, FORBIDDEN_FIELDS
         required={'recent_form','agf','tr_puan','ypuan','g800','surface_fit','distance_fit','jockey_power','handicap_kg_score'}

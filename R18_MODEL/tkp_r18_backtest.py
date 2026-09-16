@@ -5,7 +5,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from tkp_r18_features import build_training_rows
+from tkp_r18_features import build_training_rows, canonicalize_collections
 from tkp_r18_model import R18ModelStack, _market_prob
 from tkp_r18_probability import ProbabilityCalibrator, monte_carlo_races
 from tkp_r18_coupon import optimize_portfolio
@@ -77,11 +77,9 @@ def _valid_training_frame(races):
     df=build_training_rows(races)
     if df.empty: return df
     valid_races=set(df.groupby('race_key')['winner'].sum().loc[lambda x:x==1].index)
-    df=df[df.race_key.isin(valid_races)].copy()
-    # Only meetings where all six legs have a verified winner are coupon-eligible.
-    count=df[['meeting_uid','race_key']].drop_duplicates().groupby('meeting_uid')['race_key'].count()
-    valid_meetings=set(count[count==6].index)
-    return df[df.meeting_uid.isin(valid_meetings)].copy()
+    # Training is race-level: incomplete meetings still provide valid, leakage-safe
+    # labeled races. The six-leg requirement belongs only to coupon evaluation.
+    return df[df.race_key.isin(valid_races)].copy()
 
 def temporal_meeting_split(df,train_fraction=.70,val_fraction=.15):
     meetings=df[['meeting_uid','race_date']].drop_duplicates().sort_values(['race_date','meeting_uid']).reset_index(drop=True)
@@ -175,7 +173,9 @@ def independent_signal_check(model,calibrator,hold):
                        else 'champion_score sıfırlanınca performans saf AGF tabanından ayırt edilemiyor — döngüsellik riski')}
 
 def run_backtest(tkbz,champion_json=None,budget=1500,simulations=10000,model_out=None,report_out=None,include_ablation=False):
-    _,_,cols=read_tkbz(tkbz); provenance=pre_race_provenance_check(cols.get('races',[])); df=_valid_training_frame(cols.get('races',[])); train,val,hold=temporal_meeting_split(df)
+    _,_,cols=read_tkbz(tkbz)
+    races,audit=canonicalize_collections(cols)
+    provenance=pre_race_provenance_check(races); df=_valid_training_frame(races); train,val,hold=temporal_meeting_split(df)
     model=R18ModelStack(min_expert_races=25,random_state=18).fit(train,val)
     val_scored=model.predict(val); calibrator=ProbabilityCalibrator().fit(val_scored)
     ablation={}
@@ -204,7 +204,8 @@ def run_backtest(tkbz,champion_json=None,budget=1500,simulations=10000,model_out
         aligned_candidate_portfolio,aligned_champion_portfolio=aligned_portfolio_summary(records,champion_records)
     else:
         aligned_candidate_portfolio,aligned_champion_portfolio=candidate_portfolio,None
-    report={'schema':'TKP_R18_2_TRAINING_REPORT_V1','archive_files':len(cols.get('files',[])),'archive_races':len(cols.get('races',[])),
+    report={'schema':'TKP_R18_3_TRAINING_REPORT_V1','archive_files':len(cols.get('files',[])),'archive_races':len(races),
+            'ingestion_audit':audit,
             'eligible_meetings':int(df.meeting_uid.nunique()),'train_meetings':int(train.meeting_uid.nunique()),'validation_meetings':int(val.meeting_uid.nunique()),'holdout_meetings':int(hold.meeting_uid.nunique()),
             'budget_ceiling':int(budget),'monte_carlo_simulations':int(simulations),'blend_weights':model.blend,
             'probability_metrics':{'challenger':challenger_metrics,'market_baseline':market_metrics},'candidate_coupons':candidate,'champion_coupons':champion,
