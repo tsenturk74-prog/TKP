@@ -5,8 +5,9 @@
 Olasılık-temelli marjinal-kazanç genişlik dağıtımı, **kupon maliyeti artırılmadan**
 (kolon çarpımı bütçesi sabit) 6/6 oranını %8,6 → %10,1–11,0 bandına taşıdı.
 Sonuç sızıntısı yok: kalibrasyon her değerlendirme tarihinden **önceki** yarışlara
-fit edildi (walk-forward). Kötüleşme görülmediği için optimizör kullanılabilir
-durumda; yine de varsayılan kapalı bırakıldı (feature flag / gölge mod).
+fit edildi (walk-forward). Kötüleşme görülmediği için kullanıcı kararıyla
+(2026-09-20) **varsayılan davranış olarak etkinleştirildi**; eski davranışa dönmek
+için `globalThis.__tkpUseMarginalGainOptimizer = false` opt-out'u yeterli.
 
 ## Yöntem
 
@@ -60,9 +61,13 @@ durumda; yine de varsayılan kapalı bırakıldı (feature flag / gölge mod).
 - `TKP/tkp-marginal-gain-optimizer.js` — PAVA kalibrasyon + olasılık + greedy/DP
   köprüsü. `TKP_CORE_CLAUDE.html`'e coupon-builder'dan önce eklendi.
 - `TKP/coupon-builder-r1681-baseline-v2.js` — `enforceCouponCostCap`
-  (JOINT_LOG_COVERAGE_DP) içinde utility kaynağı bayrakla değiştirilebilir:
-  - `globalThis.__tkpUseMarginalGainOptimizer = true` → kalibre kapsama aktif
+  (JOINT_LOG_COVERAGE_DP) içinde kapsama olasılığı artık varsayılan olarak
+  kalibre kaynaktan okunur:
+  - `globalThis.__tkpUseMarginalGainOptimizer = false` → opt-out; eski ham
+    skor-kütlesi utility'sine döner (geriye dönük uyumlu)
   - `globalThis.__tkpMarginalGainShadow = true` → karar değişmez,
     `__tkpMarginalGainShadowLog`'a eski/yeni kapsama serileri yazılır
-- Varsayılan: her iki bayrak da kapalı → mevcut davranış birebir korunur.
+- Güvenli düşüş: kalibrasyon verisi yetersizse (<200 geçmiş gözlem) veya yarış
+  tarihi okunamazsa fail-closed olarak eski utility kullanılır; maliyet cap'i
+  (kolon çarpımı tavanı) her durumda korunur.
 - Backtest: `python tools/tkp_marginal_gain_backtest.py [tkp_data.pkl]`

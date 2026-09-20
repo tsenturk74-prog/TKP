@@ -23,12 +23,16 @@
 //
 // Doğrulama (tools/tkp_marginal_gain_backtest.py, zaman-sıralı walk-forward,
 // 1440 kupon): 6/6 %8,6 -> %10,1-11,0 (Wilson alt sınır %7,3 -> %8,0-9,5),
-// ortalama maliyet sabitin altında. KÖTÜLEŞME görülmedi; yine de varsayılan
-// davranış korunur — modül yalnız feature flag ile etkinleşir:
+// ortalama maliyet sabitin altında. KÖTÜLEŞME görülmediği için kullanıcı kararıyla
+// VARSAYILAN davranış olarak etkindir (2026-09-20). Geriye dönük uyumluluk:
 //
-//   globalThis.__tkpUseMarginalGainOptimizer === true   -> DP utility'si kalibre
+//   globalThis.__tkpUseMarginalGainOptimizer === false  -> opt-out; DP eski ham
+//     skor-kütlesi utility'sine döner (eski davranış birebir korunur)
 //   globalThis.__tkpMarginalGainShadow   === true       -> karar değişmez, gölge log
 //     (globalThis.__tkpMarginalGainShadowLog içine {kind:'leg-coverage', ...})
+// Kalibrasyon verisi yetersizse (ör. <200 geçmiş gözlem) ya da yarış tarihi
+// okunamazsa fail-closed: kalibre olasılık üretilmez ve DP otomatik olarak
+// eski utility ile devam eder. Maliyet tavanı (kolon çarpımı cap) aynen korunur.
 //
 (function(global){
   'use strict';
@@ -248,7 +252,8 @@
     version:VERSION,fitIsotonic,isotonicPredict,buildCalibrators,
     horseWinProbabilities,optimizeWidths,utilityCoverage,legProbabilitiesForDp,
     wilsonLower,shadowLog,
-    isEnabled(){ return global.__tkpUseMarginalGainOptimizer===true; },
+    // Varsayılan AÇIK (2026-09-20 kullanıcı kararı): yalnız açık false opt-out ile kapanır.
+    isEnabled(){ return global.__tkpUseMarginalGainOptimizer!==false; },
     isShadow(){ return global.__tkpMarginalGainShadow===true; }
   };
   global.TKP_MARGINAL_GAIN_OPTIMIZER_VERSION=VERSION;

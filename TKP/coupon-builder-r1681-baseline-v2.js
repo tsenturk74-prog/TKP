@@ -2075,10 +2075,13 @@ function enforceCouponCostCap(legs, unit, capTL){
     ));
     const masses=ranked.slice(0,maxCount).map(h=>candidateMass(leg,h));
     const total=Math.max(.000001,masses.reduce((sum,value)=>sum+value,0));
-    // V1.1.334-MGO: opsiyonel olasılık-temelli marjinal-kazanç optimizasyonu.
-    // Bayrak kapalıysa (varsayılan) davranış birebir korunur. Bayrak açıkken DP
-    // utility'sindeki kapsama olasılığı, ham skor kütlesi yerine walk-forward
+    // V1.1.334-MGO: olasılık-temelli marjinal-kazanç optimizasyonu VARSAYILANDIR
+    // (2026-09-20, kullanıcı kararı; backtest: 6/6 %8,6->%10,6, maliyet artışı yok).
+    // DP utility'sindeki kapsama olasılığı, ham skor kütlesi yerine walk-forward
     // isotonic kalibre kazanma olasılığından okunur (tkp-marginal-gain-optimizer.js).
+    // Opt-out: globalThis.__tkpUseMarginalGainOptimizer=false -> eski davranışa döner.
+    // Kalibrasyon verisi yetersiz/tarih okunamazsa fail-closed: mgoCoverage null kalır
+    // ve utility eski skor-kütlesi hesabıyla birebir aynı kalır. Maliyet cap'i korunur.
     // 'shadow' modunda karar değişmez; iki olasılık serisi gölge loga yazılır.
     const mgo=globalThis.TKP_MARGINAL_GAIN_OPTIMIZER||null;
     const mgoOn=!!(mgo&&typeof mgo.isEnabled==='function'&&mgo.isEnabled());
