@@ -1,0 +1,32 @@
+TKP R19.12 BASELINE AUDIT
+
+KAPSAM
+1) Sürüm kimliği / aktif script bağımlılıkları
+2) JS syntax
+3) Python syntax
+4) 7+ koşuda 2. Altılı = son 6 koşu invariantı
+5) Kazananı bilinen tüm ayaklarda ana dosya durumunun OK olması
+6) Tahmin/kupon/model sinyal bağlantıları
+7) Kupon TEK görünümü ve canlı yeşil
+8) BMB/ODB kesintisiz satır bandı
+9) Statik duplicate HTML id kontrolü
+10) SHA256 manifest + ZIP CRC bütünlük kontrolü
+
+ALGORİTMA SİNYAL BAĞLANTISI
+- BMB: prediction-engine + coupon-builder + probability-portfolio yolunda aktif.
+- ODB: coupon/probability ve sürpriz seçim mantığında aktif.
+- Y.PUAN: prediction/coupon/probability yollarında aktif.
+- TR/GC-TR: prediction/coupon/probability yollarında kaynak doğrulamalı kullanım mevcut.
+- G800/GLP: prediction/coupon/probability feature yolunda aktif.
+- JBYG: prediction/coupon/probability feature yolunda aktif.
+- AGF: ana market/rank sinyali olarak aktif.
+
+NOT
+Bu baseline testi yerel kod/veri-akışı sözleşmelerini doğrular. TJK/Misli/GanyanTR gibi dış sitelerin o anki erişilebilirliği veya HTML değişiklikleri çevrimdışı ZIP testinin garantisi değildir; veri geldiğinde parser/fallback katmanları devreye girer.
+
+SON DOĞRULAMA SONUÇLARI
+- BASELINE_TEST: 161/161 PASS
+- JS syntax: 75/75 PASS
+- Python compile: 9/9 PASS
+- Aktif script dosyaları: eksik yok
+- Statik HTML id: duplicate yok

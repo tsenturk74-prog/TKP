@@ -1,0 +1,12 @@
+TKP V1.1.333 R19.12 BASELINE FINAL
+2026-09-17
+
+- R19.11 resmi sonuç / 2. Altılı SON 6 kapsam düzeltmesi baseline olarak korundu.
+- Kupon TEK satırında at numarası normal seçimlerle aynı rozet geometrisine sabitlendi.
+- Yalnız TEK yazısı küçültüldü; at adı okunur ve tek satır tutuldu.
+- Kupon kazanan/TUTTU yeşili daha canlı Champion tonuna geri alındı.
+- BMB ve ODB satırlarında hücre hücre kesilen üst/alt çizgiler kaldırıldı; satır bandı kesintisiz hale getirildi.
+- BMB/ODB Y.PUAN hücresindeki iç yama/kutu görünümü kapalı tutuldu.
+- Başlık, HTML title ve VERSION R19.12 BASELINE FINAL olarak eşitlendi.
+- Aktif algoritma yollarında BMB, ODB, Y.PUAN, TR/GC-TR, G800/GLP, JBYG ve AGF bağlantıları statik baseline denetimine alındı.
+- Paket içine tekrar çalıştırılabilir BASELINE_TEST_R19_12.py ve RUN_BASELINE_TEST.bat eklendi.
