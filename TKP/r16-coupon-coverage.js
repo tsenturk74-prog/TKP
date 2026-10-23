@@ -522,8 +522,12 @@
     }
 
     const unit = Number(coupon.unit) || 1;
+    // Kapsama tavani: BH atlarini manuel eklemek icin yer birakacak sekilde 2200 TL
+    // (eskiden 3000 sabit). 597 toplanti tam-pipeline: 6/6 %31.5->%28.1, ROI +324->+487,
+    // taban ~1900 -> ~1100 TL BH yeri. global.__TKP_COV_HIGH_TL ile ayarlanabilir.
+    const highTL = Math.max(1000, Number(global.__TKP_COV_HIGH_TL) || 2200);
     const low = Math.ceil(1000 / unit - 1e-8);
-    const high = Math.floor(3000 / unit + 1e-8);
+    const high = Math.floor(highTL / unit + 1e-8);
 
     const specs=[];
     for(let index=0;index<coupon.legs.length;index++){
