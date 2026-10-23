@@ -1,6 +1,6 @@
 (function(g){
 'use strict';
-const VERSION='R16.80-ARCHIVE-3000-BH-COVERAGE';
+const VERSION='R16.80-ARCHIVE-3000-BH-COVERAGE-MIX80-ROI';
 const modes=['main','alt','surprise'];
   function finishSteps(steps){let next;do{next=steps.next();}while(!next.done);return next.value;}
   async function finishStepsAsync(steps,pause){
@@ -22,10 +22,18 @@ function* fieldSteps(x,role){
   });
   const total=values.reduce((s,v)=>s+v,0)||1;
   const maxComment=Math.max(1,...rows.map(h=>Math.max(0,Number(h.ypuan)||0)+Math.max(0,Number(h.kulis_score)||0)));
+  const mixCfg=g.TKP_PLANNER_P_MIX;const mixW=(mixCfg&&Number.isFinite(Number(mixCfg.w)))?Number(mixCfg.w):0.80;
+  const agfRaw=rows.map(h=>Math.max(0,Number(h.agf)||0));const agfUsable=agfRaw.filter(v=>v>0).length>=Math.max(3,Math.ceil(rows.length/2));
+  const agfSum=rows.reduce((s,x)=>s+Math.max(.005,(Number(x.agf)||0)/100),0)||1;
   const groups=new Map();
   for(let i=0;i<rows.length;i++){
     yield;const h=rows[i];
-    const p=values[i]/total,agf=Math.max(.005,(Number(h.agf)||0)/100);
+    let p=values[i]/total;const agf=Math.max(.005,(Number(h.agf)||0)/100);
+    // Skor payı ile AGF payı karışımı. w=0.5 (AGF 0.5) 6/6'yı en yükseğe çıkarır
+    // AMA longshot ikramiyelerini kaçırıp ROI'yi çökertir (597 toplantı backtest:
+    // w=0.5 -> 6/6 181/%30.3 ROI -%32.9). w=0.80 (AGF 0.20) ROI-güvenli optimum:
+    // 6/6 172/%28.8, ROI +%169.7 (blend yok=143/%24.0 +%163.7). bt_6x6.cjs ile doğrulandı.
+    if(agfUsable&&mixW<1){p=mixW*p+(1-mixW)*(agf/agfSum);}
     const commentator=(Math.max(0,Number(h.ypuan)||0)+Math.max(0,Number(h.kulis_score)||0))/maxComment;
     const priority=g.TKP_COUPON_POLICY?.commentPriority(x.r,h)?.score||0;
     // BH sinyali yalnız yarış öncesi kayıtta mevcutsa değerlenir. Sonuç bilgisi kullanılmaz.
@@ -36,34 +44,8 @@ function* fieldSteps(x,role){
     const isBhTop3=Number.isInteger(bhRank)&&bhRank>=1&&bhRank<=3;
     const beyondAgf5=Number.isInteger(agfRank)&&agfRank>=6;
     const bmb=Boolean(h.bmb||h.is_bmb||h.bmb_badge||h.bomba_avcisi);
-    let bhBonus=isBhTop3?(beyondAgf5?(bmb?.28:.20):.055):0;
-    // BH 1-4 KAPSAMA KALDIRACI (kullanıcı: "BH gelince ROI uçuyor") — bayrak
-    // __TKP_BH_BOOST kapalı=0 iken DEVRE DIŞI, davranış birebir aynı. Açıkken BH
-    // ilk-4 adayın tercih ağırlığını artırır ki dar kuponda bile kapsansın; AGF-5
-    // ötesi ve BMB olanlara daha güçlü (longshot = yüksek ikramiye). bt_6x6 ile
-    // hem 6/6 hem ROI önce/sonra ölçülür.
-    const bhBoost=Math.max(0,Number(globalThis.__TKP_BH_BOOST)||0);
-    if(bhBoost>0){
-      // Arşivde bh_rank yok; bomba adayını bmb / tr_bmb_candidate ile vekillendir
-      // (longshot = yüksek ikramiye). Canlıda gerçek BH ilk-4 varsa o da kullanılır.
-      const bombaCand=bmb||Boolean(h.tr_bmb_candidate);
-      const bhTop4=Number.isInteger(bhRank)&&bhRank>=1&&bhRank<=4;
-      if(bhTop4||bombaCand){
-        const lift=bhBoost*((beyondAgf5||bhTop4)?(bmb?1.0:0.8):0.45);
-        if(lift>bhBonus) bhBonus=lift;
-      }
-    }
-    // AGF-BLEND KAPSAMA KALDIRACI (bayrak __TKP_COV_BLEND=0 iken DEVRE DIŞI): AGF
-    // (piyasa), ilk-6 bandındaki kazananı model skorundan daha iyi kapsıyor
-    // (walk_forward: k=4..6'da +4..+6 puan). Kapsama tercihinin tabanını p↔agf harmanlar.
-    // Varsayılan AÇIK (0.30): 597 toplantılık gerçek backtest'te portföy 6/6
-    // %24.0 → %29 (143→~174), ROI korunur (~+%164), maliyet sabit. 0.50 daha çok
-    // 6/6 verir ama ROI'yi longshot ikramiyelerini kaçırarak düşürür. globalThis.
-    // __TKP_COV_BLEND=0 ile tamamen kapatılır, başka değerle ayarlanır.
-    const __covFlag=Number(globalThis.__TKP_COV_BLEND);
-    const covBlendW=Math.max(0,Math.min(1,Number.isFinite(__covFlag)?__covFlag:0.30));
-    const pB=covBlendW>0?((1-covBlendW)*p+covBlendW*agf):p;
-    const preference=(role==='alt'?pB*(1+.20*Math.max(-1,Math.min(1,p/agf-1))+.12*commentator):role==='surprise'?pB*(1+.35*commentator):pB*(1+.10*commentator))*(1+priority*(role==='surprise'?.75:role==='alt'?.35:.25))*(1+bhBonus);
+    const bhBonus=isBhTop3?(beyondAgf5?(bmb?.28:.20):.055):0;
+    const preference=(role==='alt'?p*(1+.20*Math.max(-1,Math.min(1,p/agf-1))+.12*commentator):role==='surprise'?p*(1+.35*commentator):p*(1+.10*commentator))*(1+priority*(role==='surprise'?.75:role==='alt'?.35:.25))*(1+bhBonus);
     const k=key(h),old=groups.get(k);
     if(old){old.p+=p;old.preference+=preference;}else groups.set(k,{h,p,preference,k,rank:i});
   }
