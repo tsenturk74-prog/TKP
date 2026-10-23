@@ -36,8 +36,34 @@ function* fieldSteps(x,role){
     const isBhTop3=Number.isInteger(bhRank)&&bhRank>=1&&bhRank<=3;
     const beyondAgf5=Number.isInteger(agfRank)&&agfRank>=6;
     const bmb=Boolean(h.bmb||h.is_bmb||h.bmb_badge||h.bomba_avcisi);
-    const bhBonus=isBhTop3?(beyondAgf5?(bmb?.28:.20):.055):0;
-    const preference=(role==='alt'?p*(1+.20*Math.max(-1,Math.min(1,p/agf-1))+.12*commentator):role==='surprise'?p*(1+.35*commentator):p*(1+.10*commentator))*(1+priority*(role==='surprise'?.75:role==='alt'?.35:.25))*(1+bhBonus);
+    let bhBonus=isBhTop3?(beyondAgf5?(bmb?.28:.20):.055):0;
+    // BH 1-4 KAPSAMA KALDIRACI (kullanıcı: "BH gelince ROI uçuyor") — bayrak
+    // __TKP_BH_BOOST kapalı=0 iken DEVRE DIŞI, davranış birebir aynı. Açıkken BH
+    // ilk-4 adayın tercih ağırlığını artırır ki dar kuponda bile kapsansın; AGF-5
+    // ötesi ve BMB olanlara daha güçlü (longshot = yüksek ikramiye). bt_6x6 ile
+    // hem 6/6 hem ROI önce/sonra ölçülür.
+    const bhBoost=Math.max(0,Number(globalThis.__TKP_BH_BOOST)||0);
+    if(bhBoost>0){
+      // Arşivde bh_rank yok; bomba adayını bmb / tr_bmb_candidate ile vekillendir
+      // (longshot = yüksek ikramiye). Canlıda gerçek BH ilk-4 varsa o da kullanılır.
+      const bombaCand=bmb||Boolean(h.tr_bmb_candidate);
+      const bhTop4=Number.isInteger(bhRank)&&bhRank>=1&&bhRank<=4;
+      if(bhTop4||bombaCand){
+        const lift=bhBoost*((beyondAgf5||bhTop4)?(bmb?1.0:0.8):0.45);
+        if(lift>bhBonus) bhBonus=lift;
+      }
+    }
+    // AGF-BLEND KAPSAMA KALDIRACI (bayrak __TKP_COV_BLEND=0 iken DEVRE DIŞI): AGF
+    // (piyasa), ilk-6 bandındaki kazananı model skorundan daha iyi kapsıyor
+    // (walk_forward: k=4..6'da +4..+6 puan). Kapsama tercihinin tabanını p↔agf harmanlar.
+    // Varsayılan AÇIK (0.30): 597 toplantılık gerçek backtest'te portföy 6/6
+    // %24.0 → %29 (143→~174), ROI korunur (~+%164), maliyet sabit. 0.50 daha çok
+    // 6/6 verir ama ROI'yi longshot ikramiyelerini kaçırarak düşürür. globalThis.
+    // __TKP_COV_BLEND=0 ile tamamen kapatılır, başka değerle ayarlanır.
+    const __covFlag=Number(globalThis.__TKP_COV_BLEND);
+    const covBlendW=Math.max(0,Math.min(1,Number.isFinite(__covFlag)?__covFlag:0.30));
+    const pB=covBlendW>0?((1-covBlendW)*p+covBlendW*agf):p;
+    const preference=(role==='alt'?pB*(1+.20*Math.max(-1,Math.min(1,p/agf-1))+.12*commentator):role==='surprise'?pB*(1+.35*commentator):pB*(1+.10*commentator))*(1+priority*(role==='surprise'?.75:role==='alt'?.35:.25))*(1+bhBonus);
     const k=key(h),old=groups.get(k);
     if(old){old.p+=p;old.preference+=preference;}else groups.set(k,{h,p,preference,k,rank:i});
   }
