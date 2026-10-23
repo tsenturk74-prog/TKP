@@ -1,6 +1,6 @@
 (function(g){
 'use strict';
-const VERSION='R16.80-ARCHIVE-3000-BH-COVERAGE-MIX80-ROI';
+const VERSION='R16.80-ARCHIVE-3000-BH-COVERAGE-MIX50';
 const modes=['main','alt','surprise'];
   function finishSteps(steps){let next;do{next=steps.next();}while(!next.done);return next.value;}
   async function finishStepsAsync(steps,pause){
@@ -22,17 +22,14 @@ function* fieldSteps(x,role){
   });
   const total=values.reduce((s,v)=>s+v,0)||1;
   const maxComment=Math.max(1,...rows.map(h=>Math.max(0,Number(h.ypuan)||0)+Math.max(0,Number(h.kulis_score)||0)));
-  const mixCfg=g.TKP_PLANNER_P_MIX;const mixW=(mixCfg&&Number.isFinite(Number(mixCfg.w)))?Number(mixCfg.w):0.80;
+  const mixCfg=g.TKP_PLANNER_P_MIX;const mixW=(mixCfg&&Number.isFinite(Number(mixCfg.w)))?Number(mixCfg.w):0.5;
   const agfRaw=rows.map(h=>Math.max(0,Number(h.agf)||0));const agfUsable=agfRaw.filter(v=>v>0).length>=Math.max(3,Math.ceil(rows.length/2));
   const agfSum=rows.reduce((s,x)=>s+Math.max(.005,(Number(x.agf)||0)/100),0)||1;
   const groups=new Map();
   for(let i=0;i<rows.length;i++){
     yield;const h=rows[i];
     let p=values[i]/total;const agf=Math.max(.005,(Number(h.agf)||0)/100);
-    // Skor payı ile AGF payı karışımı. w=0.5 (AGF 0.5) 6/6'yı en yükseğe çıkarır
-    // AMA longshot ikramiyelerini kaçırıp ROI'yi çökertir (597 toplantı backtest:
-    // w=0.5 -> 6/6 181/%30.3 ROI -%32.9). w=0.80 (AGF 0.20) ROI-güvenli optimum:
-    // 6/6 172/%28.8, ROI +%169.7 (blend yok=143/%24.0 +%163.7). bt_6x6.cjs ile doğrulandı.
+    // 3020: skor payı ile AGF payı karışımı (219 toplantı geriye dönük test: 6/6 84->100, >=5 ayak 278->333, w=0.5).
     if(agfUsable&&mixW<1){p=mixW*p+(1-mixW)*(agf/agfSum);}
     const commentator=(Math.max(0,Number(h.ypuan)||0)+Math.max(0,Number(h.kulis_score)||0))/maxComment;
     const priority=g.TKP_COUPON_POLICY?.commentPriority(x.r,h)?.score||0;
