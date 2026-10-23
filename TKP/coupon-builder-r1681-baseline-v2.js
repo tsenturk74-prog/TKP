@@ -11,7 +11,7 @@
 // %60 train / %20 validation / %20 holdout olarak ayrılır. Aday eşik validation'da
 // seçilir; son %20 holdout yalnız kabul kapısıdır. Holdout'ta güvenli 0,30 eşiğinden
 // kötüleşen aday canlıya geçmez. Simülasyon sabit 700 TL yerine kullanıcının Normal
-// bütçesini (700–1.400 TL güvenli bandında) kullanır. Veri değiştikçe cache anahtarı
+// bütçesini (700–2.000 TL güvenli bandında) kullanır. Veri değiştikçe cache anahtarı
 // yenilenir ve arama otomatik tekrarlanır.
 let _tkpGapThreshold = 0.30;
 let _tkpGapThresholdCacheKey = null;
@@ -109,7 +109,7 @@ function tuneTkpGapThreshold(key){
   try{
     const saved=Number(db?.settings?.last_coupon_budgets?.main);
     const configured=typeof tkpCouponBudgetFor==='function'?Number(tkpCouponBudgetFor(saved||undefined,'main')):saved;
-    if(Number.isFinite(configured)&&configured>0)tuningBudget=Math.max(1000,Math.min(1400,configured));
+    if(Number.isFinite(configured)&&configured>0)tuningBudget=Math.max(1000,Math.min(3000,configured));
   }catch(_){ }
 
   // Tarayıcı tek iş parçacıklıdır; her simülasyondan sonra idle kuyruğuna geri dön.
@@ -491,7 +491,7 @@ function legCoveragePlanFingerprint(x,mode){
       h?.horse_no,h?.score,h?.prediction_score_snapshot,h?.altili_winner_score,h?.agf,h?.agf_rank,h?.result_rank,
       h?.result_score,h?.sonuc_puani,h?.sonuc_sirasi,h?.ods_result_score,h?.ods_result_rank,h?.ods_sonuc_puani,h?.ods_sonuc_sirasi,
       h?.tr_ganyan,h?.tr_puan,h?.tr_ganyan_source,h?.tr_source,h?.tr_rank,h?.team_strength_pct,h?.prof,
-      h?.ypuan,h?.value_score,h?.value_rank,h?.hndkp,h?.hndkp_rank,h?.jbyg,h?.team_strength_pct,h?.bmb,h?.odb,
+      h?.ypuan,h?.atr_ypuan,h?.atr_comment_score,h?.atr_foreign_score,h?.atr_foreign_confidence,h?.value_score,h?.value_rank,h?.hndkp,h?.hndkp_rank,h?.jbyg,h?.team_strength_pct,h?.bmb,h?.odb,
       h?.son6_raw,h?.priorStarts,h?.priorWins,h?.priorAccurateAvgSpeed,h?.priorAccurateFinishSignal,
       'X_SHADOW_ONLY','X_SHADOW_ONLY',false,false
     ].join(','))
@@ -603,6 +603,47 @@ function legCoveragePlan(x, mode='main'){
   if(hiddenFavConflict){
     singleDecision.isSingle=false;
     singleDecision.reason='TR Gizli Favori koruması · TEK genişletildi';
+  }
+// Tek Takibi -> canlı TEK güven kapısı. Yalnız hedef yarıştan ÖNCE tamamlanmış
+// LIVE_FORWARD kayıtlarını kullanır; yarış sonrası doldurulmuş arşivden öğrenmez.
+function tkpSingleTrackingDecisionForRace(race, candidate){
+  const rows=typeof db!=='undefined'&&Array.isArray(db?.forward_tracking_log)?db.forward_tracking_log:[];
+  const targetDate=String(race?.race_date||'').slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)||!candidate||!rows.length)return null;
+  const ar=Number(candidate.agf_rank), tr=Number(candidate.tr_rank??candidate.tr_sira);
+  const arValid=Number.isInteger(ar)&&ar>=1&&ar<=12;
+  const trValid=Number.isInteger(tr)&&tr>=1&&tr<=12;
+  if(!arValid&&!trValid)return null;
+  let total=0,hits=0;
+  for(const rec of rows){
+    if(rec?.evidence_lane!=='LIVE_FORWARD'||rec?.historical_calibration)continue;
+    const rd=String(rec.race_date||'').slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(rd)||rd>=targetDate||!rec.winner_no)continue;
+    // Geçmişte yarış öncesi saklanan sıralamayı kullan; sonuçtaki sıralamayı asla okuma.
+    const snap=Array.isArray(rec.pre_race_candidates)?rec.pre_race_candidates:[];
+    if(!snap.length)continue;
+    let row=null;
+    if(arValid)row=snap.find(h=>Number(h.agf_rank)===ar);
+    else if(trValid)row=snap.find(h=>Number(h.rank)===tr);
+    if(!row||!row.horse_no)continue;
+    total++;
+    if(String(row.horse_no)===String(rec.winner_no))hits++;
+  }
+  if(total<30)return null;
+  const rate=(hits+2)/(total+8); // küçük örneklerde düzenlileştirme
+  return {total,hits,rate,agfRank:arValid?ar:null};
+}
+  // Tek Takibi yalnız tablo değildir: düşük geçmiş tek güveni canlı tek kararını veto eder.
+  // Veri yoksa mevcut kararı aynen bırakır. Böylece otomatik AGF lideri zorlamaz.
+  const singleTrack=first?tkpSingleTrackingDecisionForRace(x.r,first):null;
+  if(singleTrack){
+    singleDecision.trackingEvidence={sample:singleTrack.total,hits:singleTrack.hits,rate:singleTrack.rate};
+    if(singleDecision.isSingle&&singleTrack.rate<0.18){
+      singleDecision.isSingle=false;
+      singleDecision.trackingVeto=true;
+      singleDecision.reason=`Tek Takibi: AGF ${singleTrack.agfRank||'?'} geçmiş isabet ${(100*singleTrack.rate).toFixed(1)}% (${singleTrack.hits}/${singleTrack.total}) · kapsam genişletildi`;
+      reliable=false;
+    }
   }
   // At sayısı sabit 4 değildir. Koşu tipi, alan büyüklüğü, TKP liderinin gücü/farkı,
   // AGF yoğunluğu ve BMB/ODB sinyal derinliğine göre 2-8 arasında dinamik belirlenir.
@@ -825,6 +866,8 @@ function nextBudgetCandidate(leg, mode){
   // önce kapsanır. Böylece kupon ile ayak küçük tablosu aynı aday havuzundan beslenir.
   const coreRemaining=coreProtectionCandidates({r:leg.r,scored:leg.ordered||[]},leg.ordered||[]).filter(h=>!selected.has(String(h.horse_no)));
   if(coreRemaining.length) return coreRemaining[0];
+  const profBottom=typeof tkpTableBottomWinnerCandidates==='function'?tkpTableBottomWinnerCandidates(leg.r,leg.ordered||[]).filter(h=>!selected.has(String(h.horse_no))):[];
+  if(profBottom.length)return profBottom[0];
 
   // KULLANICI TALİMATI: "Altılıya para verdiren" değer bandı (SONUÇ 6-8, AGF 6-11,
   // gerçek BMB/ODB ve ilk 8 dışı Y.PUAN 8-20 ODB adaylarından kapsam dışında kalanların TAMAMI, bütçe
@@ -1025,19 +1068,41 @@ function coreProtectionCandidates(x, ordered){
 
 function bestPredictionRowsForLeg(x){
   const live=(x?.scored||x?.r?.horses||[]).filter(h=>h&&!isNonRunner(h));
+  // R19.47.17 AUTO-CHAMPION: Haftalık kalite kapısını geçen model varsa yalnız
+  // yarış-öncesi kilitli Champion/Challenger sırasını kullan. Kapı geçilmediyse
+  // mevcut R16/R18 production sırası değişmeden kalır.
+  try{
+    if(typeof globalThis.tkpWeeklyModelTrackerActiveOrderForRace==='function'){
+      const activeId=typeof globalThis.tkpWeeklyModelTrackerActiveModelId==='function'?globalThis.tkpWeeklyModelTrackerActiveModelId():'';
+      if(activeId&&activeId!=='PRODUCTION_CHAMPION_W1'){
+        const promoted=globalThis.tkpWeeklyModelTrackerActiveOrderForRace({r:x?.r,scored:live});
+        if(Array.isArray(promoted)&&promoted.length)return promoted.filter(h=>h&&!isNonRunner(h));
+      }
+    }
+  }catch(_){ }
   // R16 Challenger: Champion/market anchor korunur; Market Residual + Pairwise +
   // race-type expert + position model meta sırası P2-P5 kapsamasını yeniden düzenler.
   // P1 yalnız R16 seçici TEK kapısı yeterli ayrışma bulursa değişebilir; aksi halde
   // mevcut Champion lideri aynen kalır. Sonuç/winner alanı canlı yolda okunmaz.
+  const catRescue=(base)=>{
+    const clean=(base||[]).filter(h=>h&&!isNonRunner(h));
+    try{
+      if(typeof globalThis.tkpR17CatBoostRescueOrderForRace==='function'){
+        const rescued=globalThis.tkpR17CatBoostRescueOrderForRace(x?.r,clean);
+        if(Array.isArray(rescued)&&rescued.length===clean.length)return rescued.filter(h=>h&&!isNonRunner(h));
+      }
+    }catch(_){ }
+    return clean;
+  };
   if(typeof tkpR16MetaOrderForRace==='function'){
     const r16=tkpR16MetaOrderForRace(x?.r,live);
-    if(Array.isArray(r16)&&r16.length) return r16.filter(h=>h&&!isNonRunner(h));
+    if(Array.isArray(r16)&&r16.length) return catRescue(r16);
   }
   if(typeof altiliWinnerOrderForRace==='function'){
     const ordered=altiliWinnerOrderForRace(x?.r,live);
-    if(Array.isArray(ordered)&&ordered.length) return ordered.filter(h=>h&&!isNonRunner(h));
+    if(Array.isArray(ordered)&&ordered.length) return catRescue(ordered);
   }
-  return predictionDisplayRows({r:x?.r,scored:live},Infinity,'strategy').rows.filter(h=>!isNonRunner(h));
+  return catRescue(predictionDisplayRows({r:x?.r,scored:live},Infinity,'strategy').rows);
 }
 
 const _tkpOverviewStrongLegCache=new Map();
@@ -1047,7 +1112,7 @@ function tkpOverviewStrongCacheKey(chosen){
   const dbSig=typeof tkpFastDbSignature==='function'?tkpFastDbSignature(db):`${db?.files?.length||0}|${db?.races?.length||0}`;
   const rows=(chosen||[]).map(x=>{
     const r=x?.r||{};const scored=x?.scored||[];
-    return [r.id||r.file_id||'',r.leg||'',...scored.map(h=>[h?.horse_no,h?.score,h?.prediction_score_snapshot,h?.agf,h?.agf_rank,h?.ypuan,h?.value_score,h?.hndkp_rank,h?.jbyg,h?.g800,h?.bmb,h?.odb,false,0].join(','))].join(':');
+    return [r.id||r.file_id||'',r.leg||'',...scored.map(h=>[h?.horse_no,h?.score,h?.prediction_score_snapshot,h?.agf,h?.agf_rank,h?.ypuan,h?.atr_ypuan,h?.atr_comment_score,h?.atr_foreign_score,h?.atr_foreign_confidence,h?.atr_synthetic_agf,h?.atr_ganyan,h?.atr_or,h?.atr_form,h?.atr_comment,h?._atr_effective_winner_score,h?.value_score,h?.hndkp_rank,h?.jbyg,h?.g800,h?.bmb,h?.odb,false,0].join(','))].join(':');
   }).join(';');
   return dbSig+'|'+rows;
 }
@@ -1279,7 +1344,44 @@ function tkpV52LegacyNormalSingleMap(chosen){
 // doğrulayamasa bile, kuponun omurgasındaki en güçlü yarış-öncesi lider bir
 // adet TEK olarak tutulur. Bu bir güven garantisi değildir; meta alanında açıkça
 // fallback olarak işaretlenir ve sonuç/ikramiye verisi bu seçime girmez.
+// Yarış öncesi TEK yedeği: yalnız AGF lideri değil, takip isabeti ve çoklu sinyaller.
+// Veri yoksa tarafsız puan omurgası; gerçek sonuç alanları hiçbir şekilde okunmaz.
+function tkpEvidenceFallbackSingle(chosen, strategy='normal'){
+  const rows=[];
+  for(let i=0;i<(chosen||[]).length;i++){
+    const x=chosen[i], race=x?.r||{}, horses=(x?.scored?.length?x.scored:race.horses||[])
+      .filter(h=>h&&!isNonRunner(h)&&canBeCouponSingle(h)&&!tkpLegacyXKulisBreaksSingle(h));
+    if(!horses.length)continue;
+    const agfSorted=horses.slice().sort((a,b)=>(Number(b?.agf)||0)-(Number(a?.agf)||0));
+    const maxAgf=Math.max(1,...horses.map(h=>Number(h?.agf)||0));
+    const scores=horses.map(h=>Number(h?.score)||0), topScore=Math.max(.001,...scores);
+    const ranked=horses.map((h,index)=>{
+      const agf=(Number(h?.agf)||0)/maxAgf;
+      const tkp=Math.max(0,Number(h?.score)||0)/topScore;
+      const tr=Math.max(0,Number(h?.tr_puan??h?.tr_score??0)||0);
+      const profile=Math.max(0,Number(h?.profile_power??h?.profil_gucu??0)||0);
+      const support=(Number(h?.bmb)===1?0.10:0)+(Number(h?.odb)===1?0.06:0);
+      const track=tkpSingleTrackingDecisionForRace(race,h);
+      const learned=track?Math.max(0,Math.min(1,track.rate)):null;
+      // Gerçek takip örneği varsa düşük isabeti cezalandır; sırf AGF lideri diye seçme.
+      const evidence=.38*tkp+.20*agf+.10*Math.min(1,tr/100)+.10*Math.min(1,profile/100)+support
+         +(learned===null?0.08:0.24*learned);
+      return {h,evidence,track};
+    }).sort((a,b)=>b.evidence-a.evidence||String(a.h.horse_no).localeCompare(String(b.h.horse_no)));
+    if(ranked.length){
+      const leader=ranked[0];
+      const field=horses.length;
+      rows.push({i,x,h:leader.h,evidence:leader.evidence,tracking:leader.track,
+        gap:leader.evidence-(ranked[1]?.evidence||0),field});
+    }
+  }
+  rows.sort((a,b)=>b.evidence-a.evidence||b.gap-a.gap||a.field-b.field||a.i-b.i);
+  return rows[0]||null;
+}
+
 function tkpNormalFallbackSingleCandidate(chosen,firstLook=null){
+  const multi=tkpEvidenceFallbackSingle(chosen,'normal');
+  if(multi)return {...multi,decision:{isSingle:false,confidence:Math.round(100*multi.evidence),threshold:68,reason:'Tek Takibi + TKP/AGF/BMB çoklu sinyal TEK yedeği'}};
   const candidates=(firstLook||firstLookPortfolioSingleCandidates(chosen)||[])
     .filter(z=>z?.h&&!isNonRunner(z.h)&&canBeCouponSingle(z.h));
   if(candidates.length)return candidates[0];
@@ -1311,12 +1413,24 @@ function tkpStrategyFallbackSingleCandidates(chosen,strategy,limit=1){
   // yoksa boş TEK/maliyet TEK'i yerine o kuponun kendi görünür çekirdeğinden
   // strateji TEK'i seçilir. Normal 1. sırayı, Sürpriz 3–5 bandını, Uzman ise
   // kendi kulis/uzman sırasının liderini kullanır.
+  const mult=tkpEvidenceFallbackSingle(chosen,strategy);
+  if(mult)return [{i:mult.i,h:{...mult.h,__tkpStrategyFallbackSingle:true,__tkpStrategyFallbackKind:strategy,__tkpEvidenceFallback:true}}];
   const rows=[];
   for(let i=0;i<(chosen||[]).length;i++){
     const x=chosen[i];
-    const general=(typeof predictionDisplayRows==='function'
+    let general=(typeof predictionDisplayRows==='function'
       ?predictionDisplayRows({r:x?.r,scored:x?.scored||[]},Infinity,'score-desc').rows
       :(x?.scored||x?.r?.horses||[])).filter(h=>h&&!isNonRunner(h));
+    // MAİDEN FIX (V4.18): Maiden yarışlarda tüm TKP skorları ≈0 olduğunda
+    // predictionDisplayRows sıralaması profil gücü/bonus gibi zayıf sinyallere
+    // dayanır. Geçmiş 3450 yarış analizi: maiden DHÖW için AGF1 isabeti %41.1
+    // iken TKP1 %38.9. Skorlar ≈0 ise AGF liderini TEK adayı yap.
+    const condKey=typeof broadConditionKey==='function'?broadConditionKey(x?.r?.condition_text||x?.r?.condition_family||''):'';
+    const isMaiden=/MA[İI]DEN/.test(condKey);
+    const maxScore=Math.max(0,...general.map(h=>Math.abs(Number(h?.score)||0)));
+    if(isMaiden && maxScore<0.01 && general.length>1){
+      general=general.slice().sort((a,b)=>(Number(b?.agf)||0)-(Number(a?.agf)||0));
+    }
     let pool=general;
     if(strategy==='alt')pool=general.slice(2,5);
     if(strategy==='expert'){
@@ -1330,7 +1444,13 @@ function tkpStrategyFallbackSingleCandidates(chosen,strategy,limit=1){
     try{if(typeof tkpRaceVisibleDisplayScore==='function')visible=Number(tkpRaceVisibleDisplayScore(x?.r,h))||visible;}catch(_){ }
     rows.push({i,h:{...h,__tkpStrategyFallbackSingle:true,__tkpStrategyFallbackKind:strategy},visible});
   }
-  return rows.sort((a,b)=>b.visible-a.visible||a.i-b.i).slice(0,Math.max(0,Math.min(2,limit)));
+  // Zorunlu (kanıtsız) TEK: 12+ atlı ayak en sona; orada TEK isabeti ~%27 (küçük kadroda ~%51).
+  const bigField=i=>((chosen[i]?.r?.horses||[]).filter(h=>h&&!isNonRunner(h)).length>=12)?1:0;
+  // Sıralama: piyasa payı (AGF %) en yüksek lider önce. 3400 ayaklık testte lider isabeti için
+  // AGF payı (AUC .625) mevcut güven puanından (.577) daha iyi; toplantı başına en iyi ayak
+  // seçimi %37 → %40-43 (zaman-ayrımlı testte, küçük/gürültülü fark).
+  const agfShare=r=>Number(r?.h?.agf)||0;
+  return rows.sort((a,b)=>bigField(a.i)-bigField(b.i)||agfShare(b)-agfShare(a)||b.visible-a.visible||a.i-b.i).slice(0,Math.max(0,Math.min(2,limit)));
 }
 
 function forcedSinglePickMap(chosen,strategy,overviewArg=null){
@@ -1390,7 +1510,22 @@ function forcedSinglePickMap(chosen,strategy,overviewArg=null){
   const eligible=[...map.entries()].filter(([,h])=>h&&canBeCouponSingle(h));
   const reviewed=eligible.map(([i,h])=>({i,h,evidence:tkpBenterSingleEvidence(chosen[i],h,mode)}));
   const qualified=reviewed.filter(row=>!row.evidence.blocked);
-  if(qualified.length)return new Map(qualified.slice(0,2).map(row=>[row.i,row.h]));
+  if(qualified.length){
+    // V1.1.336 FIX (Claude · kullanıcı talebi): Kupon başına varsayılan 1 TEK.
+    // İKİNCİ TEK yalnız "ÇOK SAĞLAM" ise eklenir. "Çok sağlam" ölçütü: ikinci adayın
+    // dinamik TEK güveni (a) kendi TEK eşiğini en az TKP_SECOND_SINGLE_MARGIN puan
+    // aşmalı VE (b) mutlak en az TKP_SECOND_SINGLE_FLOOR olmalı VE isSingle=true.
+    // Bu iki eşik de ayarlanabilir; kullanıcı daha katı/gevşek isterse değiştirilir.
+    // En güçlü aday 1. TEK yapılır (mevcut R16+Benter kanıt kapısından zaten geçti).
+    const TKP_SECOND_SINGLE_MARGIN=10;   // eşiğin bu kadar üstü = belirgin
+    const TKP_SECOND_SINGLE_FLOOR=75;    // mutlak "çok sağlam" güven tabanı (kullanıcı ayarı)
+    const confInfo=(row)=>{ try{ const d=(typeof dynamicSingleDecision==='function')?dynamicSingleDecision(chosen[row.i],row.h):null; return d?{conf:Number(d.confidence)||0,thr:Number(d.threshold)||68,single:d.isSingle===true}:{conf:0,thr:68,single:false}; }catch(_e){ return {conf:0,thr:68,single:false}; } };
+    const ranked=qualified.map(row=>({row,m:confInfo(row)})).sort((a,b)=>b.m.conf-a.m.conf);
+    const out=[ranked[0].row];
+    const sec=ranked[1];
+    if(sec && sec.m.single && sec.m.conf>=Math.max(sec.m.thr+TKP_SECOND_SINGLE_MARGIN, TKP_SECOND_SINGLE_FLOOR)) out.push(sec.row);
+    return new Map(out.map(row=>[row.i,row.h]));
+  }
   // Kullanıcının en az bir TEK şekli korunur; değer vetosunu geçen kanıtlı
   // TEK diye sunulmaz ve ikinci bir zorunlu TEK eklenmez.
   return new Map(reviewed.slice(0,1).map(row=>[row.i,{...row.h,__tkpStrategyFallbackSingle:true,__tkpBenterSingleVeto:true}]));
@@ -1903,11 +2038,17 @@ function minimumCostCoverage(chosen, unit, mode, budgetTL, forcedSingleIdx, forc
     // çıkmış olsa bile asıl sıralama havuzundan yeniden bulunur. Yalnız mevcut
     // picks'i taramak, koruma bayrağı dururken atın kupondan kaybolmasına yol açıyordu.
     const guarded=(leg.ordered||leg.picks||[]).filter(isGuarded);
-    const leaderCount=Math.min(targetCount,Math.max(1,Number(leg.leaderFloorCount)||targetCount));
+    // Canlı taban seçimleri korunur; AGF ilk 5 zorunluluğu yalnız >=%8 için geçerlidir.
+    const lockN=targetCount>=5?5:targetCount;
+    const leaderCount=Math.min(targetCount,Math.max(lockN,Number(leg.leaderFloorCount)||0));
     const leaders=dedupeEkuri((leg.displayOrder||[]).slice(0,leaderCount),leg.r,mode,true);
-    const required=dedupeEkuri(leaders.concat(guarded),leg.r,mode,true);
-    const desiredCount=Math.max(targetCount,required.length);
-    const combined=dedupeEkuri(required.concat(leg.picks||[]),leg.r,mode,true);
+    const agf5=(leg.displayOrder||leg.ordered||[]).filter(h=>{const r=Number(h?.agf_rank);return Number.isFinite(r)&&r>=1&&r<=5&&Number(h?.agf)>=8;});
+    const required=dedupeEkuri(leaders.concat(agf5,guarded),leg.r,mode,true).slice(0,targetCount);
+    // R19.47.56 (Tommy 'favori dusmesin'): taban secimleri ASLA ezilmez. Once mevcut
+    // picks, sonra zorunlu lider/AGF eklenir; guclu ganyan favorisi ( or. 12 Ziya K.)
+    // tahmin sirasi 6+ olsa bile kupondan dusmez. Genislik asagidaki maliyet DP'sinde sinirli.
+    const combined=dedupeEkuri((leg.picks||[]).concat(required),leg.r,mode,true);
+    const desiredCount=Math.max(targetCount,combined.length);
     leg.picks=combined.slice(0,desiredCount);
     if(leg.ordered && leg.ordered.length){
       const rank=new Map((leg.displayOrder||[]).map((h,i)=>[String(h.horse_no),i]));
@@ -1930,6 +2071,45 @@ function minimumCostCoverage(chosen, unit, mode, budgetTL, forcedSingleIdx, forc
     allocationStage:'CANDIDATES_PREPARED_FOR_JOINT_DP'};
 }
 
+// ATR foreign-only selection: limited, explainable blend with existing pre-race order.
+// Never operates on Turkish racecourses or archived read-only historical cards.
+function tkpForeignAtrSelectionOrder(race, ranked){
+  if(!Array.isArray(ranked)||ranked.length<2)return ranked;
+  const hip=String(race?.hippodrome||race?.hip||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');
+  const domestic=['ADANA','ANKARA','ANTALYA','BURSA','DIYARBAKIR','DİYARBAKIR','ELAZIG','ELAZIĞ','ISTANBUL','İSTANBUL','IZMIR','İZMİR','KOCAELI','KOCAELİ','SANLIURFA','ŞANLIURFA'];
+  if(!hip||domestic.some(n=>hip===n))return ranked;
+  const eligible=ranked.filter(h=>!h?.non_runner&&!h?.atr_non_runner);
+  const withAtr=eligible.filter(h=>h?.atr_source==='At The Races'&&Number.isFinite(Number(h.atr_foreign_score))&&Number(h.atr_foreign_confidence)>=0.35);
+  if(withAtr.length<2||withAtr.length<Math.ceil(eligible.length*0.5))return ranked;
+  const baseRank=new Map(ranked.map((h,i)=>[String(h.horse_no),i]));
+  const atrValues=withAtr.map(h=>Number(h.atr_foreign_score));
+  const min=Math.min(...atrValues),max=Math.max(...atrValues);
+  if(max<=min)return ranked;
+  // Ranking and downstream winner scores must be derived from the SAME blended signal.
+  // Keep an immutable baseline for repeated recalculations after ATR updates.
+  const denom=Math.max(1,ranked.length-1);
+  const blended=h=>{
+    const idx=baseRank.get(String(h.horse_no))??(ranked.length-1);
+    const original=1-idx/denom;
+    const atr=Number(h.atr_foreign_score);
+    const valid=h.atr_source==='At The Races'&&h.atr_foreign_score!=null&&Number.isFinite(atr)&&Number(h.atr_foreign_confidence)>=0.35;
+    return 0.6*original+0.4*(valid?(atr-min)/(max-min):original);
+  };
+  const ordered=ranked.slice().sort((a,b)=>blended(b)-blended(a)||(baseRank.get(String(a.horse_no))-baseRank.get(String(b.horse_no))));
+  ordered.forEach((h,i)=>{
+    if(h?.non_runner||h?.atr_non_runner)return;
+    const effective=100*blended(h);
+    h._atr_effective_winner_score=effective;
+    h._atr_effective_rank=i+1;
+    h._atr_rank_delta=(baseRank.get(String(h.horse_no))??i)-i;
+    h.altili_winner_rank=i+1;
+    // Only foreign ATR-valid races are modified. Original value remains available for auditing.
+    if(!Object.prototype.hasOwnProperty.call(h,'_atr_base_winner_score'))h._atr_base_winner_score=h.altili_winner_score;
+    h.altili_winner_score=effective;
+  });
+  return ordered;
+}
+
 function strictRankedRaceResults(raceResults){
   return (raceResults || []).map(x => {
     // Arşiv/frozen kartta yarış-öncesi sıra zaten snapshot olarak kilitlidir.
@@ -1950,7 +2130,13 @@ function strictRankedRaceResults(raceResults){
       ? altiliWinnerOrderForRace(x.r,(x.scored||x.r?.horses||[]))
       : (x.scored||[]).slice();
     if(!winnerOrder.length) return null;
+    const foreignOrder=tkpForeignAtrSelectionOrder(x.r,winnerOrder);
     const allowed=new Set(strictPool.map(h=>String(h.horse_no)));
+    // ATR-supported foreign candidates can reach the coupon pool without widening
+    // domestic race pools; the existing budget optimizer still enforces limits.
+    if(foreignOrder!==winnerOrder){
+      for(const h of foreignOrder.slice(0,Math.min(4,foreignOrder.length)))allowed.add(String(h.horse_no));
+    }
     // Ana sıralamaya dokunmadan, kanıtlı kuyruk adaylarının Sürpriz portföyüne
     // ulaşabilmesi için katı aday kapısında en fazla üç ek aday açılır.
     if(typeof tkpPortfolioHedgesForRace==='function'){
@@ -1961,7 +2147,7 @@ function strictRankedRaceResults(raceResults){
     // Tahmin 1 lideri katı havuz kurallarına takılsa bile Altılı değerlendirmesinden
     // silinmez; kalan adaylar da yalnız aynı p1 sırasına göre dizilir.
     allowed.add(String(winnerOrder[0].horse_no));
-    const effPool=winnerOrder.filter(h=>allowed.has(String(h.horse_no)));
+    const effPool=foreignOrder.filter(h=>allowed.has(String(h.horse_no)));
     return Object.assign({}, x, {
       strictPool: effPool,
       top: effPool[0],
@@ -1987,8 +2173,30 @@ async function strictRankedRaceResultsAsync(raceResults){
 // Kupon türüne göre kesin maliyet tavanı uygular.
 // Seçimler güçlüden zayıfa sıralı olduğu için, tavan aşılırsa her ayakta
 // en sondaki (en düşük öncelikli) adaylar kontrollü biçimde çıkarılır.
-// SON BÜTÇE KİLİDİ (2026-08-16) — V55: üst sınır korunur; 700–1.400 bantları tavana zorla doldurmaz.
+// SON BÜTÇE KİLİDİ (2026-08-16) — V55: üst sınır korunur; 700–2.000 bantları tavana zorla doldurmaz.
+// Coverage audit is observational only. Never alters picks, rank, budget or archived coupons.
+function tkpCaptureCoverageAudit(stage, legs, info={}){
+  try{
+    if(typeof globalThis==='undefined')return;
+    const picksOf=l=>(l?.picks||[]).map(h=>String(h?.horse_no??'')).filter(Boolean);
+    const rows=(legs||[]).map((leg,i)=>{
+      const picks=picksOf(leg);
+      const available=(leg?.displayOrder||leg?.ordered||leg?.allHorses||leg?.r?.horses||[]);
+      const outsiders=available.filter(h=>h&&!picks.includes(String(h?.horse_no??'')) && !h?.non_runner && !h?.atr_non_runner);
+      const bh=outsiders.filter(h=>{
+        const raw=String(h?.bh_rank??h?.bhRank??h?.bh_badge??h?.bh_label??h?.bh??'');
+        return /(?:^|\D)[123](?:$|\D)/.test(raw)||/^BH\s*[123]$/i.test(raw);
+      }).map(h=>({no:String(h?.horse_no??''),bh:String(h?.bh_rank??h?.bhRank??h?.bh_badge??h?.bh_label??h?.bh??'')}));
+      return {leg:i+1,hippodrome:String(leg?.r?.hippodrome||leg?.r?.hip||''),race:String(leg?.r?.race_no||leg?.r?.no||''),mode:String(leg?.coverageMode||''),count:picks.length,picks,learnedMinimum:Number(leg?.minCoverage)||null,riskMinimum:Number(leg?.riskMinCoverage)||null,optimizedCount:Number(leg?.optimizedCoverageCount)||null,bhOutside:bh};
+    });
+    const audit=globalThis.TKP_COVERAGE_AUDIT||(globalThis.TKP_COVERAGE_AUDIT=[]);
+    audit.push({stage,at:new Date().toISOString(),capTL:Number(info.capTL)||null,cost:Number(info.cost)||null,legs:rows});
+    if(audit.length>90)audit.splice(0,audit.length-90);
+  }catch(_){} // Fail open: diagnostics must never affect coupon creation.
+}
+if(typeof globalThis!=='undefined')globalThis.tkpCaptureCoverageAudit=tkpCaptureCoverageAudit;
 function enforceCouponCostCap(legs, unit, capTL){
+  tkpCaptureCoverageAudit("budget-before",legs,{capTL});
   const cap=Math.max(0,Number(capTL)||0);
   const comboCount=()=>legs.reduce((n,l)=>n*Math.max(1,(l.picks||[]).length),1);
   const maxCombos=Math.max(0,Math.floor((cap+1e-9)/Math.max(.0001,Number(unit)||1)));
@@ -2005,7 +2213,7 @@ function enforceCouponCostCap(legs, unit, capTL){
     if(narrowHorse && (mode==='main'||mode==='alt')){
       return dedupeEkuri(xForced.concat(display.slice(0,2),[narrowHorse],display.slice(2),scenario,leg?.picks||[]),leg?.r,mode,true);
     }
-    if(mode==='main') return dedupeEkuri(xForced.concat(display,scenario,leg?.picks||[]),leg?.r,mode,true);
+    if(mode==='main') return dedupeEkuri(display.concat(xForced,scenario,leg?.picks||[]),leg?.r,mode,true);
     const guarded=(scenario||[]).filter(h=>(leg?.protectedSignalNos&&leg.protectedSignalNos.has(String(h.horse_no)))||
       (leg?.protectedValueNos&&leg.protectedValueNos.has(String(h.horse_no))));
     const core=display.slice(0,Math.min(5,display.length));
@@ -2014,7 +2222,7 @@ function enforceCouponCostCap(legs, unit, capTL){
         .sort((a,b)=>(Number(leg?.hybridBombScores?.get(String(b.horse_no)))||0)-(Number(leg?.hybridBombScores?.get(String(a.horse_no)))||0));
       // Yalnız toplantının en güçlü bomba ayağında ilk iki P1'in ardından gelir.
       // Diğer beş ayakta bombs boş olduğundan V1.1.56 sırası değişmez.
-      return dedupeEkuri(xForced.concat(core.slice(0,2),bombs,core.slice(2),guarded,scenario,display,leg?.picks||[]),leg?.r,mode,true);
+      return dedupeEkuri(xForced.concat(core,bombs,guarded,scenario,display,leg?.picks||[]),leg?.r,mode,true);
     }
     return dedupeEkuri(xForced.concat(core,guarded,scenario,display,leg?.picks||[]),leg?.r,mode,true);
   }
@@ -2075,45 +2283,33 @@ function enforceCouponCostCap(legs, unit, capTL){
     ));
     const masses=ranked.slice(0,maxCount).map(h=>candidateMass(leg,h));
     const total=Math.max(.000001,masses.reduce((sum,value)=>sum+value,0));
-    // V1.1.334-MGO: olasılık-temelli marjinal-kazanç optimizasyonu VARSAYILANDIR
-    // (2026-09-20, kullanıcı kararı; backtest: 6/6 %8,6->%10,6, maliyet artışı yok).
-    // DP utility'sindeki kapsama olasılığı, ham skor kütlesi yerine walk-forward
-    // isotonic kalibre kazanma olasılığından okunur (tkp-marginal-gain-optimizer.js).
-    // Opt-out: globalThis.__tkpUseMarginalGainOptimizer=false -> eski davranışa döner.
-    // Kalibrasyon verisi yetersiz/tarih okunamazsa fail-closed: mgoCoverage null kalır
-    // ve utility eski skor-kütlesi hesabıyla birebir aynı kalır. Maliyet cap'i korunur.
-    // 'shadow' modunda karar değişmez; iki olasılık serisi gölge loga yazılır.
-    const mgo=globalThis.TKP_MARGINAL_GAIN_OPTIMIZER||null;
-    const mgoOn=!!(mgo&&typeof mgo.isEnabled==='function'&&mgo.isEnabled());
-    const mgoShadow=!!(mgo&&typeof mgo.isShadow==='function'&&mgo.isShadow());
-    let mgoCoverage=null;
-    if((mgoOn||mgoShadow)&&mgo&&typeof mgo.utilityCoverage==='function'){
-      try{
-        const probs=typeof mgo.legProbabilitiesForDp==='function'?mgo.legProbabilitiesForDp({r:leg?.r,ranked}):null;
-        if(probs&&probs.size) mgoCoverage=mgo.utilityCoverage(leg?.r,ranked,maxCount,probs);
-      }catch(_){ mgoCoverage=null; }
+    const legacyProbabilities=[];
+    let legacyCovered=0;
+    for(let i=0;i<maxCount;i++){
+      legacyCovered+=masses[i]||0;
+      legacyProbabilities.push(Math.max(.000001,Math.min(.999999,legacyCovered/total)));
     }
+    // R19 MARGINAL-GAIN: At sırası/seçimi AYNI kalır. Yalnız DP'nin kapsama
+    // olasılığı kaynağı, yeterli geçmiş varsa walk-forward PAVA kalibrasyonuna geçer.
+    // <200 gözlem, okunamayan tarih, opt-out veya shadow modunda legacy skor-kütlesi
+    // kullanılır. Böylece kronoloji fail-closed ve geriye dönük uyumluluk korunur.
+    let probabilityBridge=null;
+    try{
+      if(typeof globalThis.tkpMarginalGainDpUtilityBridge==='function') probabilityBridge=globalThis.tkpMarginalGainDpUtilityBridge(leg,ranked.slice(0,maxCount),legacyProbabilities,{minObservations:200});
+      else if(typeof globalThis.dpUtilityBridge==='function') probabilityBridge=globalThis.dpUtilityBridge(leg,ranked.slice(0,maxCount),legacyProbabilities,{minObservations:200});
+    }catch(_e){ probabilityBridge=null; }
+    const coverageProbabilities=(probabilityBridge?.probabilities?.length===maxCount)?probabilityBridge.probabilities:legacyProbabilities;
     const options=[];
-    let covered=0;
     for(let count=1;count<=maxCount;count++){
-      covered+=masses[count-1]||0;
       if(count<minCount) continue;
-      const probability=Math.max(.000001,Math.min(.999999,covered/total));
+      const probability=Math.max(.000001,Math.min(.999999,Number(coverageProbabilities[count-1])||legacyProbabilities[count-1]||.000001));
       // Risk-first bütçe dağıtımı: aynı ilave kolon zor ayakta daha değerlidir.
       // Böylece zor ayağın hard flooru korunduktan sonra kalan bütçe de önce riskli
       // ayaklara gider; düşük riskli ayaklar gerektiğinde daha erken daralır.
       const difficulty=Math.max(0,Math.min(100,Number(leg?.confidencePlan?.difficulty)||0));
       const riskWeight=0.85+(difficulty/100)*1.65;
       const floorPenalty=count<preferred?(preferred-count)*.20:0;
-      let probabilityUsed=probability;
-      if(mgoCoverage&&mgoCoverage.length>=count){
-        probabilityUsed=Math.max(.000001,Math.min(.999999,mgoCoverage[count-1]));
-        if(mgoShadow&&typeof mgo.shadowLog==='function'){
-          mgo.shadowLog({kind:'leg-coverage',hippodrome:leg?.r?.hippodrome,date:leg?.r?.race_date,leg:leg?.r?.leg,
-            mode,count,massProbability:probability,calibratedProbability:probabilityUsed,applied:mgoOn});
-        }
-      }
-      options.push({count,utility:riskWeight*Math.log(mgoOn?probabilityUsed:probability)-floorPenalty});
+      options.push({count,utility:riskWeight*Math.log(probability)-floorPenalty});
     }
     if(leg?.protectedFlag){
       const count=Math.max(1,(leg.picks||[]).length);
@@ -2163,6 +2359,7 @@ function enforceCouponCostCap(legs, unit, capTL){
       leg.optimizedCoverageCount=leg.picks.length;
     }
     const combos=comboCount(),cost=unit*combos;
+    tkpCaptureCoverageAudit('budget-risk-floor',legs,{capTL:cap,cost});
     return {legs,combos,cost,capTL:cap,capLimited:cost>cap+1e-9,riskFloorConflict:cost>cap+1e-9,columnOptimization:'RISK_FLOOR_BUDGET_CONFLICT'};
   }
   selected.counts.forEach((count,index)=>{
@@ -2176,48 +2373,70 @@ function enforceCouponCostCap(legs, unit, capTL){
   });
   let combos=comboCount(),cost=unit*combos;
   const capLimited=cost>cap+1e-9;
-  // R16.60 TABAN GARANTİSİ (kullanıcı isteği: "kupon tutarları 1000-1400 arası
+  // R16.60 TABAN GARANTİSİ (kullanıcı isteği: "kupon tutarları 1000-2000 arası
   // olsun, her kupon kendi mantığına göre ayarlasın"). DP yalnız verilen tavana
   // (cap) göre en iyi kombinasyonu seçtiği için "disiplinli" toplantılarda (tek
   // güçlü favori -> hedef sabit 1.000 TL, bkz. tkpV55BudgetTarget) gerçek maliyet,
   // ayak genişliklerinin ayrık çarpımı yüzünden tavanın biraz altına (örn. 960 TL)
   // düşebiliyor ve politika tabanının (1.000 TL) altında kalıyordu. Aşağıdaki adım
   // DP'nin ayak seçim/sıralama mantığına dokunmaz; yalnız gerçekleşen maliyet taban
-  // altındaysa ve politika tavanına (1.400 TL) sığan en ucuz tek-ayak genişletmesi
+  // altındaysa ve politika tavanına (2.000 TL) sığan en ucuz tek-ayak genişletmesi
   // varsa uygulanır. Böylece Normal/Sürpriz/Uzman kuponların her biri kendi ayak
   // sırasına göre en az maliyetle tabanı geçer; rastgele ya da aşırı büyümez.
   const feePolicy=(typeof TKP_COUPON_FEE_POLICY==='object'&&TKP_COUPON_FEE_POLICY)?TKP_COUPON_FEE_POLICY:null;
   const floorTL=Number(feePolicy?.minBudgetTL)||0;
   const ceilTL=Math.max(cap,Number(feePolicy?.maxBudgetTL)||cap);
-  let floorAdjusted=false;
-  if(floorTL>0&&cost>0&&cost<floorTL-1e-9){
-    let bestIndex=-1,bestCost=Infinity;
+  // R19.47.47 (Tommy 2026-10-10): Bir ayak TEK'e bağlanınca kolon yarıya iner, maliyet
+  // tabana (1000) düşüp bütçenin yarısı boşa gidiyordu. Backtest: boşalan bütçeyi AÇIK
+  // ayakları genişletmeye harcamak 6/6 kapsamasını artırır. Banker varsa hedef tabana
+  // değil, kullanıcı bandının TAVANINA (maxBudgetTL, örn 2000) doğru dolar; banker ayağı
+  // (confidencePlan.reliable & picks===1) AÇILMAZ, yalnız açık ayaklar en dar olandan
+  // başlayarak genişler (dengeli 4-4-3-3-3-3 yönü). Banker yoksa eski taban davranışı aynen.
+  const _policyMax=Number(feePolicy?.maxBudgetTL)||ceilTL;
+  // R19.47.51 (Tommy 2026-10-10 'tek bulunca 1000 düşmesin, bugünkü Ankara gibi'): TEK ayak
+  // yalnız reliable=true iken değil, kasıtlı daraltılmış HER tek-at ayağında (forced/protectedFlag
+  // ya da reliable) banker sayılır. Fallback TEK'te de kolon yarıya iniyordu ama bütçe tabana (1000)
+  // düşüyordu; artık boşalan bütçe açık ayakları genişletmeye gidip banda (2000) dolar.
+  const _bankerPresent=legs.some(l=>(l?.picks||[]).length===1 && (l?.protectedFlag || l?.confidencePlan?.reliable));
+  const fillTarget=_bankerPresent?Math.min(ceilTL,_policyMax):floorTL;
+  let floorAdjusted=false,_g=0;
+  while(cost>0 && cost<fillTarget-1e-9 && _g++<24){
+    let bestIndex=-1,bestScore=-Infinity;
     for(let i=0;i<prepared.length;i++){
       const item=prepared[i],leg=item.leg;
       if(leg?.protectedFlag)continue;
+      if((leg?.picks||[]).length===1 && leg?.confidencePlan?.reliable)continue; // banker açılmaz
       const curCount=Number(leg?.optimizedCoverageCount)||(leg?.picks||[]).length;
       if(curCount<=0)continue;
       const maxAllowed=item.options&&item.options.length?Math.max(...item.options.map(o=>o.count)):curCount;
       const nextCount=curCount+1;
       if(nextCount>maxAllowed)continue;
       const nextCost=cost*(nextCount/curCount);
-      if(nextCost>=floorTL-1e-9&&nextCost<=ceilTL+1e-9&&nextCost<bestCost){bestCost=nextCost;bestIndex=i;}
+      if(nextCost>fillTarget+1e-9 || nextCost>ceilTL+1e-9)continue;
+      const score=(1000-curCount*10)-(nextCost/1e7); // en dar açık ayağı önce, eşitse ucuz
+      if(score>bestScore){bestScore=score;bestIndex=i;}
     }
-    if(bestIndex>=0){
-      const item=prepared[bestIndex],leg=item.leg;
-      const curCount=Number(leg?.optimizedCoverageCount)||(leg?.picks||[]).length;
-      leg.picks=item.ranked.slice(0,curCount+1);
-      const displayRank=new Map((leg.displayOrder||[]).map((h,i)=>[String(h.horse_no),i]));
-      leg.picks.sort((a,b)=>(displayRank.get(String(a.horse_no))??999)-(displayRank.get(String(b.horse_no))??999));
-      leg.optimizedCoverageCount=leg.picks.length;
-      combos=comboCount();cost=unit*combos;
-      floorAdjusted=true;
-    }
+    if(bestIndex<0)break;
+    const item=prepared[bestIndex],leg=item.leg;
+    const curCount=Number(leg?.optimizedCoverageCount)||(leg?.picks||[]).length;
+    leg.picks=item.ranked.slice(0,curCount+1);
+    const displayRank=new Map((leg.displayOrder||[]).map((h,i)=>[String(h.horse_no),i]));
+    leg.picks.sort((a,b)=>(displayRank.get(String(a.horse_no))??999)-(displayRank.get(String(b.horse_no))??999));
+    leg.optimizedCoverageCount=leg.picks.length;
+    combos=comboCount();cost=unit*combos;
+    floorAdjusted=true;
   }
+  tkpCaptureCoverageAudit('budget-after',legs,{capTL:cap,cost});
   return {legs,combos,cost,capTL:cap,capLimited,floorAdjusted,columnOptimization:'JOINT_LOG_COVERAGE_DP'};
 }
 
 
+// One betting identity for exact horses and their ekuri partners.
+function tkpCouponGuardHorseKey(horse){
+  const no=String(horse?.horse_no??horse??'').trim();
+  const tag=typeof ekuriGroup==='function'?ekuriGroup(no):no.match(/-(E\d+)$/i)?.[1];
+  return tag?'E:'+String(tag).toUpperCase():'N:'+no;
+}
 function tkpBhOdbRescueRowsForLeg(leg){
   const race=leg?.r||{};
   const source=(leg?.displayOrder?.length?leg.displayOrder:(leg?.ordered?.length?leg.ordered:(leg?.allHorses||race?.horses||[])))
@@ -2247,44 +2466,129 @@ function tkpBhOdbRescueRowsForLeg(leg){
   }).filter(row=>row.h&&!isNonRunner(row.h));
 }
 
+const TKP_BH3_MIN_PICKS=5;
+// R19.47.38 (Tommy talebi, 2026-10-08): BH3/ODB kapısı kendi kendine öğrenir.
+// Taban eşik (9+ at) her zaman açık; bu fonksiyon yalnız 6-8 atlı ayaklarda, O
+// segmentin gerçek SÜRPRİZ oranı (kazanan ham skorda ilk 4 dışı) güçlüyse kapıyı
+// EK olarak açar. 4-5 atlı minik ayaklarda asla açmaz (favoriyi longshot'la
+// düşürmemek için). Doğrulanmış arşivden hesaplanır, yeni sonuç geldikçe
+// (veri imzası değişince) kendini günceller. Yalnız ekler, hiçbir korumayı kaldırmaz.
+let _tkpSurpriseGateCache=null,_tkpSurpriseGateSig='';
+function tkpLearnedSurpriseGate(kind,fieldSize){
+  try{
+    const n=Number(fieldSize)||0;
+    if(n>=9)return true;      // taban eşik
+    if(n<=5)return false;     // minik ayakta asla
+    const D=(typeof db!=='undefined'&&db)?db:(typeof globalThis!=='undefined'&&globalThis.db)||null;
+    const races=(D&&Array.isArray(D.races))?D.races:[];
+    const sig=races.length+'|'+((D&&D.files&&D.files.length)||0);
+    if(!_tkpSurpriseGateCache||_tkpSurpriseGateSig!==sig){
+      const num=v=>{const x=Number(v);return Number.isFinite(x)?x:null;};
+      let tot=0,surp=0;
+      for(const r of races){
+        if(!r||r.result_integrity_status!=='VERIFIED'||!Array.isArray(r.result_winner_nos)||!r.result_winner_nos.length||!Array.isArray(r.horses))continue;
+        const hs=r.horses.filter(h=>Number(h?.start_no)!==0);const nn=hs.length;if(nn<6||nn>8)continue; // 6-8 segmenti
+        const arr=hs.map(h=>({no:String(h.horse_no),v:num(h.score)})).filter(x=>x.v!=null).sort((a,b)=>b.v-a.v);
+        if(arr.length<nn)continue;
+        const rank=new Map();arr.forEach((x,i)=>rank.set(x.no,i+1));
+        let wr=999;for(const w of r.result_winner_nos.map(String)){const p=rank.get(w);if(p&&p<wr)wr=p;}
+        if(wr===999)continue;tot++;if(wr>4)surp++;
+      }
+      // en az 40 örnek; sürpriz oranı >=%18 ise 6-8 ayakları öğrenme ile açılır
+      _tkpSurpriseGateCache={open:tot>=40 && (surp/tot)>=0.18, n:tot, rate:tot?surp/tot:0};
+      _tkpSurpriseGateSig=sig;
+    }
+    return !!_tkpSurpriseGateCache.open;
+  }catch(_){return false;}
+}
 function tkpApplyBmbRescueSwap(coupon){
-  // R18.9 BH/ODB KAPSAMA KİLİDİ:
-  // 6/7/8+ atlı çoklu ayaklarda Bomba Avcısı doğru adayı üretmişse, kontenjan dolu
-  // diye sessizce dışarı atılmaz. At sayısı, kolon ve bütçe değişmeden 1:1 takas yapılır.
-  // 6 at: BH1; 7 at: BH1+BH2; 8+ at: BH1+BH2 + (BH3/ODB1 içinden en güçlü).
-  // TEK ayaklara dokunulmaz. Sonuçlu/eski yarışlarda yalnız frozen BH snapshotı okunur.
-  if(!coupon||coupon.error||!Array.isArray(coupon.legs)) return coupon;
+  // R19.47.31 BH/ODB GENİŞ AYAK KAPSAMA KİLİDİ:
+  // Bomba Avcısı doğru adayı ürettiyse geniş ayakta sırf portföy/çeşitlilik kuyruğu
+  // yüzünden dışarı atılmaz. At sayısı, kolon ve bütçe değişmeden 1:1 takas yapılır.
+  // 4 at: BH1 · 5+ at: BH1+BH2+BH3 (R19.47.32) · 8+ at: BH1+BH2+BH3+ODB1.
+  // Böylece çok at yazılan ayakta 3-4 güçlü bomba adayı gerçekten kupona taşınır.
+  // TEK ve dar 2-3 atlı ayaklara dokunulmaz. Sonuçlu/eski yarışlarda yalnız frozen
+  // yarış-öncesi BH snapshotı okunur; sonuçtan geriye aday üretilmez.
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs)) return coupon;
   let swaps=0;
   for(const leg of coupon.legs){
     const picks=Array.isArray(leg?.picks)?leg.picks:[];
-    if(picks.length<6 || leg?.protectedFlag || picks.length<=1) continue;
+    if(picks.length<4 || leg?.protectedFlag || picks.length<=1) continue;
     const race=leg?.r||{};
     const rows=tkpBhOdbRescueRowsForLeg(leg);
+    // R19.47.41 (Tommy talebi, 2026-10-08): TR (Ganyan Canavarı) orta-bant sürpriz adayı
+    // ortak havuza katılır. Ölçüm: BH'nin KAÇIRDIĞI sürprizlerin %16,5'ini yakalıyor (ek
+    // kapsama). Ayrı zorunlu slot AÇILMAZ — R39 ortak yüzde sırasında yarışır, sayı tavanı
+    // over-stuffing'i önler. Aday: skorda favori olmayan (ilk 2 dışı), tr_puan 40-80
+    // bandında, tr_ganyan_rank'ta en iyi at. TR verisi yoksa hiç eklenmez.
+    try{
+      const liveHorses=(leg?.displayOrder?.length?leg.displayOrder:(leg?.ordered?.length?leg.ordered:(race?.horses||[]))).filter(h=>h&&!isNonRunner(h));
+      if(liveHorses.length){
+        const scoreOrder=liveHorses.slice().sort((a,b)=>(Number(b?.score)||0)-(Number(a?.score)||0));
+        const top2=new Set(scoreOrder.slice(0,2).map(h=>String(h?.horse_no||'')));
+        const already=new Set(rows.map(z=>String(z.h?.horse_no||'')));
+        const trCand=liveHorses.filter(h=>{const tp=Number(h?.tr_puan);const no=String(h?.horse_no||'');
+          return Number.isFinite(tp)&&tp>=40&&tp<=80&&Number.isFinite(Number(h?.tr_ganyan_rank))&&!top2.has(no)&&!already.has(no);})
+          .sort((a,b)=>(Number(a.tr_ganyan_rank)||99)-(Number(b.tr_ganyan_rank)||99))[0];
+        if(trCand)rows.push({h:trCand,kind:'TR',categoryRank:9,rank:9,near:0,score:0.80});
+      }
+    }catch(_){ }
     if(!rows.length)continue;
     const bombs=rows.filter(z=>z.kind!=='ODB').sort((a,b)=>a.categoryRank-b.categoryRank||a.rank-b.rank||(Number(b.near)||0)-(Number(a.near)||0)||(b.score-a.score));
     const odbs=rows.filter(z=>z.kind==='ODB').sort((a,b)=>a.rank-b.rank||(Number(b.near)||0)-(Number(a.near)||0)||(b.score-a.score));
-    const required=[];
-    if(bombs[0])required.push(bombs[0]);
-    if(picks.length>=7&&bombs[1])required.push(bombs[1]);
-    if(picks.length>=8){
-      const extras=[bombs[2],odbs[0]].filter(Boolean).sort((a,b)=>{
-        const an=Number.isFinite(a.near)?a.near:-1,bn=Number.isFinite(b.near)?b.near:-1;
-        return bn-an || b.score-a.score || a.rank-b.rank;
-      });
-      if(extras[0])required.push(extras[0]);
-    }
+    // R19.47.33 (Tommy talebi + 3035 koşuluk canlı ölçüm, 2026-10-08): Sürpriz ayak
+    // (kazanan ham skorda ilk 4 dışı) oranını en güçlü belirleyen şey ayaktaki AT SAYISI:
+    // ≤8 at %15 · 9-11 at %27 · 12+ at %36 sürpriz. BH adayı bu sürprizlerin ~%42'sini
+    // yakalıyor; en çok kurtaran BH1 (200/324), sonra BH2 (78), en az BH3 (46 ≈ sürpriz
+    // ayakların %6'sı, çoğu kalabalık ayakta). Bu yüzden: BH1 ve BH2 güvenli olsun diye
+    // 5+ atlı HER ayakta kalır (kaçan BH yüzünden yaşanan kaybı tekrarlamayız); BH3 ise
+    // gerçekten işe yaradığı KALABALIK ayaklara (alan ≥9 koşan at) yoğunlaştırılır,
+    // küçük ayaklarda boş yere kolon/maliyet şişirmez. At sayısı, kolon ve bütçe yine sabit.
+    const fieldSize=(Array.isArray(race?.horses)?race.horses:[]).filter(h=>{
+      if(typeof isNonRunner==='function'){try{return !isNonRunner(h);}catch(_){ } }
+      return Number(h?.start_no)!==0;
+    }).length || (Array.isArray(race?.horses)?race.horses.length:picks.length);
+    // R19.47.38: BH3/ODB kapısı artık ÖĞRENİLİYOR. Sabit "9+ at" eşiği taban olarak
+    // kalır (koruma zayıflamaz), ama tkpLearnedSurpriseGate o segmentte sinyalin
+    // gerçek yakalama oranını güçlü bulursa eşiğin altında da açar (yalnız ekler).
+    const bh3FieldFloor=9; // taban eşik (öğrenme bunu düşürebilir, yükseltmez)
+    const gate=k=>{
+      if(fieldSize>=bh3FieldFloor)return true;               // taban: her zaman açık
+      try{return typeof tkpLearnedSurpriseGate==='function'&&tkpLearnedSurpriseGate(k,fieldSize)===true;}catch(_){return false;}
+    };
+    // R19.47.39 (Tommy talebi, 2026-10-08): "hangi BH/ODB öncelikli yazılmalı zaten
+    // sürpriz atlar hesabından, yüzdelerine göre çıkıyor." Doğru — bu yüzden artık
+    // sabit "önce BH1/BH2/BH3, sonra ODB" sırası YOK. BH ve ODB TEK HAVUZDA, kazanma-
+    // yakınlık puanına (aynı ölçek: ~0,10-1,35) göre sıralanır; en yüksek yüzdeli
+    // adaylar kupona girer — ister BH ister ODB olsun. Böylece bir ODB bir BH3'ten
+    // güçlüyse önce o girer. KAÇ TANE gireceği ayak/alan/bütçe kurallarıyla belirlenir,
+    // HANGİLERİ ise yüzdelere göre. İlk 2 favori her zaman korunur (cnt tavanı).
+    let cnt=0;
+    if(picks.length>=4)cnt=1;                                   // BH1 eşdeğeri
+    if(picks.length>=5)cnt=2;                                   // 2. güçlü sürpriz
+    if(picks.length>=TKP_BH3_MIN_PICKS&&gate('BH3'))cnt++;      // 3. (öğrenilen kapı)
+    if(picks.length>=TKP_BH3_MIN_PICKS&&gate('ODB'))cnt++;      // 4. (öğrenilen kapı)
+    if(picks.length>=8)cnt++;                                   // çok geniş ayakta 1 slot daha
+    cnt=Math.max(0,Math.min(cnt,Math.max(0,picks.length-2)));   // ilk 2 favoriye dokunma
+    const pool=rows.slice().sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)||(Number(b.near)||0)-(Number(a.near)||0)||(a.categoryRank-b.categoryRank)||(a.rank-b.rank));
+    const required=pool.slice(0,cnt);
     if(!required.length)continue;
+    // Sonraki DP/coverage/policy katmanları bu adayları tekrar çıkarmasın.
+    if(!(leg.protectedBombNos instanceof Set))leg.protectedBombNos=new Set(Array.isArray(leg.protectedBombNos)?leg.protectedBombNos:[]);
+    for(const need of required){const no=String(need?.h?.horse_no??'').trim();if(no)leg.protectedBombNos.add(no);}
 
     const source=(leg?.displayOrder?.length?leg.displayOrder:(leg?.ordered?.length?leg.ordered:(leg?.allHorses||race?.horses||[])))
       .filter(h=>h&&!isNonRunner(h));
     const displayRank=new Map(source.map((h,i)=>[String(h?.horse_no||''),i]));
-    const same=(a,b)=>{try{return typeof sameEkuri==='function'?sameEkuri(a?.horse_no,b?.horse_no):String(a?.horse_no)===String(b?.horse_no);}catch(_){return String(a?.horse_no)===String(b?.horse_no);}};
+    const same=(a,b)=>tkpCouponGuardHorseKey(a)===tkpCouponGuardHorseKey(b);
     const isProtectedPick=h=>{
       if(!h)return true;
       if(Number(h?.bmb)===1)return true;
       try{if(typeof isOdbCandidate==='function'&&isOdbCandidate(h,race))return true;}catch(_){ }
       if(required.some(z=>same(z.h,h)))return true;
       if(source.slice(0,2).some(z=>same(z,h)))return true;
+      // R19.47.45 (Tommy, 2026-10-10): AGF ilk 5 favori 1:1 takasla DÜŞMESİN (mümkünse).
+      { const _ar=Number(h?.agf_rank); if(Number.isFinite(_ar)&&_ar>=1&&_ar<=5)return true; }
       const no=String(h?.horse_no||'');
       for(const setName of ['protectedValueNos','protectedSignalNos','protectedBombNos']){
         const s=leg?.[setName];if(s&&typeof s.has==='function'&&s.has(no))return true;
@@ -2297,7 +2601,14 @@ function tkpApplyBmbRescueSwap(coupon){
       const candidates=picks.map((h,i)=>({h,i,rank:displayRank.get(String(h?.horse_no||''))??999,score:Number(h?.score)||0}))
         .filter(z=>!isProtectedPick(z.h))
         .sort((a,b)=>b.rank-a.rank || a.score-b.score);
-      const removable=candidates[0];
+      let removable=candidates[0];
+      if(!removable){
+        // R19.47.32: korumalı setler yüzünden yer açılamıyorsa BH sessizce atlanmasın.
+        // Zorunlu BH'ler ve görünür ilk 2 hariç, en alt sıradaki at çıkarılır (adet/maliyet sabit).
+        removable=picks.map((h,i)=>({h,i,rank:displayRank.get(String(h?.horse_no||''))??999,score:Number(h?.score)||0}))
+          .filter(z=>!required.some(q=>same(q.h,z.h))&&!source.slice(0,2).some(t=>same(t,z.h)))
+          .sort((x,y)=>y.rank-x.rank || x.score-y.score)[0];
+      }
       if(!removable)continue;
       picks[removable.i]=need.h;
       rescueLog.push({out:String(removable.h?.horse_no||''),in:String(need.h?.horse_no||''),kind:need.kind==='ODB'?'ODB1':`BH${need.categoryRank}`});
@@ -2308,7 +2619,372 @@ function tkpApplyBmbRescueSwap(coupon){
     if(rescueLog.length)leg.bhOdbRescueSwaps=rescueLog;
   }
   coupon.bmbRescueSwaps=swaps;
-  coupon.bhOdbCoverageLock='R18.9-6-7-8';
+  coupon.bhOdbCoverageLock='R19.47.31-BH-WIDE-FINAL-GUARD';
+  return coupon;
+}
+
+// BH koruması yalnız 1:1 takastır. Genişlik politikaları ayrı çalışır; BH'yi
+// tekrar uygulamak TEK/dar ayakları veya kolon maliyetini yeniden değiştirmez.
+function tkpApplyCouponSelectionPolicies(coupon){
+  tkpApplyBmbRescueSwap(coupon);
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  if(typeof tkpApplyXSurpriseForce==='function')tkpApplyXSurpriseForce(coupon);
+  if(typeof tkpApplyTrTekGuard==='function')tkpApplyTrTekGuard(coupon);
+  if(typeof tkpApplyTrMarginalSurpriseSwap==='function')tkpApplyTrMarginalSurpriseSwap(coupon);
+  if(typeof tkpApplyLearnedWidth==='function')tkpApplyLearnedWidth(coupon);
+  if(typeof tkpApplyThinLegMin4==='function')tkpApplyThinLegMin4(coupon);
+  return coupon;
+}
+
+// R19.47.42 (Tommy talebi + 499-toplantı net backtest, 2026-10-09): Kesimin hemen
+// altında kalan (kupona girmemiş en yüksek skorlu) at TR ilk 2'deyse (h.tr_rank<=2)
+// dışarıda bırakılmaz — kupona alınır, karşılığında EN GENİŞ başka ayaktan en zayıf
+// (skorca en düşük, ilk-2/BMB/ODB korumalı olmayan) at silinir. BÜTÇE-NÖTR: bir ayağa
+// +1, en geniş ayaktan -1 olduğundan kolon çarpımı artmaz (çoğu durumda birebir sabit).
+// Doğrulama: 499 yerli toplantı net backtest'inde +2 altılı (3 kazandırdı, 1 bozdu),
+// ve tr_rank gerçek ölçümde kazananı tr_ganyan_rank'tan daha iyi biliyor (%32 vs %26).
+// Yer açılamazsa (korumalar yüzünden) TR atı zorlanmaz, kupon dokunulmadan bırakılır.
+function tkpApplyTrMarginalSurpriseSwap(coupon){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const key=h=>tkpCouponGuardHorseKey(h);
+  const runner=h=>!(typeof isNonRunner==='function'&&isNonRunner(h));
+  const poolOf=l=>{const o=(Array.isArray(l?.displayOrder)&&l.displayOrder.length)?l.displayOrder:((Array.isArray(l?.ordered)&&l.ordered.length)?l.ordered:(l?.allHorses||l?.r?.horses||[]));return o.filter(runner);};
+  const sc=h=>Number(h?.score)||0;
+  // R19.47.44 (Tommy talebi, 2026-10-09): Her ayağın EN YÜKSEK kazanma-yüzdeli sürpriz
+  // adayı (ALT paneliyle BİREBİR aynı kaynak: tkpRankedSurpriseRows → winRate) kupona
+  // girmeli. Kök şikâyet: Woodbine 4.ayak kazanan 2 (ALT1) ve Ankara 6.ayak kazanan 4
+  // (ALT4 %10,8) sürpriz birincisiyken kupona skor sırası yüzünden girmiyordu. Artık
+  // skor değil, panelin kazanma-yüzdesi sırası belirliyor; zaten kuponda olan ata dokunmaz.
+  const gains=[];
+  for(const leg of coupon.legs){
+    const picks=Array.isArray(leg?.picks)?leg.picks:[];
+    if(!picks.length||leg?.protectedFlag)continue;
+    const race=leg?.r||{};
+    const pool=poolOf(leg);
+    if(pool.length<5)continue;               // yarışta 5+ koşan at yoksa sürpriz anlamsız (TEK/dar ayak da değerlendirilir)
+    // Kazanma-yüzdesine göre sıralı sürpriz adayları (panelle aynı: ALT/BMB/ODB)
+    let ranked=[];
+    try{
+      if(typeof tkpRankedSurpriseRows==='function'){
+        ranked=(tkpRankedSurpriseRows(race,pool)||[])
+          .map(x=>({h:(x&&(x.horse||x.h)),wr:Number(x&&x.winRate)||0}))
+          .filter(z=>z.h&&runner(z.h)&&z.wr>0)
+          .sort((a,b)=>b.wr-a.wr);
+      }
+    }catch(_e){}
+    if(!ranked.length)continue;              // kanıtlı sürpriz sinyali yoksa dokunma
+    // Geniş ayak (5+ yazılı): o sıradan 2-3 at, yüzde şartsız. TEK/dar ayak (<5 yazılı):
+    // yalnız sıra 1-2 VE kazanma-yüzdesi %8 üstüyse (Tommy kararı 2026-10-10).
+    // R19.47.46 (Tommy 2026-10-10, kayıtlı koşu kalibrasyonu): koşan at sayısı sürprizin
+    // en güçlü belirleyicisi (arşiv: ≤8 at %15 · 9-11 %27 · 12+ %36 süpriz). 12+ atlı ve
+    // KARIŞIK (net favori yok: en yüksek AGF payı <%30) ayakta süpriz ilk 2 (14+ at: ilk 3)
+    // GARANTİ, eşik düşük. Diğer ayaklarda eski kural (geniş 2-3 / dar-TEK ilk 1-2 %8).
+    const field=pool.length;
+    const favTopAgf=pool.reduce((m,h)=>Math.max(m,Number(h?.agf)||0),0);
+    const chaotic=field>=12 && !(favTopAgf>=30);
+    let take, minWr;
+    if(chaotic){ take=Math.min(field>=14?3:2, ranked.length); minWr=0.05; }
+    else { const wide=picks.length>=5; take=Math.min(wide?(picks.length>=6?3:2):2, ranked.length); minWr=wide?0:0.08; }
+    const pk=new Set(picks.map(key));
+    for(let i=0;i<take;i++){ const z=ranked[i];
+      if(z.wr<=minWr)continue;               // dar ayakta %8 altı sürprizi ekleme
+      if(pk.has(key(z.h)))continue;          // bu sürpriz aday zaten kuponda
+      gains.push({leg,marg:z.h}); pk.add(key(z.h));
+    }
+  }
+  if(!gains.length)return coupon;
+  let swaps=0;
+  const unit=Number(coupon.unit)||1;
+  const cap=Math.max(Number(coupon.maxBudgetTL)||0,Number(coupon.userCapTL)||0,Number(coupon.budgetTL)||0,Number(coupon.cost)||0);
+  const colsOf=()=>coupon.legs.reduce((p,l)=>p*Math.max(1,(l.picks||[]).length),1);
+  // BÜTÇE KİLİDİ: takas sonrası kolon maliyeti bu sınırı aşamaz. Tavan varsa tavan,
+  // yoksa mevcut maliyet (asla artırma). Aşan takas tamamen geri alınır.
+  const budgetLimit=cap>0?cap:unit*colsOf();
+  const findRemovable=d=>{
+    const dpool=poolOf(d);
+    const drank=new Map(dpool.slice().sort((a,b)=>sc(b)-sc(a)).map((h,i)=>[key(h),i]));
+    const prot=new Set([...(d.protectedBombNos||[]),...(d.protectedValueNos||[]),...(d.protectedSignalNos||[])].map(String));
+    return (d.picks||[]).map(h=>({h,r:drank.get(key(h))??999}))
+      .filter(z=>z.r>=2 && !prot.has(String(z.h?.horse_no||'')) && Number(z.h?.bmb)!==1 && !(typeof isOdbCandidate==='function'&&isOdbCandidate(z.h,d.r)) && !(Number(z.h?.agf_rank)>=1&&Number(z.h?.agf_rank)<=5))
+      .sort((a,b)=>b.r-a.r)[0];
+  };
+  for(const {leg,marg} of gains){
+    if((leg.picks||[]).some(p=>key(p)===key(marg)))continue;
+    // TR sürpriz atı kupona EKLENİR (geri alınmaz). Bütçeye sığana kadar DİĞER
+    // ayaklardan GLOBAL en zayıf (skorca en düşük, korumasız) at tek tek silinir.
+    const legBefore=leg.picks.slice();
+    leg.picks=leg.picks.concat(marg);
+    const removed=[]; let guard=0;
+    while(unit*colsOf() > budgetLimit+1e-6 && guard++<40){
+      let best=null;
+      for(const d of coupon.legs){ if(d===leg||!Array.isArray(d.picks)||d.picks.length<=2)continue;
+        const rm=findRemovable(d); if(!rm)continue;
+        if(!best||sc(rm.h)<sc(best.rm.h))best={d,rm};
+      }
+      if(!best)break; // çıkarılacak zayıf at kalmadı
+      best.d.picks=best.d.picks.filter(h=>key(h)!==key(best.rm.h));
+      removed.push({d:best.d,h:best.rm.h});
+    }
+    if(unit*colsOf() > budgetLimit+1e-6){
+      // hiçbir ayak at veremedi → bütçeyi aşmamak için ekleme geri alınır (çok nadir)
+      leg.picks=legBefore; for(const r of removed)r.d.picks.push(r.h); continue;
+    }
+    if(!(leg.protectedBombNos instanceof Set))leg.protectedBombNos=new Set(Array.isArray(leg.protectedBombNos)?leg.protectedBombNos:[]);
+    leg.protectedBombNos.add(String(marg.horse_no||''));
+    (leg.trMarginalSurprise=leg.trMarginalSurprise||[]).push({in:String(marg.horse_no||''),trRank:Number(marg.tr_rank),removed:removed.map(r=>({leg:r.d.leg,out:String(r.h?.horse_no||'')}))});
+    swaps++;
+  }
+  if(swaps){
+    coupon.combos=colsOf(); coupon.cost=unit*coupon.combos;
+    if('leftover'in coupon)coupon.leftover=Math.max(0,(cap||coupon.cost)-coupon.cost);
+    coupon.trMarginalSurpriseSwap={swaps,version:'R19.47.42'};
+  }
+  return coupon;
+}
+
+// R19.47.40 (Tommy talebi, 2026-10-08): TR (Ganyan Canavarı) TEK KORUMASI. Ölçüm:
+// TKP favorisi ile TR favorisi AYNIYSA o at %32,4 kazanıyor; ÇELİŞİYORSA (TKP favorisi
+// TR'nin ilk 2'sinde değil) %28'e düşüyor. Yani çelişkili TEK riskli. Bu yüzden: bir
+// ayak TEK (1 at) ise ve TKP favorisi TR'nin ilk 2'sinde DEĞİLSE, o TEK yalnız
+// bırakılmaz — TR favorisi 2. at olarak eklenir (sigorta). Bütçe-NÖTR: gerekirse en
+// geniş ayaktan en düşük sıralı korumasız at kısılır. Çekirdek TEK motoru değişmez;
+// yalnız riskli TEK'e TR sigortası eklenir. tr_ganyan_rank (gerçek TR) kullanılır,
+// bozuk tr_rank değil. TR verisi yoksa hiç tetiklenmez.
+function tkpApplyTrTekGuard(coupon){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const unit=Number(coupon.unit)||1;
+  const cap=Math.max(Number(coupon.maxBudgetTL)||0,Number(coupon.userCapTL)||0,Number(coupon.budgetTL)||0,Number(coupon.cost)||0);
+  const highCols=cap>0?Math.floor(cap/unit+1e-9):Infinity;
+  const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null;};
+  const key=h=>tkpCouponGuardHorseKey(h);
+  const runner=h=>!(typeof isNonRunner==='function'&&isNonRunner(h));
+  const poolOf=l=>{const o=(Array.isArray(l?.displayOrder)&&l.displayOrder.length)?l.displayOrder:((Array.isArray(l?.ordered)&&l.ordered.length)?l.ordered:(l?.allHorses||l?.r?.horses||[]));return o.filter(runner);};
+  const colsOf=()=>coupon.legs.reduce((p,l)=>p*Math.max(1,(l.picks||[]).length),1);
+  function removable(l){const ri=new Map();poolOf(l).forEach((h,i)=>{const k=key(h);if(!ri.has(k))ri.set(k,i);});
+    const prot=new Set([...(l.protectedBombNos||[]),...(l.protectedValueNos||[]),...(l.protectedSignalNos||[])].map(String));
+    return (l.picks||[]).map(h=>({h,k:key(h),idx:ri.get(key(h))??999,no:String(h?.horse_no||''),bmb:Number(h?.bmb)===1})).filter(z=>z.idx>=2&&!prot.has(z.no)&&!z.bmb).sort((a,b)=>b.idx-a.idx)[0];}
+  let guarded=0;
+  for(const leg of coupon.legs){
+    const picks=Array.isArray(leg.picks)?leg.picks:[];
+    if(picks.length!==1)continue;                 // yalnız TEK ayaklar
+    const pool=poolOf(leg);if(pool.length<4)continue;
+    const tekNo=key(picks[0]);
+    const trRanked=pool.map(h=>({h,v:num(h.tr_ganyan_rank)})).filter(x=>x.v!=null).sort((a,b)=>a.v-b.v);
+    if(trRanked.length<2)continue;                // TR verisi yok
+    const trTop2=new Set(trRanked.slice(0,2).map(x=>key(x.h)));
+    if(trTop2.has(tekNo))continue;                // uyumlu TEK — dokunma
+    // çelişki: TR favorisini sigorta olarak ekle
+    const champ=trRanked.find(x=>key(x.h)!==tekNo)?.h;if(!champ)continue;
+    if(picks.some(p=>key(p)===key(champ)))continue;
+    // bütçe: ekleme 1->2, gerekirse geniş ayaktan kıs
+    let guard=0;
+    const projected=()=>colsOf()*2; // bu ayak 1->2
+    while(projected()>highCols && guard++<24){
+      const donors=coupon.legs.filter(l=>l!==leg&&(l.picks||[]).length>=5&&removable(l)).sort((a,b)=>b.picks.length-a.picks.length);
+      if(!donors.length)break;const d=donors[0];const rm=removable(d);if(!rm)break;d.picks=d.picks.filter(h=>key(h)!==rm.k);
+    }
+    if(projected()>highCols)continue;             // yer açılamadı, TEK'i bozma
+    leg.picks=[picks[0],champ];
+    if(!(leg.protectedBombNos instanceof Set))leg.protectedBombNos=new Set(Array.isArray(leg.protectedBombNos)?leg.protectedBombNos:[]);
+    leg.protectedBombNos.add(String(champ.horse_no||''));
+    (leg.trTekGuard=leg.trTekGuard||[]).push({tek:String(picks[0]?.horse_no||''),trFav:String(champ.horse_no||'')});
+    guarded++;
+  }
+  if(guarded){coupon.combos=colsOf();coupon.cost=unit*coupon.combos;if('leftover'in coupon)coupon.leftover=Math.max(0,(cap||coupon.cost)-coupon.cost);coupon.trTekGuard={guarded,version:'R19.47.40'};}
+  return coupon;
+}
+
+// R19.47.37 (Tommy talebi, 2026-10-08): Ayak genişliği artık SABİT değil, geçmişten
+// ÖĞRENİLİYOR. Sistemde winnerRankDistribution/condition istatistikleri vardı ama ana
+// Altılı'ya bağlı değildi (yalnız yan bahis + ekran). Bu katman, doğrulanmış arşivden
+// cins × at-sayısı segmentine göre kazananın %80 yakalandığı genişliği öğrenir ve her
+// ayağın HEDEF genişliğini ondan alır: ör. ≤8 at→4, 9-11→5, 12+→7 (Arap biraz daha
+// geniş). Sonra bütçe-NÖTR yeniden dağıtımla, hedefin altındaki ayakları büyütür ve
+// hedefin üstündeki ayaklardan kısar. Mutlak taban değil öncelik; bütçe asla aşılmaz.
+// Örneklem<30 segment → at-sayısı varsayılanına düşer. Kendi kendine güncellenir.
+let _tkpLearnedWidthCache=null,_tkpLearnedWidthSig='';
+function tkpLearnedWidthTable(){
+  try{
+    const D=(typeof db!=='undefined'&&db)?db:(typeof globalThis!=='undefined'&&globalThis.db)||null;
+    const races=(D&&Array.isArray(D.races))?D.races:[];
+    const sig=races.length+'|'+((D&&D.files&&D.files.length)||0);
+    if(_tkpLearnedWidthCache&&_tkpLearnedWidthSig===sig)return _tkpLearnedWidthCache;
+    const num=v=>{const n=Number(v);return Number.isFinite(n)?n:null;};
+    const seg={};
+    for(const r of races){
+      if(!r||r.result_integrity_status!=='VERIFIED'||!Array.isArray(r.result_winner_nos)||!r.result_winner_nos.length||!Array.isArray(r.horses))continue;
+      const hs=r.horses.filter(h=>Number(h?.start_no)!==0);const n=hs.length;if(n<4)continue;
+      const arr=hs.map(h=>({no:String(h.horse_no),v:num(h.score)})).filter(x=>x.v!=null).sort((a,b)=>b.v-a.v);
+      if(arr.length<n)continue;
+      const rank=new Map();arr.forEach((x,i)=>rank.set(x.no,i+1));
+      let wr=999;for(const w of r.result_winner_nos.map(String)){const p=rank.get(w);if(p&&p<wr)wr=p;}
+      if(wr===999)continue;
+      const breed=String(r.breed||'?').toLocaleUpperCase('tr-TR').slice(0,6);
+      const fb=n<=8?'F8':n<=11?'F11':'F12';
+      for(const k of [breed+'|'+fb, fb]){(seg[k]=seg[k]||[]).push(wr);}
+    }
+    const w80=ranks=>{const s=ranks.slice().sort((a,b)=>a-b);return s[Math.max(0,Math.ceil(s.length*0.80)-1)]||4;};
+    const table={};for(const k in seg){if(seg[k].length>=30)table[k]={w:w80(seg[k]),n:seg[k].length};}
+    _tkpLearnedWidthCache=table;_tkpLearnedWidthSig=sig;return table;
+  }catch(e){return {};}
+}
+function tkpLearnedLegWidthTarget(race){
+  try{
+    const hs=((race&&race.horses)||[]).filter(h=>Number(h?.start_no)!==0);const n=hs.length;
+    if(n<4)return null;
+    const t=tkpLearnedWidthTable();
+    const breed=String((race&&race.breed)||'?').toLocaleUpperCase('tr-TR').slice(0,6);
+    const fb=n<=8?'F8':n<=11?'F11':'F12';
+    const def=n<=8?4:n<=11?5:7;
+    const got=t[breed+'|'+fb]||t[fb];
+    const w=got?got.w:def;
+    return Math.max(4,Math.min(w,n,8));   // [4..8], alanla sınırlı
+  }catch(e){return null;}
+}
+function tkpApplyLearnedWidth(coupon){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const unit=Number(coupon.unit)||1;
+  const cap=Math.max(Number(coupon.maxBudgetTL)||0,Number(coupon.userCapTL)||0,Number(coupon.budgetTL)||0,Number(coupon.cost)||0);
+  const highCols=cap>0?Math.floor(cap/unit+1e-9):Infinity;
+  const key=h=>tkpCouponGuardHorseKey(h);
+  const runner=h=>!(typeof isNonRunner==='function'&&isNonRunner(h));
+  const poolOf=l=>{const o=(Array.isArray(l?.displayOrder)&&l.displayOrder.length)?l.displayOrder:((Array.isArray(l?.ordered)&&l.ordered.length)?l.ordered:(l?.allHorses||l?.r?.horses||[]));return o.filter(runner);};
+  const colsOf=()=>coupon.legs.reduce((p,l)=>p*Math.max(1,(l.picks||[]).length),1);
+  const riOf=l=>{const m=new Map();poolOf(l).forEach((h,i)=>{const k=key(h);if(!m.has(k))m.set(k,i);});return m;};
+  function nextCand(l){const have=new Set((l.picks||[]).map(key));for(const h of poolOf(l)){if(!have.has(key(h)))return h;}return null;}
+  function removable(l){const r=riOf(l);const prot=new Set([...(l.protectedBombNos||[]),...(l.protectedValueNos||[]),...(l.protectedSignalNos||[])].map(String));
+    return (l.picks||[]).map(h=>({h,k:key(h),idx:r.get(key(h))??999,no:String(h?.horse_no||''),bmb:Number(h?.bmb)===1})).filter(z=>z.idx>=2&&!prot.has(z.no)&&!z.bmb).sort((a,b)=>b.idx-a.idx)[0];}
+  const info=coupon.legs.map(l=>{const tek=!!l.protectedFlag||(l.picks||[]).length<=1;return {l,tek,field:poolOf(l).length,target:tek?(l.picks||[]).length:(tkpLearnedLegWidthTarget(l.r)||(l.picks||[]).length)};});
+  let moves=0,guard=0;
+  while(guard++<48){
+    const deficits=info.filter(x=>!x.tek && x.l.picks.length<x.target && x.l.picks.length<x.field && nextCand(x.l)).sort((a,b)=>(b.target-b.l.picks.length)-(a.target-a.l.picks.length));
+    if(!deficits.length)break;
+    const d=deficits[0];
+    const projected=()=>colsOf()/d.l.picks.length*(d.l.picks.length+1);
+    const donorsBefore=new Map();
+    while(projected()>highCols){
+      const surplus=info.filter(x=>x!==d && !x.tek && x.l.picks.length>x.target && x.l.picks.length>=5 && removable(x.l)).sort((a,b)=>(b.l.picks.length-b.target)-(a.l.picks.length-a.target));
+      if(!surplus.length)break;
+      const s=surplus[0];const rm=removable(s.l);if(!rm)break;
+      if(!donorsBefore.has(s.l))donorsBefore.set(s.l,s.l.picks);
+      s.l.picks=s.l.picks.filter(h=>key(h)!==rm.k);
+    }
+    const add=nextCand(d.l);
+    if(projected()>highCols||!add){for(const [l,picks] of donorsBefore)l.picks=picks;break;}
+    d.l.picks.push(add);const r=riOf(d.l);d.l.picks.sort((a,b)=>(r.get(key(a))??999)-(r.get(key(b))??999));moves++;
+  }
+  if(moves){coupon.combos=colsOf();coupon.cost=unit*coupon.combos;if('leftover'in coupon)coupon.leftover=Math.max(0,(cap||coupon.cost)-coupon.cost);
+    coupon.learnedWidth={moves,version:'R19.47.37',targets:info.map(x=>x.target)};}
+  return coupon;
+}
+
+// R19.47.35 (Tommy talebi, 2026-10-08): X/kulis sinyali artık yalnız takipte değil,
+// KUPONA koru-ekle sinyali olarak devrede. Gerekçe: X verisi olan 95 koşuda ayağın
+// en yüksek X'li atı %18,9 kazanmış (rastgele ~%10, ~2 kat). Çekirdek TKP puanına
+// KARIŞTIRILMAZ (95 koşu azdır; walk-forward ham puanın zaten en iyi olduğunu gösterdi).
+// Bunun yerine: 4+ atlı ayakta, ayağın en yüksek POZİTİF X'li atı (en az 1 kulis
+// yorumuyla desteklenen) kupona zorunlu eklenir — BH gibi 1:1 takasla, at sayısı ve
+// bütçe SABİT. Böylece bugünkü "4 LOSTRA tüm kuponlarda yoktu" tipi kayıp kesilir.
+// X yoksa kural hiç tetiklenmez (hiçbir ata dokunmaz).
+function tkpApplyXSurpriseForce(coupon){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const key=h=>tkpCouponGuardHorseKey(h);
+  const runner=h=>!(typeof isNonRunner==='function'&&isNonRunner(h));
+  const poolOf=l=>{const o=(Array.isArray(l?.displayOrder)&&l.displayOrder.length)?l.displayOrder:((Array.isArray(l?.ordered)&&l.ordered.length)?l.ordered:(l?.allHorses||l?.r?.horses||[]));return o.filter(runner);};
+  const xStrength=h=>{
+    const dir=String(h?.x_kulis_direction||'').toLowerCase();
+    const sc=Number(h?.x_kulis_score)||0;
+    const dYp=Number(h?.x_ypuan_delta)||0, dTkp=Number(h?.x_tkp_score_delta)||0;
+    const comments=Array.isArray(h?.x_kulis_comments)?h.x_kulis_comments.length:0;
+    const positive = dir==='positive' || dYp>0 || dTkp>0 || (sc>0 && dir!=='negative');
+    if(!positive || comments<1) return 0;
+    const s = sc>0 ? sc : (dYp>0?dYp:dTkp);   // puan varsa onu, yoksa delta
+    return s>0 ? s : 0;
+  };
+  let forced=0;
+  for(const leg of coupon.legs){
+    const picks=Array.isArray(leg.picks)?leg.picks:[];
+    if(leg.protectedFlag||picks.length<4)continue;   // TEK/dar ayaklara dokunma (BH ile aynı eşik)
+    const pool=poolOf(leg);
+    // ayağın en yüksek pozitif X'li atı
+    let champ=null,champV=0;
+    for(const h of pool){const v=xStrength(h);if(v>champV){champV=v;champ=h;}}
+    if(!champ||champV<=0)continue;
+    if(picks.some(p=>key(p)===key(champ)))continue;   // zaten kuponda
+    const ri=new Map();pool.forEach((h,i)=>{const k=key(h);if(!ri.has(k))ri.set(k,i);});
+    const prot=new Set([...(leg.protectedBombNos||[]),...(leg.protectedValueNos||[]),...(leg.protectedSignalNos||[])].map(String));
+    const top2=new Set(pool.slice(0,2).map(key));
+    // çıkarılacak: korumasız, BH olmayan, görünür ilk 2 olmayan, en düşük sıralı at
+    const victim=picks.map((h,i)=>({h,i,k:key(h),idx:ri.get(key(h))??999,no:String(h?.horse_no||''),bmb:Number(h?.bmb)===1}))
+      .filter(z=>!prot.has(z.no)&&!z.bmb&&!top2.has(z.k))
+      .sort((a,b)=>b.idx-a.idx || (Number(a.h?.score)||0)-(Number(b.h?.score)||0))[0];
+    if(!victim)continue;
+    picks[victim.i]=champ;
+    if(!(leg.protectedBombNos instanceof Set))leg.protectedBombNos=new Set(Array.isArray(leg.protectedBombNos)?leg.protectedBombNos:[]);
+    leg.protectedBombNos.add(String(champ.horse_no||''));
+    picks.sort((a,b)=>(ri.get(key(a))??999)-(ri.get(key(b))??999));
+    leg.picks=picks;
+    (leg.xForceSwaps=leg.xForceSwaps||[]).push({out:String(victim.h?.horse_no||''),in:String(champ.horse_no||''),x:champV});
+    forced++;
+  }
+  if(forced)coupon.xSurpriseForce={forced,version:'R19.47.35'};
+  return coupon;
+}
+
+// R19.47.34 (Tommy talebi + 3035 koşuluk canlı ölçüm, 2026-10-08): "3 at veren
+// ayakları 4 yapalım, diğer ayaklardan kısalım." Ayak başına kazananı yakalama
+// ilk 3'te %65,3, ilk 4'te %74,8 (+%9,5); geniş ayağın en alt sırası nadir kazanır.
+// Bu yüzden MALİYET-NÖTR yeniden dağıtım: tam 3 atlı (TEK olmayan) her ayağa 1 at
+// eklenir; bütçe aşılacaksa en GENİŞ ayaktan (≥5 at) en düşük sıralı KORUMASIZ at
+// (BH/ODB/değer/sinyal/görünür ilk 2 hariç) kısılarak finanse edilir. Hiçbir ayak
+// 4'ün altına inmez, TEK ayaklara dokunulmaz, bütçe tavanı asla aşılmaz. Eklenecek
+// 4. at da korumasız kuyruktan değil, ayağın sıralamasındaki bir sonraki en iyi at.
+const TKP_THIN_LEG_MIN=4;
+function tkpApplyThinLegMin4(coupon){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const unit=Number(coupon.unit)||1;
+  const cap=Math.max(Number(coupon.maxBudgetTL)||0,Number(coupon.userCapTL)||0,Number(coupon.budgetTL)||0,Number(coupon.cost)||0);
+  const highCols=cap>0?Math.floor(cap/unit+1e-9):Infinity;
+  const runner=h=>!(typeof isNonRunner==='function'&&isNonRunner(h));
+  const key=h=>tkpCouponGuardHorseKey(h);
+  const poolOf=l=>{const o=(Array.isArray(l?.displayOrder)&&l.displayOrder.length)?l.displayOrder:((Array.isArray(l?.ordered)&&l.ordered.length)?l.ordered:(l?.allHorses||l?.r?.horses||[]));return o.filter(runner);};
+  const rankIndexOf=l=>{const m=new Map();poolOf(l).forEach((h,i)=>{const k=key(h);if(!m.has(k))m.set(k,i);});return m;};
+  const colsOf=()=>coupon.legs.reduce((p,l)=>p*Math.max(1,(l.picks||[]).length),1);
+  function nextCandidate(l){const have=new Set((l.picks||[]).map(key));for(const h of poolOf(l)){if(!have.has(key(h)))return h;}return null;}
+  function removableFrom(l){
+    const ri=rankIndexOf(l);
+    const prot=new Set([...(l.protectedBombNos||[]),...(l.protectedValueNos||[]),...(l.protectedSignalNos||[])].map(String));
+    const cand=(l.picks||[]).map(h=>({h,k:key(h),idx:ri.get(key(h))??999,no:String(h?.horse_no||''),bmb:Number(h?.bmb)===1}))
+      .filter(z=>z.idx>=2 && !prot.has(z.no) && !z.bmb)
+      .sort((a,b)=>b.idx-a.idx || (Number(a.h?.score)||0)-(Number(b.h?.score)||0));
+    return cand[0]||null;
+  }
+  let added=0,trimmed=0;
+  for(const leg of coupon.legs){
+    const picks=Array.isArray(leg.picks)?leg.picks:[];
+    if(leg.protectedFlag||picks.length!==3)continue;      // yalnız tam 3 atlı, TEK olmayan ayaklar
+    if(poolOf(leg).length<TKP_THIN_LEG_MIN)continue;        // alanda 4. at yoksa geç
+    const add=nextCandidate(leg);if(!add)continue;
+    // Eklemeden sonraki kolon: bu ayak 3->4
+    const projected=()=>colsOf()/picks.length*(picks.length+1);
+    const donorsBefore=new Map();
+    const trimmedBefore=trimmed;
+    let guard=0;
+    while(projected()>highCols && guard++<24){
+      const donors=coupon.legs.filter(l=>l!==leg && !l.protectedFlag && (l.picks||[]).length>=5 && removableFrom(l));
+      if(!donors.length)break;
+      donors.sort((a,b)=>b.picks.length-a.picks.length);
+      const d=donors[0];const rm=removableFrom(d);if(!rm)break;
+      if(!donorsBefore.has(d))donorsBefore.set(d,d.picks);
+      d.picks=d.picks.filter(h=>key(h)!==rm.k);trimmed++;
+    }
+    if(projected()<=highCols){leg.picks=picks.concat([add]);
+      const ri=rankIndexOf(leg);leg.picks.sort((a,b)=>(ri.get(key(a))??999)-(ri.get(key(b))??999));added++;}
+    else {for(const [l,originalPicks] of donorsBefore)l.picks=originalPicks;trimmed=trimmedBefore;}
+  }
+  if(added||trimmed){coupon.combos=colsOf();coupon.cost=unit*coupon.combos;
+    if('leftover'in coupon)coupon.leftover=Math.max(0,(cap||coupon.cost)-coupon.cost);
+    coupon.thinLegMin4={added,trimmed,version:'R19.47.34'};}
   return coupon;
 }
 
@@ -2465,7 +3141,14 @@ function tkpV552BalancedNormalCoupon(raceResults,userCapTL,singleCount=1,prepare
     // verdiği kadar uzun ana thread bloğu üretebiliyordu. Sabit bir düğüm
     // ziyaret tavanı arama kalitesini pratikte değiştirmez (en iyi sonuçlar
     // erken dallarda bulunur) ama sonlanmayı garanti eder.
-    const NODE_VISIT_CAP=40000;
+    // FIX (Tommy talebi — "ÜÇ KUPON OLUŞTURMA" 4.6-5.0s donması): canlı tanı
+    // logu bu donmayı doğrudan bu arama fonksiyonuna işaret ediyordu. 40000
+    // düğüm tavanı başarısız/geniş aramalarda tek denemeyi onlarca ms'den
+    // yüz+ ms'ye taşıyabiliyor, aşağıdaki tırmanma döngüsü de bunu 60 kez
+    // tekrarlayabiliyordu (bkz. ESCALATION_*). Sonuç kalitesini değiştirmez
+    // (en iyi kombinasyonlar zaten ilk dallarda bulunur) ama tek bir senkron
+    // bloğun süresini kısaltır.
+    const NODE_VISIT_CAP=12000;
     let visited=0,capped=false;
     function walk(k,prod,counts,masses){
       if(capped)return;
@@ -2497,8 +3180,16 @@ function tkpV552BalancedNormalCoupon(raceResults,userCapTL,singleCount=1,prepare
   // birkaç denemede sonuç bulunur); yalnız aşırı geniş/zayıf budanan uç
   // senaryolarda devreye girer.
   const escalationStarted=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
-  const ESCALATION_WALL_CLOCK_BUDGET_MS=4000;
-  const ESCALATION_MAX_ATTEMPTS=60;
+  // FIX (Tommy talebi — kupon oluşturma donması): kalıcı tkp_freeze_diagnostics_v1
+  // kaydı "ÜÇ KUPON OLUŞTURMA" aşamasında 4.6-5.0s'lik tekrarlı ana-thread
+  // bloklarını gösterdi; bu blok her biri tam olarak eski 4000ms tavanına
+  // ulaşıyordu. Bu fonksiyon (ve solve() içindeki NODE_VISIT_CAP) tamamen
+  // senkrondur ve hiçbir yield noktası yoktur; tavan düşürülünce arama/sıralama
+  // mantığı aynen korunur, yalnız tek bir kullanıcı etkileşiminin bloklanma
+  // süresi kısalır. Sınıra normal koşuşlarda ulaşılmaz (birkaç denemede sonuç
+  // bulunur); bu değerler yalnız aşırı geniş/zayıf uç senaryolar için üst sınır.
+  const ESCALATION_WALL_CLOCK_BUDGET_MS=900;
+  const ESCALATION_MAX_ATTEMPTS=24;
   let escalationAttempts=1,escalationTimedOut=false;
   let best=solve(target);
   while(!best && target<userCap){
@@ -2507,13 +3198,13 @@ function tkpV552BalancedNormalCoupon(raceResults,userCapTL,singleCount=1,prepare
     target=Math.min(userCap,target+25);best=solve(target);escalationAttempts++;
   }
   if(!best) return {error:escalationTimedOut?`Risk tabanı araması zaman bütçesini aştı (${userCap} TL tavanına ulaşılamadan durduruldu); tekrar dene.`:`Risk tabanları ${userCap} TL kullanıcı tavanına sığmıyor.`};
-  // R16.60 TABAN GARANTİSİ (kullanıcı isteği: "kupon tutarları 1000-1400 arası
+  // R16.60 TABAN GARANTİSİ (kullanıcı isteği: "kupon tutarları 1000-2000 arası
   // olsun, her kupon kendi mantığına göre ayarlasın"). "Disiplinli" toplantılarda
   // (tek güçlü favori -> tkpV55BudgetTarget hedefi sabit 1.000 TL) ayak
   // genişliklerinin ayrık çarpımı yüzünden gerçek maliyet tavanın biraz altına
   // (örn. 960 TL) düşüp politika tabanının (1.000 TL) altında kalabiliyordu. Bu
   // adım arama/sıralama mantığına dokunmaz; yalnız gerçekleşen maliyet taban
-  // altındaysa ve politika tavanına (1.400 TL) sığan en ucuz tek-ayak
+  // altındaysa ve politika tavanına (2.000 TL) sığan en ucuz tek-ayak
   // genişletmesi varsa uygulanır.
   {
     const feePolicy=(typeof TKP_COUPON_FEE_POLICY==='object'&&TKP_COUPON_FEE_POLICY)?TKP_COUPON_FEE_POLICY:null;
@@ -2550,7 +3241,7 @@ function tkpV552BalancedNormalCoupon(raceResults,userCapTL,singleCount=1,prepare
     return {x,r:x.r,picks:display.slice(0,count),displayOrder:display,ordered:display,allHorses:(x?.r?.horses||[]),coverageMode:'main',protectedFlag:false,minCoverage:z.minCount,maxCoverage:z.maxCount,v552CoverageMass:z.cum[count-1],confidencePlan:{reliable:false,reason:'V53 dengeli kapsama + V55 risk tabanı'}};
   });
   const cost=best.prod*unit;
-  return {typeKey,label:targetCoverage?'🎯 Normal · Kapsama':(singleCount>=2?'🛡️ Normal · 2 TEK':'💪 Normal · 1 TEK'),legs,unit,cost,combos:best.prod,legCount:6,budgetTL:target,maxBudgetTL:userCap,userCapTL:userCap,inputCapTL:userCap,leftover:round2ish(target-cost),reliableSingles:singleByLeg.size,dynamicBudget:true,algorithmVersion:globalThis.TKP_V55_ALGORITHM_VERSION||'V55.2',v552BalancedCoverage:true,targetCoverage,note:targetCoverage?'Normal kapsama profili: TEK zorlaması yok; ayak belirsizliğine göre genişlik dağıtılır. 700–1.400 TL tavanı aylık kasa politikasına bağlıdır.':'Toplantıya özel olasılık kütlesi + ortak bütçe DP; sabit geçmiş şablonu kullanılmaz.'};
+  return {typeKey,label:targetCoverage?'🎯 Normal · Kapsama':(singleCount>=2?'🛡️ Normal · 2 TEK':'💪 Normal · 1 TEK'),legs,unit,cost,combos:best.prod,legCount:6,budgetTL:target,maxBudgetTL:userCap,userCapTL:userCap,inputCapTL:userCap,leftover:round2ish(target-cost),reliableSingles:singleByLeg.size,dynamicBudget:true,algorithmVersion:globalThis.TKP_V55_ALGORITHM_VERSION||'V55.2',v552BalancedCoverage:true,targetCoverage,note:targetCoverage?'Normal kapsama profili: TEK zorlaması yok; ayak belirsizliğine göre genişlik dağıtılır. 700–2.000 TL tavanı aylık kasa politikasına bağlıdır.':'Toplantıya özel olasılık kütlesi + ortak bütçe DP; sabit geçmiş şablonu kullanılmaz.'};
 }
 
 function buildNormalCouponVariant(raceResults,userCapTL,singleCount=1,preparedRanked=null,options={}){
@@ -2707,7 +3398,7 @@ function buildBombaCoupon(raceResults,budgetTL,preparedRanked=null){
   }
   const capped=enforceCouponCostCap(built.legs,pick.unit,dynamicTarget);
   built={...built,...capped,cost:capped.cost,combos:capped.combos,budgetLimited:capped.capLimited};
-  tkpApplyBmbRescueSwap(built);
+  tkpApplyCouponSelectionPolicies(built);
   const actualSingles=(built.legs||[]).filter(l=>(l.picks||[]).length===1).length;
   return {
     typeKey:'surprise',label:'🧠 Uzman + Kulis — Hibrit Altılı',scenarioRole:'expert-consensus',legs:built.legs,unit:pick.unit,cost:built.cost,legCount:pick.L,
@@ -2757,7 +3448,9 @@ function tkpLiveCouponFingerprint(raceResults){
   mix(TKP_AGF_SINGLE_PORTFOLIO_POLICY.version);
   mix(globalThis.TKP_V320_PORTFOLIO?.SHARED_GOLD_TEK_POLICY?.version||'NO_SHARED_GOLD_TEK_POLICY');
   mix(db?.learning_state?.dataset_signature||'');
-  mix((db?.files||[]).length);mix((db?.races||[]).length);mix((db?.prediction_log||[]).length);mix((db?.changelog||[]).length);
+  // Saving or viewing a coupon adds records, not prediction evidence. Those
+  // output counts must not invalidate the selections they just recorded.
+  mix((db?.files||[]).length);mix((db?.races||[]).length);
   mix(tkpCouponDecisionSettingsFingerprint());
   mix(_tkpGapThreshold);
   for(const item of rows){
@@ -2774,8 +3467,8 @@ function tkpLiveCouponFingerprint(raceResults){
       // Cache anahtarına katılırsa ilk kupon kendi anahtarını değiştirir ve ikinci
       // tıklama gerçek cache-hit olamaz. Girdi alanları ile model/dataset imzası
       // zaten anahtardadır; üretilmiş P1 puanı bilinçli olarak dışarıda bırakılır.
-      mix(h.score);mix(h.prediction_order_snapshot);mix(h.predicted_rank);
-      mix(h.agf);mix(h.agf_rank);mix(h.ypuan);mix(h.bmb);mix(h.odb);mix(h.result_rank);mix(h.result_score);mix(h.sonuc_puani);mix(h.sonuc_sirasi);mix(h.ods_result_score);mix(h.ods_result_rank);mix(h.ods_sonuc_puani);mix(h.ods_sonuc_sirasi);mix(h.tr_ganyan);mix(h.tr_puan);mix(h.tr_ganyan_source);mix(h.tr_source);mix(h.tr_rank);mix(h.team_strength_pct);mix(h.prof);
+      mix(h.score);mix(h.prediction_order_snapshot);mix(h.predicted_rank);mix(h.tkp_common_evidence);
+      mix(h.agf);mix(h.agf_rank);mix(h.ypuan);mix(h.atr_ypuan);mix(h.atr_comment);mix(h.atr_comment_score);mix(h.atr_form);mix(h.atr_or);mix(h.atr_ganyan);mix(h.atr_foreign_score);mix(h.atr_foreign_confidence);mix(h.bmb);mix(h.odb);mix(h.result_rank);mix(h.result_score);mix(h.sonuc_puani);mix(h.sonuc_sirasi);mix(h.ods_result_score);mix(h.ods_result_rank);mix(h.ods_sonuc_puani);mix(h.ods_sonuc_sirasi);mix(h.tr_ganyan);mix(h.tr_puan);mix(h.tr_ganyan_source);mix(h.tr_source);mix(h.tr_rank);mix(h.team_strength_pct);mix(h.prof);
       mix(h.priorAccurateAvgSpeed);mix(h.priorAccurateFinishSignal);mix(h.priorAccurateStarts);mix(h.jbyg);mix(h.jbyg_rate);
       mix(h.g800);mix(h.hndkp);mix(h.hndkp_rank);mix(h.weight_kg);mix(h.best_time);mix(h.start_no);
       mix(h.priorWins);mix(h.priorStarts);mix(h.condWinWins);mix(h.condWinStarts);
@@ -2787,7 +3480,7 @@ function tkpLiveCouponFingerprint(raceResults){
 function tkpLiveCouponCacheKey(raceResults,budgets={}){
   const main=tkpCouponBudgetFor(budgets.main,'main');
   const surprise=tkpCouponBudgetFor(budgets.surprise,'surprise');
-  return [tkpLiveCouponFingerprint(raceResults),main,surprise,TKP_AGF_SINGLE_PORTFOLIO_POLICY.version,globalThis.TKP_V320_PORTFOLIO?.SHARED_GOLD_TEK_POLICY?.version||'NO_SHARED_GOLD_TEK_POLICY','THREE_COUPONS'].join('|');
+  return [tkpLiveCouponFingerprint(raceResults),main,surprise,TKP_AGF_SINGLE_PORTFOLIO_POLICY.version,globalThis.TKP_V320_PORTFOLIO?.SHARED_GOLD_TEK_POLICY?.version||'NO_SHARED_GOLD_TEK_POLICY','THREE_COUPONS','ALT_BMB_ODB_CONDITION_COVERAGE_V5_NORMAL_TOP_N'].join('|');
 }
 
 function tkpCloneCouponResult(result){
@@ -3141,7 +3834,7 @@ function tkpSynchronizeWideCouponConsensus(built){
   if(!built)return built;
   const entries=['main','alt','surprise']
     .map(key=>({key,coupon:built[key]}))
-    .filter(z=>z.coupon&&!z.coupon.error&&!z.coupon.disabled&&Array.isArray(z.coupon.legs));
+    .filter(z=>z.coupon&&!z.coupon.error&&!z.coupon.disabled&&!z.coupon.readOnlySnapshot&&Array.isArray(z.coupon.legs));
   if(entries.length<3)return built;
   const legMaps=new Map(entries.map(z=>[z.key,new Map(z.coupon.legs.map((leg,i)=>[tkpLegNoFromCouponLeg(leg,i),leg]))]));
   const allLegNos=[...new Set(entries.flatMap(z=>z.coupon.legs.map((leg,i)=>tkpLegNoFromCouponLeg(leg,i))))];
@@ -3151,10 +3844,11 @@ function tkpSynchronizeWideCouponConsensus(built){
     const counts=new Map();
     for(const z of legs){
       const seen=new Set();
-      const sourceOrder=(z.leg.displayOrder?.length?z.leg.displayOrder:(z.leg.ordered?.length?z.leg.ordered:z.leg.allHorses||[])).filter(Boolean);
-      const sourceRank=new Map(sourceOrder.map((h,i)=>[String(h?.horse_no??h),i+1]));
+      const sourceOrder=(z.leg.displayOrder?.length?z.leg.displayOrder:(z.leg.ordered?.length?z.leg.ordered:z.leg.allHorses||[])).filter(h=>h&&!isNonRunner(h));
+      const sourceRank=new Map();sourceOrder.forEach((h,i)=>{const k=tkpCouponGuardHorseKey(h);if(!sourceRank.has(k))sourceRank.set(k,i+1);});
       for(const h of (z.leg.picks||[])){
-        const no=String(h?.horse_no??h);if(!no||seen.has(no))continue;seen.add(no);
+        if(!h||isNonRunner(h))continue;
+        const no=tkpCouponGuardHorseKey(h);if(seen.has(no))continue;seen.add(no);
         const row=counts.get(no)||{n:0,bestRank:999};row.n++;row.bestRank=Math.min(row.bestRank,sourceRank.get(no)||999);counts.set(no,row);
       }
     }
@@ -3162,16 +3856,15 @@ function tkpSynchronizeWideCouponConsensus(built){
     if(!consensus.length)continue;
     for(const z of legs){
       const leg=z.leg,picks=[...(leg.picks||[])];
-      // Konsensüs yalnız alternatif kuponları uzlaştırır. Normal kupon başka iki
-      // stratejinin ortak adayından etkilenmez ve kendi motor çıktısını korur.
-      if(z.key==='main')continue;
-      // TEK ve dar 2-at alternatifleri stratejik fark olarak korunur. Senkronizasyon yalnız
-      // gerçekten çok at yazılmış ayakta devreye girer.
-      if(picks.length<3||leg.protectedFlag)continue;
-      const selected=new Set(picks.map(h=>String(h?.horse_no??h)));
-      const order=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered?.length?leg.ordered:leg.allHorses||[])).filter(Boolean);
-      const rank=new Map(order.map((h,i)=>[String(h?.horse_no??''),i]));
-      const byNo=new Map(order.map(h=>[String(h?.horse_no??''),h]));
+      // R19.47.31: iki kuponun ortak güçlü adayı üçüncü kuponda sırf çeşitlendirme
+      // uğruna kaybolmasın. Normal kupon yalnız gerçekten genişse (>=4 at) bu kurala
+      // katılır; TEK ve dar 2-3 atlı Normal ayaklar aynen korunur. Alternatif kuponlarda
+      // eski >=3 at sınırı sürer. At sayısı/maliyet değişmeden yalnız 1:1 kuyruk takası yapılır.
+      if((z.key==='main'&&picks.length<4)||(z.key!=='main'&&picks.length<3)||leg.protectedFlag)continue;
+      const selected=new Set(picks.map(tkpCouponGuardHorseKey));
+      const order=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered?.length?leg.ordered:leg.allHorses||[])).filter(h=>h&&!isNonRunner(h));
+      const rank=new Map(),byNo=new Map();
+      order.forEach((h,i)=>{const k=tkpCouponGuardHorseKey(h);if(!rank.has(k)){rank.set(k,i);byNo.set(k,h);}});
       // Konsensüs adayın kendi kupon sıralamasında ilk 5 içinde olması veya güçlü bir
       // yarış-öncesi sinyal taşıması gerekir. Böylece sırf iki alternatif kuponun kuyruk
       // tercihi Normal'i körlemesine değiştirmez.
@@ -3180,9 +3873,10 @@ function tkpSynchronizeWideCouponConsensus(built){
         const idx=rank.get(c.no)??999;
         // Kullanıcı kilidi: iki kuponun ortak 1-4 adayı, üçüncü kupon zaten
         // 5-6 at yazıyorsa sırf strateji farkı nedeniyle kaybolamaz.
-        let strong=idx<5||c.bestRank<=4||(c.n>=2&&picks.length>=5)||Number(h?.bmb)===1||tkpLegacyXKulisForce(h);
+        const supportCount=typeof tkpIndependentSupportSignals==='function'?tkpIndependentSupportSignals({...leg,displayOrder:order},h).length:0;
+        let strong=idx<5||c.bestRank<=4||(c.n>=2&&picks.length>=5)||supportCount>=2||Number(h?.bmb)===1||tkpLegacyXKulisForce(h);
         try{if(typeof isOdbCandidate==='function'&&isOdbCandidate(h,leg.r))strong=true;}catch(_){ }
-        return strong?{...c,h,idx}:null;
+        return strong?{...c,h,idx,supportCount}:null;
       }).filter(Boolean).sort((a,b)=>(a.idx-b.idx)||(b.n-a.n));
       if(!missing.length)continue;
       const cand=missing[0];
@@ -3191,10 +3885,10 @@ function tkpSynchronizeWideCouponConsensus(built){
         ...(leg.protectedSignalNos instanceof Set?[...leg.protectedSignalNos]:[]),
         ...(leg.protectedValueNos instanceof Set?[...leg.protectedValueNos]:[]),
         ...(leg.protectedBombNos instanceof Set?[...leg.protectedBombNos]:[])
-      ].map(String));
+      ].map(tkpCouponGuardHorseKey));
       let replace=-1;
       for(let j=picks.length-1;j>=0;j--){
-        const no=String(picks[j]?.horse_no??'');
+        const no=tkpCouponGuardHorseKey(picks[j]);
         if(!no||protectedNos.has(no)||consensusNos.has(no)||tkpLegacyXKulisForce(picks[j]))continue;
         const ri=rank.get(no)??999;
         // Normalde daha güçlü/eşit ana aday yerine zayıf konsensüs sokulmaz.
@@ -3206,9 +3900,11 @@ function tkpSynchronizeWideCouponConsensus(built){
       if(replace<0)continue;
       const outNo=String(picks[replace]?.horse_no??'');
       picks[replace]=cand.h;
-      picks.sort((a,b)=>(rank.get(String(a?.horse_no??''))??999)-(rank.get(String(b?.horse_no??''))??999));
+      picks.sort((a,b)=>(rank.get(tkpCouponGuardHorseKey(a))??999)-(rank.get(tkpCouponGuardHorseKey(b))??999));
       leg.picks=picks;
-      leg.couponConsensusSync={in:cand.no,out:outNo,sources:cand.n,reason:'2+ kupon ortak güçlü aday'};
+      if(!(leg.protectedSignalNos instanceof Set))leg.protectedSignalNos=new Set(Array.isArray(leg.protectedSignalNos)?leg.protectedSignalNos:[]);
+      leg.protectedSignalNos.add(String(cand.h.horse_no));
+      leg.couponConsensusSync={version:'R19.47.31-AUDIT1',in:String(cand.h.horse_no),out:outNo,sources:cand.n,supportCount:cand.supportCount||0,reason:'2+ kupon ortak güçlü aday · geniş üçüncü kupon koruması'};
       // Ayak başına / kupon başına tek takas yeterli; stratejik farkı koru.
     }
   }
@@ -3311,7 +4007,7 @@ function tkpMarkConditionRecommendedCoupon(built){
   return built;
 }
 
-function tkpRaiseCouponCostToMinimum(coupon,minCost=700,maxCost=1400){
+function tkpRaiseCouponCostToMinimum(coupon,minCost=700,maxCost=3000){
   if(!coupon||coupon.error||!Array.isArray(coupon.legs)||!(Number(coupon.unit)>0))return coupon;
   const unit=Number(coupon.unit);
   const difficulties=new Map(coupon.legs.map(leg=>{
@@ -3422,6 +4118,215 @@ function tkpApplyKulisPriorityToCoupon(coupon,role){
   coupon.kulisPriority={version:'R16.70',role,changes,preRaceOnly:true,probabilitiesUnchanged:true};
   return coupon;
 }
+// AGF SIRASI POLİTİKASI (Tommy 18.10.2026). Arşivde (477 toplantı) şampiyonla AYNI ayak genişliği ve maliyetle,
+// çok atlı ayaklarda atları AGF sırasına göre seçmek 6/6'yı artırdı (Normal 41→50, Sürpriz 42→48, Alt 42→44; üç kupon
+// birleşimi 75→86) ve ödeme/maliyet oranını düşürmedi. TEK ayaklar şampiyonun bağımsız TEK denetiminde kalır
+// (arşivde tek ayak isabeti zaten eşit: 198 vs 200). Maliyet değişmez: her ayakta seçim sayısı aynı kalır.
+// Kapatmak için: tkpSetAgfOrderPolicy(false) veya db.settings.agf_order_policy.enabled=false.
+function tkpAgfOrderPolicy(){
+  let st=null;try{st=(typeof db!=='undefined'&&db&&db.settings&&db.settings.agf_order_policy)||null;}catch(_){ }
+  const roles=Array.isArray(st?.roles)&&st.roles.length?st.roles:['main','surprise','alt'];
+  return {enabled:st?st.enabled!==false:true,roles,tek:st?.tek===true,side:st?.side===true};
+}
+// Kapsam anahtarları (otomatik self-test yönetir): tek=altılı TEK ayaklarında AGF lideri, side=yan bahis havuzlarında AGF sırası.
+function tkpSetAgfScope(scope,on){
+  if(typeof db==='undefined'||!db||!['tek','side'].includes(scope))return false;
+  db.settings=db.settings||{};
+  const cur=db.settings.agf_order_policy||{enabled:true,roles:['main','surprise','alt']};
+  db.settings.agf_order_policy=Object.assign({},cur,{[scope]:on===true,updated_at:new Date().toISOString(),version:'AGF-ORDER-V1'});
+  try{if(typeof saveDB==='function')saveDB(false);}catch(_){ }
+  return db.settings.agf_order_policy;
+}
+function tkpAgfSideReorder(rows){
+  const pol=tkpAgfOrderPolicy();if(!pol.side||!Array.isArray(rows))return rows;
+  const live=rows.filter(h=>h&&!isNonRunner(h));
+  if(!live.length||!live.every(h=>Number(h.agf)>0))return rows;
+  const rank=new Map(live.slice().sort((a,b)=>(Number(b.agf)||0)-(Number(a.agf)||0)||(Number(a.horse_no)||0)-(Number(b.horse_no)||0)).map((h,i)=>[h,i]));
+  return rows.slice().sort((a,b)=>(rank.has(a)?rank.get(a):1e6)-(rank.has(b)?rank.get(b):1e6));
+}
+function tkpSetAgfOrderPolicy(enabled,roles){
+  if(typeof db==='undefined'||!db)return false;
+  db.settings=db.settings||{};
+  const prevPol=db.settings.agf_order_policy||{};
+  db.settings.agf_order_policy={enabled:enabled!==false,tek:prevPol.tek===true,side:prevPol.side===true,roles:Array.isArray(roles)&&roles.length?roles:['main','surprise','alt'],updated_at:new Date().toISOString(),version:'AGF-ORDER-V1'};
+  try{if(typeof saveDB==='function')saveDB(false);}catch(_){ }
+  return db.settings.agf_order_policy;
+}
+function tkpApplyAgfOrderToCoupon(coupon,role){
+  if(!coupon||coupon.error||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const pol=tkpAgfOrderPolicy();if(!pol.enabled||!pol.roles.includes(role))return coupon;
+  const group=h=>{const e=typeof ekuriGroup==='function'?ekuriGroup(h?.horse_no):'';return e?'E:'+e:'N:'+String(h?.horse_no);};
+  const changes=[];
+  for(const leg of coupon.legs){
+    const count=(leg.picks||[]).length;
+    if(count===1&&pol.tek){
+      const rost=(leg.r?.horses||[]).filter(h=>h&&h.horse_no&&!isNonRunner(h));
+      if(rost.length&&rost.every(h=>Number(h.agf)>0)){
+        const top1=rost.slice().sort((a,b)=>(Number(b.agf)||0)-(Number(a.agf)||0)||(Number(a.horse_no)||0)-(Number(b.horse_no)||0))[0];
+        if(top1&&String(top1.horse_no)!==String(leg.picks[0].horse_no)){
+          const before=[String(leg.picks[0].horse_no)];leg.picks=[top1];
+          leg.agfOrderGuard={version:'AGF-ORDER-V1',before,after:[String(top1.horse_no)],width:1,tek:true};
+          changes.push({leg:leg.r?.leg,before,after:[String(top1.horse_no)]});
+        }
+      }
+      continue;
+    }
+    if(count<2)continue;
+    const roster=(leg.r?.horses||[]).filter(h=>h&&h.horse_no&&!isNonRunner(h)&&Number(h.agf)>0);
+    if(roster.length<count)continue;
+    const unique=new Map();
+    for(const h of roster.slice().sort((a,b)=>(Number(b.agf)||0)-(Number(a.agf)||0)||(Number(a.horse_no)||0)-(Number(b.horse_no)||0))){if(!unique.has(group(h)))unique.set(group(h),h);}
+    const top=[...unique.values()].slice(0,count);
+    if(top.length!==count)continue;
+    const before=leg.picks.map(h=>String(h.horse_no)),after=top.map(h=>String(h.horse_no));
+    if(before.slice().sort().join()===after.slice().sort().join())continue;
+    leg.picks=top;
+    leg.agfOrderGuard={version:'AGF-ORDER-V1',before,after,width:count};
+    changes.push({leg:leg.r?.leg,before,after});
+  }
+  if(changes.length){coupon.agfOrder={version:'AGF-ORDER-V1',role,changes};try{recalcCouponCost(coupon);}catch(_){ }}
+  return coupon;
+}
+if(typeof globalThis!=='undefined'){globalThis.tkpApplyAgfOrderToCoupon=tkpApplyAgfOrderToCoupon;globalThis.tkpSetAgfOrderPolicy=tkpSetAgfOrderPolicy;globalThis.tkpAgfOrderPolicy=tkpAgfOrderPolicy;}
+function tkpAlignFinalCouponOrder(coupon){
+  if(!coupon||coupon.error||coupon.readOnlySnapshot)return coupon;
+  for(const leg of coupon.legs||[]){
+    if((leg.picks||[]).length<=1)continue;
+    const x=leg.x||{r:leg.r,scored:leg.displayOrder||leg.ordered||leg.allHorses||leg.r?.horses||[]};
+    const rows=typeof predictionDisplayRows==='function'?predictionDisplayRows(x,Infinity,'score-desc').rows:x.scored;
+    const rank=new Map((rows||[]).filter(h=>h&&!isNonRunner(h)).map((h,i)=>[String(h.horse_no),i]));
+    leg.picks=leg.picks.slice().sort((a,b)=>(rank.get(String(a.horse_no))??Infinity)-(rank.get(String(b.horse_no))??Infinity));
+  }
+  return coupon;
+}
+function tkpProtectVisibleMainCoverage(coupon){
+  if(!coupon||coupon.error||coupon.readOnlySnapshot)return coupon;
+  const group=h=>{const e=typeof ekuriGroup==='function'?ekuriGroup(h?.horse_no):h?.ekuri_group;return e?'E:'+e:'N:'+String(h?.horse_no);};
+  for(const leg of coupon.legs||[]){
+    const count=leg.picks?.length||0;if(count<=1)continue;
+    const x=leg.x||{r:leg.r,scored:leg.displayOrder||leg.ordered||leg.allHorses||leg.r?.horses||[]};
+    const ordered=typeof predictionDisplayRows==='function'?predictionDisplayRows(x,Infinity,'score-desc').rows:x.scored;
+    const unique=new Map();for(const h of ordered||[]){if(!h||isNonRunner(h))continue;if(!unique.has(group(h)))unique.set(group(h),h);}
+    const top=[...unique.values()].slice(0,count);
+    if(top.length!==count){coupon.error='Normal kupon görünür sıralama kontrolü: yeterli farklı bahis seçimi yok.';continue;}
+    const before=leg.picks.map(h=>String(h.horse_no));leg.picks=top;
+    leg.visibleCoverageGuard={version:'FINAL_NORMAL_TOP_N_V1',before,after:top.map(h=>String(h.horse_no)),width:count};
+    leg.selectionOrderNos=[...unique.values()].map(h=>String(h.horse_no));
+  }
+  return coupon;
+}
+// END FINAL NORMAL COVERAGE
+function tkpSynchronizeTwoHorseLegs(built){
+  const names=['main','surprise','alt'],groups=new Map();
+  const key=r=>JSON.stringify([r?.race_date||r?.date||'',r?.hippodrome||'',r?._absRaceNo||r?.race_no||r?.leg||'']);
+  const group=h=>{const e=typeof ekuriGroup==='function'?ekuriGroup(h?.horse_no):'';return e?'E:'+e:'N:'+String(h?.horse_no||'');};
+  for(const name of names){const c=built?.[name];if(!c||c.error||c.readOnlySnapshot)continue;
+    for(const leg of c.legs||[]){const k=key(leg.r);if(!groups.has(k))groups.set(k,[]);groups.get(k).push({name,leg});}
+  }
+  for(const entries of groups.values()){
+    const narrow=entries.filter(x=>x.leg.picks?.length===2);if(narrow.length<2)continue;
+    const base=entries.find(x=>x.name==='main')?.leg||narrow[0].leg;
+    const order=base.displayOrder?.length?base.displayOrder:base.ordered?.length?base.ordered:base.picks||[];
+    const unique=new Map();for(const h of order){if(!h||isNonRunner(h)||!h.horse_no)continue;if(!unique.has(group(h)))unique.set(group(h),h);}
+    const pair=[...unique.values()].slice(0,2);if(pair.length!==2)continue;
+    // Resolve identities against each leg's own roster before changing any leg.
+    const updates=narrow.map(({leg})=>{const roster=leg.r?.horses?.length?leg.r.horses:[...(leg.displayOrder||leg.ordered||[]),...(leg.picks||[])];return {leg,picks:pair.map(h=>roster.find(v=>String(v?.horse_no)===String(h.horse_no)))};});
+    if(updates.some(x=>x.picks.some(h=>!h||isNonRunner(h))))continue;
+    for(const {leg,picks} of updates){leg.picks=picks;leg.twoHorseConsensus={version:'COMMON_TWO_V1',horseNos:picks.map(h=>String(h.horse_no))};}
+  }
+  return built;
+}
+// END TWO HORSE CONSISTENCY
+function tkpEnsureBottomConditionCouponCoverage(coupon,role){
+  if(!coupon||coupon.error||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const group=h=>{const e=typeof ekuriGroup==='function'?ekuriGroup(h?.horse_no):'';return e?'E:'+e:'N:'+String(h?.horse_no);};
+  for(const leg of coupon.legs){
+    const picks=leg.picks||[];
+    // Only well-supported surprise conditions extend coverage to four-pick legs.
+    const surpriseEvidence=typeof tkpLegSurpriseEvidence==='function'?tkpLegSurpriseEvidence(leg.r):null;
+    // DAĞITIM (Tommy 15.10.2026): Süpriz tablosunun ilk 4 adayı üç kupona AYNI şekilde değil,
+    // role göre bölünerek girer: Normal #1 (yalnız yüksek kanıtta), Sürpriz #1-#2, Uzman/alt #3-#4.
+    // Alt/Sürpriz rolünde 'yüksek kanıt' kapısı aranmaz; aday zaten 5+ örnek ve geçmiş galibiyet
+    // ister, takas maliyet-nötrdür (en zayıf lider-dışı at çıkar).
+    const distRole=(role==='alt'||role==='surprise')?role:'main';
+    if(picks.length<4||(distRole==='main'&&picks.length===4&&!surpriseEvidence?.high))continue;
+    const x=leg.x||{r:leg.r,scored:leg.displayOrder||leg.allHorses||leg.ordered||[]};
+    const order=typeof predictionDisplayRows==='function'?predictionDisplayRows(x,Infinity,'score-desc').rows:(leg.displayOrder||leg.ordered||leg.allHorses||[]);
+    let rows=typeof tkpRankedSurpriseRows==='function'?tkpRankedSurpriseRows(leg.r,order).filter(row=>tkpSurpriseCouponRule(leg.r,row).eligible):
+      typeof tkpConditionRescueRows==='function'?tkpConditionRescueRows(leg.r,order):
+      (typeof tkpTableBottomWinnerCandidates==='function'?tkpTableBottomWinnerCandidates(leg.r,order):[]).map(horse=>({horse,signals:[]}));
+    rows=rows.map((row,index)=>({...row,index,strength:row.winRate??Math.max(0,...row.signals.map(s=>s.starts>0?s.wins/s.starts:0))})).sort((a,b)=>b.strength-a.strength||a.index-b.index).slice(0,6);
+    const leader=order.find(h=>h&&!isNonRunner(h)),leaderGroup=leader?group(leader):'';
+    const required=new Map();
+    const capacity=distRole==='main'
+      ?(picks.length===4?1:picks.length-(leaderGroup?1:0))
+      :Math.min(2,picks.length>=5?2:1);
+    const roleOrder=distRole==='surprise'?[0,1,2,3]:(distRole==='alt'?[2,3,1,0]:rows.map((_,i)=>i));
+    const roleRows=roleOrder.map(i=>rows[i]).filter(Boolean);
+    for(const row of (distRole==='main'?rows:roleRows)){const key=group(row.horse);if(key===leaderGroup||required.has(key))continue;if(required.size>=capacity)break;required.set(key,row);}
+    const changes=[];
+    for(const [key,row] of required){
+      if(picks.some(h=>group(h)===key))continue;
+      let at=-1;
+      for(let i=picks.length-1;i>=0;i--)if(group(picks[i])!==leaderGroup&&!required.has(group(picks[i]))){at=i;break;}
+      if(at<0)continue;
+      changes.push({added:String(row.horse.horse_no),removed:String(picks[at].horse_no)});picks[at]=row.horse;
+    }
+    const rank=new Map(order.map((h,i)=>[String(h.horse_no),i]));
+    picks.sort((a,b)=>(rank.get(String(a.horse_no))??999)-(rank.get(String(b.horse_no))??999));
+    leg.bottomConditionCoverage={version:'SURPRISE_WIN_RATE_V7',surprisePriority:!!surpriseEvidence?.high,surpriseEvidence,changes,required:[...required.values()].map(row=>String(row.horse.horse_no)),missing:[...required.values()].filter(row=>!picks.some(h=>group(h)===group(row.horse))).map(row=>String(row.horse.horse_no)),countUnchanged:true};
+  }
+  return coupon;
+}
+// TKP 2026-10-21: BH tablo -> optimizer canlı aday kapsama kopukluk koruması.
+// Kanıtsız sinyale sahte galibiyet yüzdesi atanmaz. Yarış sonrası arşive dokunulmaz.
+// Üç kupon farklı BH adaylarına maruz kalabilir; hiçbiri sonuca göre seçilmez.
+function tkpBridgeUnprovenBhToCoupons(built){
+  if(!built)return built;
+  const roles=[['main',0],['alt',1],['surprise',2]];
+  const isRunner=h=>!!h&&!(typeof isNonRunner==='function'&&isNonRunner(h));
+  const horseKey=h=>String(h?.horse_no??'').trim();
+  for(const [role,index] of roles){
+    const coupon=built[role];
+    if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))continue;
+    for(const leg of coupon.legs){
+      const picks=leg?.picks;
+      if(!Array.isArray(picks)||picks.length<3||leg.protectedFlag)continue;
+      const race=leg.r||{};
+      // Sonuç bilgisi bulunan arşiv yarışı üzerinde geriye dönük seçim yapılmaz.
+      if((race.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)>0)||race.result_integrity_status==='VERIFIED')continue;
+      const ordered=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered?.length?leg.ordered:(leg.allHorses||race.horses||[]))).filter(isRunner);
+      if(ordered.length<7||typeof tkpRankedSurpriseRows!=='function')continue;
+      const rows=tkpRankedSurpriseRows(race,ordered)||[];
+      // Yalnız yarış öncesi BH1/BH2/BH3 etiketleri; sıralama panelden gelir.
+      const bh=rows.filter(z=>z?.horse&&isRunner(z.horse)&&z.warnings?.some(t=>/^BH[123]$/.test(String(t))));
+      // Aynı at birden çok BH etiketiyle gelebilir; rollere sıra dağılımı yap.
+      const unique=[...new Map(bh.map(z=>[horseKey(z.horse),z])).values()];
+      const target=unique[index];
+      if(!target||picks.some(h=>horseKey(h)===horseKey(target.horse)))continue;
+      // Yalnız kanıtsız adayların kapsam eksikliğini giderir; kanıtlı sıra
+      // zaten ayrı optimizer tarafından kullanılır.
+      if(target.winRateProof?.starts>=5&&target.winRateProof?.wins>0)continue;
+      // Mevcut güçlü ilk iki at ve açıkça korunmuş adaylar silinemez.
+      const keep=new Set(ordered.slice(0,2).map(h=>horseKey(h)));
+      const protectedNos=new Set();
+      for(const field of ['protectedBombNos','protectedValueNos','protectedSignalNos']){
+        const v=leg[field];if(v instanceof Set)for(const n of v)protectedNos.add(String(n));
+        else if(Array.isArray(v))for(const n of v)protectedNos.add(String(n));
+      }
+      const orderMap=new Map(ordered.map((h,i)=>[horseKey(h),i]));
+      const removable=picks.map((h,i)=>({h,i,rank:orderMap.get(horseKey(h))??999}))
+        .filter(z=>!keep.has(horseKey(z.h))&&!protectedNos.has(horseKey(z.h)))
+        .sort((a,b)=>b.rank-a.rank)[0];
+      if(!removable)continue;
+      picks[removable.i]=target.horse;
+      leg.tkpBhPanelBridge={version:'BH_PANEL_ROLE_V1',role,added:horseKey(target.horse),removed:horseKey(removable.h),source:'race-prestart BH panel',unproven:true};
+    }
+  }
+  return built;
+}
+// END BOTTOM CONDITION COUPON COVERAGE
+
 function tkpProtectVisibleLegLeaders(coupon,role){
   if(!coupon||coupon.error||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
   const changes=[];
@@ -3457,6 +4362,468 @@ function tkpProtectVisibleLegLeaders(coupon,role){
   coupon.visibleLeaderProtection={version:'R16.82',role,changes,multiLegOnly:true,singlesUnchanged:true};
   return coupon;
 }
+
+// R19.47.29 — GÜÇLÜ P3 PORTFÖY KORUMASI
+// Amaç: genel/Champion görünür sırada P3 olan ve en az 3 bağımsız yarış-öncesi
+// destek taşıyan adayın çeşitlendirme yüzünden üç kupondan yalnız birinde kalmasını
+// engellemek. TEK'ler ASLA bozulmaz; at sayısı ve maliyet değişmez. Gerekirse çoklu
+// ayakta 1:1 takas yapılır. Sonuç/winner/finish alanları burada kesinlikle okunmaz.
+function tkpIndependentSupportSignals(leg,horse){
+  if(!leg||!horse)return [];
+  const race=leg.r||leg.x?.r||{};
+  const pool=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered?.length?leg.ordered:(leg.allHorses?.length?leg.allHorses:(race.horses||[]))))
+    .filter(h=>h&&!isNonRunner(h));
+  const no=String(horse?.horse_no??'');if(!no)return [];
+  const signals=[];
+  const top3By=(getter,positive=true)=>{
+    const rows=pool.map(h=>({h,v:Number(getter(h))})).filter(row=>Number.isFinite(row.v)&&(!positive||row.v>0))
+      .sort((a,b)=>b.v-a.v);
+    return rows.slice(0,3).some(row=>String(row.h?.horse_no??'')===no);
+  };
+  const agfRank=Number(horse?.agf_rank);
+  if(Number.isFinite(agfRank)&&agfRank>=1&&agfRank<=3)signals.push('AGF_TOP3');
+  let prof=Number(horse?.profile_strength_pct??horse?.team_strength_pct??horse?.prof);
+  try{if(typeof profileStrengthPct==='function')prof=Number(profileStrengthPct(race,horse));}catch(_){ }
+  if(Number.isFinite(prof)&&prof>=40)signals.push('PROF_40');
+  if(top3By(h=>h?.ypuan??h?.y_puan,true))signals.push('YPUAN_TOP3');
+  if(top3By(h=>tkpCouponGcTrValue(h),true))signals.push('TR_TOP3');
+  const hndRank=Number(horse?.hndkp_rank);
+  if(Number.isFinite(hndRank)&&hndRank>=1&&hndRank<=3)signals.push('HNDKP_TOP3');
+  try{
+    const values=pool.map(h=>({h,v:Number(typeof valueBandScore==='function'?valueBandScore(h,race):(h?.value_score??h?.value))}))
+      .filter(row=>Number.isFinite(row.v)&&row.v>0).sort((a,b)=>b.v-a.v);
+    if(values.slice(0,3).some(row=>String(row.h?.horse_no??'')===no))signals.push('VALUE_TOP3');
+  }catch(_){ }
+  let bomb=Number(horse?.bmb)===1||Number(horse?.odb)===1;
+  try{if(typeof isOdbCandidate==='function'&&isOdbCandidate(horse,race))bomb=true;}catch(_){ }
+  if(bomb)signals.push('BMB_ODB');
+  return [...new Set(signals)];
+}
+function tkpStrongP3Evidence(leg,horse){
+  if(!leg||!horse)return {eligible:false,count:0,signals:[],rank:999};
+  const race=leg.r||leg.x?.r||{};
+  const pool=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered?.length?leg.ordered:(leg.allHorses?.length?leg.allHorses:(race.horses||[]))))
+    .filter(h=>h&&!isNonRunner(h));
+  const no=String(horse?.horse_no??'');
+  const rank=pool.findIndex(h=>String(h?.horse_no??'')===no)+1;
+  const signals=tkpIndependentSupportSignals({...leg,displayOrder:pool},horse);
+  return {eligible:rank===3&&signals.length>=3,count:signals.length,signals,rank:rank||999};
+}
+function tkpEnsureStrongP3CrossCouponCoverage(built){
+  if(!built)return built;
+  const entries=['main','alt','surprise'].map(key=>({key,coupon:built[key]}))
+    .filter(z=>z.coupon&&!z.coupon.error&&!z.coupon.disabled&&!z.coupon.readOnlySnapshot&&Array.isArray(z.coupon.legs));
+  if(entries.length<2)return built;
+  const legMaps=new Map(entries.map(z=>[z.key,new Map(z.coupon.legs.map((leg,i)=>[tkpLegNoFromCouponLeg(leg,i),leg]))]));
+  const main=entries.find(z=>z.key==='main')||entries[0];
+  for(let i=0;i<(main.coupon.legs||[]).length;i++){
+    const mainLeg=main.coupon.legs[i],legNo=tkpLegNoFromCouponLeg(mainLeg,i);
+    const order=(mainLeg.displayOrder?.length?mainLeg.displayOrder:(mainLeg.ordered?.length?mainLeg.ordered:(mainLeg.allHorses||mainLeg.r?.horses||[]))).filter(h=>h&&!isNonRunner(h));
+    const horse=order[2];if(!horse)continue;
+    const evidence=tkpStrongP3Evidence({...mainLeg,displayOrder:order},horse);if(!evidence.eligible)continue;
+    const group=tkpCouponGuardHorseKey;
+    const targetGroup=group(horse);if(!targetGroup)continue;
+    const legRows=entries.map(z=>({key:z.key,leg:legMaps.get(z.key)?.get(legNo)})).filter(z=>z.leg);
+    let present=legRows.filter(z=>(z.leg.picks||[]).some(h=>group(h)===targetGroup)).length;
+    if(present>=2)continue;
+    // Normal kupon ilk tercihtir; o TEK ise alternatif çoklu kupona geçilir.
+    const priority=['main','alt','surprise'];
+    const targets=legRows.filter(z=>!(z.leg.picks||[]).some(h=>group(h)===targetGroup)&&(z.leg.picks||[]).length>1&&!z.leg.protectedFlag)
+      .sort((a,b)=>priority.indexOf(a.key)-priority.indexOf(b.key)||(b.leg.picks||[]).length-(a.leg.picks||[]).length);
+    let placed=false;
+    for(const z of targets){
+      const leg=z.leg,picks=[...(leg.picks||[])];
+      const roster=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered?.length?leg.ordered:(leg.allHorses||leg.r?.horses||[]))).filter(h=>h&&!isNonRunner(h));
+      const byGroup=new Map(),rankMap=new Map();
+      roster.forEach((h,j)=>{const k=group(h);if(!byGroup.has(k)){byGroup.set(k,h);rankMap.set(k,j+1);}});
+      const candidate=byGroup.get(targetGroup);if(!candidate)continue;
+      const protectedGroups=new Set([
+        ...(leg.protectedSignalNos instanceof Set?[...leg.protectedSignalNos]:[]),
+        ...(leg.protectedValueNos instanceof Set?[...leg.protectedValueNos]:[]),
+        ...(leg.protectedBombNos instanceof Set?[...leg.protectedBombNos]:[]),
+        ...(leg.kulisPriorityNos||[])
+      ].map(tkpCouponGuardHorseKey));
+      let replace=-1,bestKey=null;
+      for(let j=0;j<picks.length;j++){
+        const h=picks[j],g=group(h),rnk=rankMap.get(g)||999;
+        if(g===targetGroup||rnk===1||protectedGroups.has(g)||tkpLegacyXKulisForce(h))continue;
+        const supportCount=tkpIndependentSupportSignals({...leg,displayOrder:roster},h).length;
+        // Önce destek sayısı az olanı, eşitse görünür sırada daha geride olanı çıkar.
+        const k=[supportCount,-rnk];
+        if(bestKey===null||k[0]<bestKey[0]||(k[0]===bestKey[0]&&k[1]<bestKey[1])){bestKey=k;replace=j;}
+      }
+      if(replace<0)continue;
+      const removed=picks[replace];picks[replace]=candidate;
+      picks.sort((a,b)=>(rankMap.get(group(a))||999)-(rankMap.get(group(b))||999));
+      leg.picks=picks;
+      if(!(leg.protectedSignalNos instanceof Set))leg.protectedSignalNos=new Set(Array.isArray(leg.protectedSignalNos)?leg.protectedSignalNos:[]);
+      leg.protectedSignalNos.add(String(candidate.horse_no));
+      leg.strongP3Protection={version:'R19.47.29',added:String(candidate?.horse_no||''),removed:String(removed?.horse_no||''),signals:evidence.signals.slice(),signalCount:evidence.count,minimumCoupons:2,countUnchanged:true,singleUnchanged:true};
+      placed=true;present++;if(present>=2)break;
+    }
+    if(placed){for(const z of entries){try{recalcCouponCost(z.coupon);}catch(_){ }}}
+  }
+  return built;
+}
+
+// Final selection guard: AGF first five >=8% are immutable in wide legs.
+// A supported sixth candidate can only replace an unprotected weaker tail.
+function tkpEnsureSupportedAgfTailCoverage(built){
+  for(const key of ['main','alt','surprise']){
+    const coupon=built?.[key];
+    if(!coupon||coupon.disabled||coupon.error||coupon.readOnlySnapshot||coupon.archivedReadOnly)continue;
+    for(const leg of coupon.legs||[]){
+      if(leg.readOnlySnapshot||leg.archivedReadOnly||(leg.picks||[]).length<5)continue;
+      const race=leg.r||leg.x?.r||{};
+      const marketRows=new Map((race.horses||[]).map(h=>[String(h?.horse_no||''),h]));
+      const roster=[...(leg.displayOrder||[]),...(leg.ordered||[]),...(leg.allHorses||[]),...(race.horses||[])];
+      const seen=new Set(),pool=roster.filter(h=>{const no=String(h?.horse_no||'');if(!no||seen.has(no)||isNonRunner(h)||isNonRunner(marketRows.get(no)||h))return false;seen.add(no);return true;});
+      const group=h=>String(ekuriGroup(h?.horse_no)||h?.horse_no||'');
+      const market=h=>marketRows.get(String(h?.horse_no||''))||h;
+      const agf=h=>Number(market(h)?.agf_pct??market(h)?.agf??h?.agf_pct??h?.agf);
+      const agfRank=h=>Number(market(h)?.agf_rank??h?.agf_rank);
+      const required=pool.filter(h=>agfRank(h)>=1&&agfRank(h)<=5&&Number.isFinite(agf(h))&&agf(h)>=8)
+        .sort((a,b)=>agfRank(a)-agfRank(b));
+      const requiredGroups=new Set(required.map(group));
+      const picks=leg.picks.slice();
+      const protectedGroups=new Set([
+        ...requiredGroups,
+        ...['protectedSignalNos','protectedValueNos','protectedBombNos'].flatMap(field=>Array.from(leg[field]||[]).map(no=>String(ekuriGroup(no)||no))),
+        ...Array.from(leg.kulisPriorityNos||[]).map(no=>String(ekuriGroup(no)||no))
+      ]);
+      const support=h=>tkpIndependentSupportSignals({...leg,r:race,displayOrder:pool},h);
+      const rankOrder=leg.displayOrder?.length?leg.displayOrder:leg.ordered||pool;
+      const rank=new Map(rankOrder.map((h,i)=>[group(h),i]));
+      const swaps=[],blocked=[];
+      const place=(h,mandatory)=>{
+        if(picks.some(p=>group(p)===group(h)))return;
+        const signals=support(h);
+        let index=-1;
+        for(let i=0;i<picks.length;i++){
+          const p=picks[i];
+          if(requiredGroups.has(group(p)))continue;
+          if(!mandatory&&(protectedGroups.has(group(p))||tkpLegacyXKulisForce(p)||(rank.get(group(p))??999)<2))continue;
+          if(!mandatory&&support(p).length>=signals.length)continue;
+          if(index<0||(rank.get(group(p))??999)>(rank.get(group(picks[index]))??999))index=i;
+        }
+        if(index<0){blocked.push(String(h.horse_no));return;}
+        swaps.push({added:String(h.horse_no),removed:String(picks[index].horse_no),reason:mandatory?'AGF_TOP5_AT_LEAST_8':'SUPPORTED_AGF6',signals});
+        picks[index]=h;protectedGroups.add(group(h));
+      };
+      for(const h of required)place(h,true);
+      if(picks.length>=6){
+        const tail=pool.filter(h=>agfRank(h)===6&&support(h).length>=2);
+        for(const h of tail)place(h,false);
+      }
+      leg.picks=picks;
+      leg.agfFixedNos=required.map(h=>String(h.horse_no));
+      leg.protectedSignalNos=new Set(Array.from(leg.protectedSignalNos||[]));
+      for(const no of leg.agfFixedNos)leg.protectedSignalNos.add(no);
+      if(swaps.length)leg.agfCoverageGuard={version:'TOMMY-AGF8-20261010',swaps,countUnchanged:true};
+      leg.agfCoverageBlockedNos=blocked;
+      // Never publish a wide ticket that violates the user's hard first-five rule.
+      if(required.some(h=>!picks.some(p=>group(p)===group(h))))coupon.error='AGF ilk 5 (%8 ve üzeri) koruması diğer kilitlerle çatışıyor; kupon oluşturulamadı.';
+    }
+  }
+  return built;
+}
+
+function tkpFillCouponAllowedBudget(coupon){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||coupon.archivedReadOnly||!Array.isArray(coupon.legs))return coupon;
+  let strong=false;
+  const evidence=[];
+  const plans=coupon.legs.map(leg=>{
+    const race=leg.r||leg.x?.r||{},seen=new Set();
+    const current=new Map((race.horses||[]).map(h=>[String(h?.horse_no||''),h]));
+    const pool=[...(leg.ordered||leg.displayOrder||[]),...(race.horses||[])].filter(h=>{const g=String(ekuriGroup(h?.horse_no)||h?.horse_no||'');if(!g||seen.has(g)||isNonRunner(h)||isNonRunner(current.get(String(h?.horse_no||''))||h))return false;seen.add(g);return true;});
+    const rows=pool.map((horse,rank)=>({horse,rank,signals:tkpIndependentSupportSignals({...leg,r:race,displayOrder:pool},horse)}));
+    if((leg.picks||[]).length>1)for(const row of rows){
+      if(row.signals.length>=3){strong=true;evidence.push({leg:Number(race.leg)||0,horseNo:String(row.horse.horse_no),signals:row.signals});}
+    }
+    return {leg,rows};
+  });
+  for(const leg of coupon.legs){
+    if((leg.picks||[]).length!==1)continue;
+    const horse=leg.picks[0],race=leg.r||leg.x?.r||{},pool=(leg.ordered||leg.displayOrder||race.horses||[]).filter(h=>h&&!isNonRunner(h));
+    if(tkpIndependentSupportSignals({...leg,r:race,displayOrder:pool},horse).length<3)continue;
+    const group=h=>String(ekuriGroup(h?.horse_no)||h?.horse_no||'');
+    const second=pool.find(h=>group(h)!==group(horse));
+    try{
+      const d=dynamicSingleDecision({r:race,scored:pool,strictPool:pool},horse,second||null);
+      if(d?.isSingle===true&&['scoreOk','profileOk','profileGapOk','sampleOk','evidenceOk','weightOk'].every(k=>d[k]===true)&&Number(d.confidence)>=Number(d.threshold||68)+5)strong=true;
+    }catch(_){ }
+  }
+  // Tommy 20261018: kupon başı 3000'e kadar doldur; kullanıcı daha düşük bütçe girdiyse (1000-3000) o tavan geçerli.
+  const requestedCap=Number(coupon.userCapTL)||Number(coupon.inputCapTL)||0;
+  const maxBudget=tkpCouponMaxBudget();
+  const cap=requestedCap>0?Math.min(maxBudget,Math.max(1000,requestedCap)):maxBudget;
+  const minimum=Number(coupon.minimumBudgetTargetTL)||1000;
+  recalcCouponCost(coupon);
+  const added=[];
+  for(let step=0;step<80&&coupon.cost<cap-1e-9;step++){
+    const singles=coupon.legs.filter(l=>(l.picks||[]).length===1).length;
+    const narrow=coupon.legs.filter(l=>(l.picks||[]).length>=2&&(l.picks||[]).length<=3).length;
+    let best=null;
+    for(const {leg,rows} of plans){
+      const count=(leg.picks||[]).length;
+      if(count<=1||leg.protectedFlag||(singles===1&&narrow===1&&count<=3))continue;
+      const maxCoverage=Number(leg.maxCoverage);if(Number.isFinite(maxCoverage)&&maxCoverage>0&&count>=maxCoverage)continue;
+      const have=new Set(leg.picks.map(h=>String(ekuriGroup(h.horse_no)||h.horse_no)));
+      const nextCost=Number(coupon.unit)*(coupon.legs.reduce((p,l)=>p*Math.max(1,(l.picks||[]).length),1)/count)*(count+1);
+      if(nextCost>cap+1e-9)continue;
+      for(const row of rows){
+        if(have.has(String(ekuriGroup(row.horse.horse_no)||row.horse.horse_no)))continue;
+        const priority=row.signals.length>=3?1:0;
+        if(!best||priority>best.priority||(priority===best.priority&&(row.rank<best.rank||(row.rank===best.rank&&nextCost<best.nextCost))))best={...row,leg,priority,nextCost};
+      }
+    }
+    if(!best)break;
+    best.leg.picks=best.leg.picks.concat([best.horse]);
+    added.push({leg:Number(best.leg.r?.leg)||0,horseNo:String(best.horse.horse_no),signals:best.signals});
+    recalcCouponCost(coupon);
+  }
+  coupon.minimumBudgetTargetTL=minimum;coupon.minimumBudgetReached=coupon.cost>=minimum-1e-9;
+  coupon.budgetTL=cap;coupon.maxBudgetTL=cap;coupon.userCapTL=cap;coupon.inputCapTL=cap;coupon.leftover=round2ish(cap-coupon.cost);
+  coupon.budgetExpansion={normalCapTL:cap,strongEvidenceCapTL:3000,strongEvidenceQualified:strong,evidence,added,capTL:cap,actualCostTL:coupon.cost};
+  coupon.feePolicy={...(coupon.feePolicy||{}),minBudgetTL:1000,maxBudgetTL:cap,defaultBudgetTL:cap};
+  coupon.dynamicBudgetTargetTL=cap;
+  recalcCouponCost(coupon);
+  return coupon;
+}
+
+
+// ===== OLASILIK TABANLI GENİŞLİK DAĞITIMI (Tommy, 15.10.2026) =====
+// Aynı maliyetle (kolon çarpımı sabit) her ayağa kaç at konacağını ve hangi atların seçileceğini
+// atların kazanma olasılıklarından hesaplar. 3438 koşuluk geriye dönük, zaman-bloklu çapraz doğrulamada
+// (model kendi bloğunu görmeden): Normal 50→70, Uzman 53→69, Sürpriz 50→69 adet 6/6 (aynı maliyet);
+// üç kupondan en az biri 6/6: 87→126/520 toplantı (kupon başına olasılık, sonraki kuponlarda önceki
+// kuponun atları 0.5 ile çarpılarak çeşitlendirme). Her kupon 1–2 TEK taşır. Kapatmak için
+// db.settings.prob_realloc=false.
+const TKP_PROB_REALLOC=Object.freeze({
+  version:'PROB-WIDTH-REALLOC-V1',disc:0.5,
+  model:Object.freeze({"mu": [1.761974, 0.295327, 0.267967, -0.0, 0.243301, 2.345848, 0.100154, 0.467946], "sd": [1.124709, 0.266426, 0.25883, 0.976143, 0.429075, 0.284255, 0.105474, 0.272696], "w": [1.060502, -0.109462, 0.036709, 0.152274, 0.051531, -0.067329, 0.08335, -0.015705], "b": -2.689673})
+});
+function tkpPrEnabled(){try{return !(typeof db!=='undefined'&&db?.settings?.prob_realloc===false);}catch(_){return true;}}
+function tkpPrLegProbs(leg){
+  const r=leg?.r;if(!r)return null;
+  const hs=(r.horses||[]).filter(h=>h&&!isNonRunner(h));
+  const n=hs.length;if(n<3)return null;
+  const order=(leg.displayOrder&&leg.displayOrder.length?leg.displayOrder:(leg.ordered&&leg.ordered.length?leg.ordered:(leg.allHorses||[]))).filter(h=>h&&!isNonRunner(h));
+  const rank=new Map(order.map((h,i)=>[String(h.horse_no),i+1]));
+  const sc=hs.map(h=>Number(h.score)||0);
+  const mean=sc.reduce((a,b)=>a+b,0)/n,std=Math.sqrt(sc.reduce((a,b)=>a+(b-mean)*(b-mean),0)/n);
+  const M=globalThis.__tkpPrModelOverride||TKP_PROB_REALLOC.model;
+  const out=[];
+  hs.forEach((h,i)=>{
+    const agf=Number(h.agf)||0,ar=Number(h.agf_rank)||0,sn=rank.get(String(h.horse_no))||n;
+    const x=[Math.log(Math.max(agf,0.5)),1/(ar>0?ar:n),1/sn,(sc[i]-mean)/(std+1e-9),Number(h.bmb)===1?1:0,Math.log(n),(Number(h.tr)||0)/100,(Number(h.hndkp)||0)/100];
+    let z=M.b;for(let k=0;k<x.length;k++)z+=M.w[k]*((x[k]-M.mu[k])/M.sd[k]);
+    out.push({h,p:1/(1+Math.exp(-z))});
+  });
+  const tot=out.reduce((a,b)=>a+b.p,0)||1;out.forEach(o=>{o.p/=tot;});
+  return out;
+}
+function tkpPrAllocate(legUnits,minC,maxC,forbidSingle){
+  // legUnits[i]: p'ye göre azalan [{h,p}], .singleIdx: TEK olabilecek indeks. Kurallar: kolon çarpımı [minC,maxC],
+  // 1–2 TEK, TEK ayakları kuponlar arasında farklı, en fazla bir 2 atlı ayak (diğer çoklu ayaklar >=3).
+  let states=new Map([[1*16,{lp:0,ws:[]}]]);
+  for(let i=0;i<legUnits.length;i++){
+    const u=legUnits[i];const cum=u.cumW;
+    const next=new Map();
+    for(const [k,st] of states){
+      const prod=Math.floor(k/16),sg=Math.floor((k%16)/4),tw=k%4;
+      for(let w=1;w<=Math.min(10,u.length);w++){
+        const np=prod*w;if(np>maxC)break;
+        if(w===1&&forbidSingle&&forbidSingle.has(i))continue;
+        const s2=sg+(w===1?1:0);if(s2>2)continue;
+        const t2=tw+(w===2?1:0);if(t2>1)continue;
+        const hit=w===1?u[u.singleIdx]?.p:cum[w];
+        if(!(hit>0))continue;
+        const lp=st.lp+Math.log(Math.max(hit||0,1e-9));
+        const key=np*16+s2*4+t2,cur=next.get(key);
+        if(!cur||lp>cur.lp)next.set(key,{lp,ws:st.ws.concat(w)});
+      }
+    }
+    states=next;
+  }
+  let best=null;
+  for(const [k,st] of states){const prod=Math.floor(k/16),sg=Math.floor((k%16)/4);if(sg<1||prod<minC)continue;if(!best||st.lp>best.lp)best={lp:st.lp,ws:st.ws,prod};}
+  return best;
+}
+function tkpProbReallocSet(built){
+  if(!tkpPrEnabled()||!built)return built;
+  const names=['main','alt','surprise'];
+  const cps=names.map(n=>built[n]);
+  if(cps.some(c=>!c||c.error||c.disabled||c.readOnlySnapshot||!Array.isArray(c.legs)||c.legs.length!==6))return built;
+  for(const c of cps)for(const l of c.legs){
+    if(!l?.r||typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(l.r.horses||[]))return built;
+  }
+  const base=cps[0].legs.map(l=>tkpPrLegProbs(l));
+  if(base.some(b=>!b))return built;
+  const used=base.map(()=>new Set());
+  const singleLegs=new Set();
+  const plans=[];
+  for(let ci=0;ci<3;ci++){
+    const c=cps[ci];
+    const C0=c.legs.reduce((m,l)=>m*Math.max(1,(l.picks||[]).length),1);
+    const unit=Number(c.unit)||0;
+    const minC=unit>0?Math.ceil(TKP_COUPON_FEE_POLICY.minBudgetTL/unit-1e-9):1;
+    if(!(C0>=minC)){return built;}
+    const legUnits=base.map((b,i)=>{
+      const u=b.map(o=>({h:o.h,p:o.p*(used[i].has(String(o.h.horse_no))?TKP_PROB_REALLOC.disc:1)}));
+      const z=u.reduce((a,x)=>a+x.p,0)||1;u.forEach(x=>{x.p/=z;});
+      u.sort((a,b)=>b.p-a.p);
+      u.singleIdx=u.findIndex(x=>canBeCouponSingle(x.h)&&!tkpLegacyXKulisBreaksSingle(x.h));
+      if(u.singleIdx<0)u.singleIdx=0;
+      // Kullanıcının sert kuralı: 5+ atlı ayakta AGF ilk 5 ve payı >=%8 olan atlar kuponda olmalı.
+      const req=u.filter(x=>{const ar=Number(x.h.agf_rank)||0,ag=Number(x.h.agf);return ar>=1&&ar<=5&&Number.isFinite(ag)&&ag>=8;});
+      const reqSet=new Set(req.map(x=>String(x.h.horse_no)));
+      u.setsW=[];u.cumW=[0];
+      for(let w=1;w<=Math.min(10,u.length);w++){
+        let set;
+        if(w<5)set=u.slice(0,w);
+        else if(req.length>w)set=null;
+        else set=req.concat(u.filter(x=>!reqSet.has(String(x.h.horse_no))).slice(0,w-req.length));
+        u.setsW[w]=set;
+        u.cumW[w]=set?set.reduce((a,x)=>a+x.p,0):0;
+      }
+      return u;
+    });
+    const best=tkpPrAllocate(legUnits,minC,C0,singleLegs);
+    if(!best)return built;
+    plans.push({legUnits,best,C0});
+    best.ws.forEach((w,i)=>{
+      if(w===1){used[i].add(String(legUnits[i][legUnits[i].singleIdx].h.horse_no));singleLegs.add(i);}
+      else legUnits[i].setsW[w].forEach(x=>used[i].add(String(x.h.horse_no)));
+    });
+  }
+  plans.forEach((pl,ci)=>{
+    const c=cps[ci];const before=c.legs.map(l=>(l.picks||[]).length);
+    c.legs.forEach((leg,i)=>{
+      const w=pl.best.ws[i],u=pl.legUnits[i];
+      const chosen=w===1?[u[u.singleIdx].h]:u.setsW[w].map(x=>x.h);
+      const prev=new Map((leg.picks||[]).map(h=>[String(h.horse_no),h]));
+      leg.picks=chosen.map(h=>prev.get(String(h.horse_no))||h);
+      if(leg.displayOrder&&leg.displayOrder.length){
+        const rk=new Map(leg.displayOrder.map((h,j)=>[String(h?.horse_no||''),j]));
+        leg.picks.sort((a,b)=>(rk.get(String(a?.horse_no||''))??999)-(rk.get(String(b?.horse_no||''))??999));
+      }
+    });
+    recalcCouponCost(c);
+    tkpFinalEkuriInvariant(c,names[ci]==='main'?'main':'surprise');
+    recalcCouponCost(c);
+    c.probRealloc={version:TKP_PROB_REALLOC.version,before,after:c.legs.map(l=>l.picks.length),estimatedLogP:Math.round(pl.best.lp*1000)/1000};
+  });
+  return built;
+}
+
+function tkpApplyTommyFinalCouponRules(built){
+  for(const name of ['main','alt','surprise'])tkpFillCouponAllowedBudget(built?.[name]);
+  for(const name of ['main','alt','surprise'])tkpApplyBmbRescueSwap(built?.[name]);
+  tkpEnsureSupportedAgfTailCoverage(built);
+  for(const name of ['main','alt','surprise']){
+    const coupon=built?.[name];if(!coupon||coupon.readOnlySnapshot||coupon.error)continue;
+    tkpAlignFinalCouponOrder(coupon);
+    if(coupon.policyAudit){coupon.policyAudit.cost=coupon.cost;coupon.policyAudit.finalSelectionOverride={version:'TOMMY-20261010',capTL:coupon.maxBudgetTL,legs:(coupon.legs||[]).map(l=>({leg:Number(l.r?.leg)||0,picks:(l.picks||[]).map(h=>String(h.horse_no)),fixedAgfNos:l.agfFixedNos||[]}))};}
+  }
+  try{tkpProbReallocSet(built);}catch(e){try{console.warn('prob_realloc',e);}catch(_){}}
+  return built;
+}
+
+// R20.10 kontrollü üçlü portföy: yalnız YENİ yarış, tekleri ve ayak genişliğini korur.
+// 203 yarışlık deneyin 47/203 sonucu bu canlı motorun sonucu değildir.
+function tkpExperimentalThreeRolePortfolio(built){
+  const roles=[['main','agf'],['surprise','hybrid'],['alt','bmb']];
+  const report=[];
+  for(const [name,role] of roles){
+    const coupon=built?.[name];
+    if(!coupon||coupon.disabled||coupon.error||!Array.isArray(coupon.legs))continue;
+    for(const leg of coupon.legs){
+      const race=leg?.r||leg?.x?.r;
+      if(!race||typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(race))continue;
+      const picks=(leg.picks||[]);if(picks.length<2)continue; // güvenilir TEK bozulmaz
+      const roster=(leg.displayOrder?.length?leg.displayOrder:(leg.ordered||leg.allHorses||[]))
+        .filter(h=>h&&!isNonRunner(h));
+      if(roster.length<picks.length+1)continue;
+      const agfScore=h=>{const rank=Number(h?.agf_rank);return Number.isFinite(rank)&&rank>=1?Math.max(0,1-(rank-1)/Math.max(roster.length-1,1)):0;};
+      const baseScore=h=>{const i=roster.findIndex(x=>String(x.horse_no)===String(h.horse_no));return i<0?0:1-i/Math.max(1,roster.length-1);};
+      const bmbScore=h=>(Number(h?.bmb)===1?0.12:0)+(Number(h?.odb)===1?0.04:0);
+      const value=h=>role==='agf'?agfScore(h):role==='hybrid'?0.80*agfScore(h)+0.20*baseScore(h):0.60*agfScore(h)+0.40*baseScore(h)+bmbScore(h);
+      const selected=new Set(picks.map(h=>String(h.horse_no)));
+      const eligible=roster.filter(h=>!selected.has(String(h.horse_no)));
+      const incoming=eligible.sort((a,b)=>value(b)-value(a))[0];
+      // AGF ilk 5 ve mevcut liderler BH/çeşitlendirme uğruna çıkarılmaz.
+      const removable=picks.filter(h=>{const ar=Number(h.agf_rank);return !(ar>=1&&ar<=5)&&String(h.horse_no)!==String(roster[0]?.horse_no);})
+        .sort((a,b)=>value(a)-value(b));
+      if(!incoming||!removable.length)continue;
+      const outgoing=removable[0];
+      if(value(incoming)<=value(outgoing)+0.08)continue;
+      // Aynı eküri grubunu iki defa seçme.
+      const others=picks.filter(h=>h!==outgoing);
+      if(others.some(h=>ekuriGroup(h.horse_no)===ekuriGroup(incoming.horse_no)))continue;
+      leg.picks=picks.map(h=>h===outgoing?incoming:h);
+      report.push({role,leg:Number(race.leg)||null,in:String(incoming.horse_no),out:String(outgoing.horse_no)});
+    }
+    if(report.length)recalcCouponCost(coupon); // 1:1 değişim maliyeti değiştirmez
+    coupon.experimentalPortfolioRole=role;
+  }
+  built.experimentalPortfolio={version:'R20.10',preRaceOnly:true,swaps:report};
+  return built;
+}
+
+
+// TKP R3004 — sürpriz tablo sırası nihai kupon kararıdır.
+// İlk üç sıra geniş ayakta önceliklidir; 4–6 için yalnız kalan kapasite kullanılır.
+// Takas 1:1 olduğundan kolon ve maliyet sabit kalır; tek ayak ve arşiv korunur.
+function tkpApplyFinalSurpriseTablePriority(built){
+  if(typeof tkpRankedSurpriseRows!=='function')return;
+  for(const key of ['main','alt','surprise']){
+    const coupon=built?.[key];
+    if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot)continue;
+    const decisions=[];
+    for(const leg of coupon.legs||[]){
+      const race=leg?.r||leg?.race||leg?.x?.r;
+      const picks=leg?.picks;
+      if(!race||!Array.isArray(picks)||picks.length<5)continue;
+      // Tamamlanmış koşuların eski kuponlarına dokunma.
+      if((race.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)>0))continue;
+      const all=(race.horses||[]).filter(h=>h&&!isNonRunner(h));
+      const ordered=(typeof tkpFinalRankOrderForRace==='function'
+        ?tkpFinalRankOrderForRace(race,all):all).filter(h=>h&&!isNonRunner(h));
+      const rows=tkpRankedSurpriseRows(race,ordered).slice(0,6);
+      const added=[],notAdded=[];
+      const equivalent=(a,b)=>String(a?.horse_no)===String(b?.horse_no)
+        ||(!!ekuriGroup(a?.horse_no)&&ekuriGroup(a?.horse_no)===ekuriGroup(b?.horse_no));
+      const agfRank=h=>Number(h?.agf_rank)||999;
+      const strength=h=>Number(h?.score??h?.prediction_score_snapshot??h?.altili_winner_score??0)||0;
+      // İlk 3 zorunlu öncelik; sonraki 3 sırada yalnız bariz düşük AGF ve zayıf
+      // mevcut adaylar ile maliyetsiz takas yapılır.
+      for(let i=0;i<rows.length;i++){
+        const wanted=rows[i]?.horse;
+        if(!wanted||isNonRunner(wanted)||picks.some(h=>equivalent(h,wanted)))continue;
+        const candidate=all.find(h=>equivalent(h,wanted))||wanted;
+        const options=picks.map((h,index)=>({h,index}))
+          .filter(z=>!rows.slice(0,Math.min(3,i+1)).some(row=>equivalent(row?.horse,z.h)))
+          .filter(z=>!z.h?.is_single&&!z.h?.protectedFlag)
+          .sort((a,b)=>{
+            // Önce AGF 5+; ilk dörtten zayıf aday da çıkarılabilir.
+            const aOutside=agfRank(a.h)>4?1:0,bOutside=agfRank(b.h)>4?1:0;
+            if(aOutside!==bOutside)return bOutside-aOutside;
+            return strength(a.h)-strength(b.h)||agfRank(b.h)-agfRank(a.h);
+          });
+        const weakest=options[0];
+        if(!weakest){notAdded.push({horseNo:String(candidate.horse_no),reason:'Korunan adaylar'});continue;}
+        if(i>=3 && agfRank(candidate)<=4 && strength(candidate)<=strength(weakest.h))continue;
+        const removed=weakest.h;
+        picks[weakest.index]=candidate;
+        added.push({rank:i+1,horseNo:String(candidate.horse_no),replaced:String(removed.horse_no)});
+      }
+      if(added.length||notAdded.length)decisions.push({leg:Number(race.leg),added,notAdded});
+    }
+    if(decisions.length){coupon.surpriseTablePriorityAudit=decisions;recalcCouponCost(coupon);}
+  }
+}
+
 function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
   // Her aktif kupon en az bir TEK taşır. Bütçe şekli de önce 2–3 atlı bir
   // ayakla, bu mümkün değilse ikinci rol-bazlı TEK ile sıkıştırılır. Çok güçlü
@@ -3492,7 +4859,7 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
     coupon.legs=fit.legs;coupon.combos=fit.combos;coupon.cost=fit.cost;
     coupon.budgetLimited=fit.capLimited;coupon.riskFloorConflict=!!fit.riskFloorConflict;
     recalcCouponCost(coupon);
-    // Kullanıcının seçtiği değer hedef bütçedir; 1.000–1.400 TL sözleşmesinde
+    // Kullanıcının seçtiği değer hedef bütçedir; 1.000–2.000 TL sözleşmesinde
     // kombinasyon sıçraması nedeniyle bir sonraki geçerli yapı hedefi aşabilir.
     // Bu durumda sessiz hata yerine aynı tanımlı bandın içinde kalınır.
     const userMax=TKP_COUPON_FEE_POLICY.maxBudgetTL;
@@ -3514,8 +4881,8 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
       if(new Set(groups).size!==groups.length)throw new Error(`Kupon eküri kilidi ihlali: ${couponKey} ${leg?.r?.leg||'?'} . ayak`);
     }
   }
-  if(typeof tkpApplyBmbRescueSwap==='function'){
-    tkpApplyBmbRescueSwap(built.main);tkpApplyBmbRescueSwap(built.alt);tkpApplyBmbRescueSwap(built.surprise);
+  if(typeof tkpApplyCouponSelectionPolicies==='function'){
+    tkpApplyCouponSelectionPolicies(built.main);tkpApplyCouponSelectionPolicies(built.alt);tkpApplyCouponSelectionPolicies(built.surprise);
   }
   if(typeof tkpApplyAgf69AdditiveRescue==='function'){
     // 100K+ hedefli gerçek Sürpriz kuponunda iki ayrı ayakta AGF 6–9/BMB
@@ -3529,7 +4896,7 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
     const finalFit=enforceCouponCostCap(coupon.legs,coupon.unit,cap);
     coupon.legs=finalFit.legs;coupon.combos=finalFit.combos;coupon.cost=finalFit.cost;coupon.leftover=round2ish(cap-finalFit.cost);
     tkpRaiseCouponCostToMinimum(coupon,TKP_COUPON_FEE_POLICY.minBudgetTL,Math.min(TKP_COUPON_FEE_POLICY.maxBudgetTL,Number(cap)||TKP_COUPON_FEE_POLICY.maxBudgetTL));
-    coupon.leftover=round2ish((Number(cap)||1400)-Number(coupon.cost||0));
+    coupon.leftover=round2ish((Number(cap)||2000)-Number(coupon.cost||0));
   }
   // Bütçe/rescue sonrası son ortak-kapsam kontrolü. Yalnız 1:1 takas yaptığı
   // için kombinasyon ve maliyet değişmez; iki kupondaki 1-4 çekirdek aday geniş
@@ -3544,8 +4911,8 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
   for(const keyName of ['main','alt','surprise']){
     const c=built[keyName];if(!c||c.error)continue;
     // V320 son portföy DP'si kolonları değiştirebilir. Bu nedenle 700 TL tabanı
-    // ve 1.400 TL tavanı DP'den ÖNCE değil, kesin son seçimden SONRA da uygulanır.
-    // Ekrandaki sabit 700–1.400 sözleşmesi ile gerçek kupon maliyeti böyle eşleşir.
+    // ve 2.000 TL tavanı DP'den ÖNCE değil, kesin son seçimden SONRA da uygulanır.
+    // Ekrandaki sabit 700–2.000 sözleşmesi ile gerçek kupon maliyeti böyle eşleşir.
     const finalCap=tkpCouponBudgetFor(c.userCapTL||TKP_COUPON_FEE_POLICY.maxBudgetTL,keyName==='surprise'?'expert':(keyName==='alt'?'surprise':'main'));
     const finalBandFit=enforceCouponCostCap(c.legs,c.unit,finalCap);
     c.legs=finalBandFit.legs;c.combos=finalBandFit.combos;c.cost=finalBandFit.cost;
@@ -3556,8 +4923,12 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
     const effectiveCap=Math.max(finalCap,Math.ceil(Number(c.cost||0)/10)*10);
     c.maxBudgetTL=TKP_COUPON_FEE_POLICY.maxBudgetTL;c.userCapTL=effectiveCap;c.inputCapTL=finalCap;
     c.leftover=round2ish(effectiveCap-Number(c.cost||0));c.finalBudgetLock=true;
-    if(Number(c.cost)>TKP_COUPON_FEE_POLICY.maxBudgetTL+1e-9){c.error='Kupon 1.400 TL üst sınırını aşıyor.';c.budgetConflict=true;continue;}
-    if(Number(c.cost)<TKP_COUPON_FEE_POLICY.minBudgetTL-1e-9){c.error='Mevcut ayak/at sayılarıyla 1.000–1.400 TL aralığında geçerli kupon oluşturulamadı.';c.budgetConflict=true;continue;}
+    if(Number(c.cost)>TKP_COUPON_FEE_POLICY.maxBudgetTL+1e-9){
+      const bounded=enforceCouponCostCap(c.legs,c.unit,TKP_COUPON_FEE_POLICY.maxBudgetTL);
+      c.legs=bounded.legs;recalcCouponCost(c);
+    }
+    c.budgetAutoAdapted=true;
+    c.budgetTargetNote=Number(c.cost)<2500?'Hedef altinda: izin verilen ayak/genislikte en yakin kupon olusturuldu.':(Number(c.cost)>3000?'Hedef ustunde: yariş kosullariyla maliyet siniri saglanamadi.':'Hedef araliginda');
     tkpFinalEkuriInvariant(c,keyName==='main'?'main':'surprise');
   }
   // V320/rescue sonradan bir TEK'i çokluya çevirmiş olabilir. Nihai görünür
@@ -3577,7 +4948,7 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
     const cap=tkpCouponBudgetFor(c.userCapTL||TKP_COUPON_FEE_POLICY.maxBudgetTL,key==='surprise'?'expert':(key==='alt'?'surprise':'main'));
     if(Number(c.cost)<TKP_COUPON_FEE_POLICY.minBudgetTL-1e-9)tkpRaiseCouponCostToMinimum(c,TKP_COUPON_FEE_POLICY.minBudgetTL,TKP_COUPON_FEE_POLICY.maxBudgetTL);
     recalcCouponCost(c);const effectiveCap=Math.max(cap,Math.ceil(Number(c.cost||0)/10)*10);c.minimumBudgetTargetTL=TKP_COUPON_FEE_POLICY.minBudgetTL;c.minimumBudgetReached=Number(c.cost)>=TKP_COUPON_FEE_POLICY.minBudgetTL-1e-9;c.userCapTL=effectiveCap;c.leftover=round2ish(effectiveCap-Number(c.cost||0));c.finalBudgetLock=true;
-    if(Number(c.cost)<TKP_COUPON_FEE_POLICY.minBudgetTL-1e-9){c.error='TEK/2–3 ayak yapısı korunarak 1.000 TL alt sınırına ulaşılamadı.';c.budgetConflict=true;}
+    if(Number(c.cost)<TKP_COUPON_FEE_POLICY.minBudgetTL-1e-9){c.budgetTargetNote='Alt hedefe ulasilamadi; kupon mevcut secimlerle olusturuldu.';c.budgetAutoAdapted=true;}
   }
   // Taban bütçeyi dolduran son genişletme ortak liderleri yeniden ekleyebilir.
   // Bu en son aşamadır: yalnız aynı ayaktaki eşit sayıda aday takas edilir.
@@ -3614,7 +4985,112 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
   tkpProtectVisibleLegLeaders(built.alt,'alt');
   tkpProtectVisibleLegLeaders(built.surprise,'expert');
   globalThis.TKP_COUPON_COVERAGE?.enforceSet?.(built);
+  for(const name of ['main','alt','surprise'])tkpEnsureBottomConditionCouponCoverage(built[name],name);
+  tkpSynchronizeTwoHorseLegs(built);
+  tkpProtectVisibleMainCoverage(built.main);
+  // R19.47.31 NİHAİ PORTFÖY KİLİDİ: coverage/policy/leader katmanları bittikten sonra
+  // Bomba Avcısı ve 2-kupon konsensüsü bir kez daha uygulanır. Bundan sonra at listesini
+  // değiştiren optimizer yoktur; böylece BH2/BH3 veya iki kuponun ortak güçlü adayı
+  // paylaşım/export aşamasına kadar sessizce kaybolamaz. Salt 1:1 takas olduğu için maliyet sabittir.
+  tkpApplyBmbRescueSwap(built.main);tkpApplyBmbRescueSwap(built.alt);tkpApplyBmbRescueSwap(built.surprise);
+  tkpSynchronizeWideCouponConsensus(built);
+  // Güçlü P3, final optimizer/çeşitlendirme katmanlarından sonra da yalnız tek kupona düşmesin.
+  // Maliyet sabit 1:1 takasla korunur; TEK'lere dokunulmaz.
+  tkpEnsureStrongP3CrossCouponCoverage(built);
+  tkpApplyTommyFinalCouponRules(built);
+  tkpExperimentalThreeRolePortfolio(built);
+  tkpBridgeUnprovenBhToCoupons(built);
   if(typeof tkpCouponCheck==='function')tkpCouponCheck();
+// TKP 3005 — ortak TEK seçim kapısı. Sadece kupondaki tek adayın kimliğini
+// değiştirebilir; ayak/kolon sayısını, bütçeyi veya sürpriz kapsamını değiştirmez.
+// Tek Takibi yalnız daha önce sonuçlanmış LIVE_FORWARD kayıtlarından okunur.
+function tkpFinalLearnedSingleOptimizer(coupon, role){
+  if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs))return coupon;
+  const audit=[];
+  for(const leg of coupon.legs){
+    if(!Array.isArray(leg.picks)||leg.picks.length!==1)continue;
+    const current=leg.picks[0], race=leg.r||leg.x?.r||{};
+    const pool=(leg.allHorses?.length?leg.allHorses:race.horses||[])
+      .filter(h=>h&&!isNonRunner(h)&&canBeCouponSingle(h)&&!tkpLegacyXKulisBreaksSingle(h));
+    if(!pool.length)continue;
+    const maxTkp=Math.max(0.001,...pool.map(h=>Number(h.score)||0));
+    const maxAgf=Math.max(0.001,...pool.map(h=>Number(h.agf)||0));
+    const scored=pool.map(h=>{
+      const tkp=Math.max(0,Number(h.score)||0)/maxTkp;
+      const agf=Math.max(0,Number(h.agf)||0)/maxAgf;
+      const track=tkpSingleTrackingDecisionForRace(race,h);
+      // Tarihsel tek başarısı yeterli örnek yoksa yalnız nötr bilgi verir.
+      const support=(Number(h.bmb)===1?0.06:0)+(Number(h.odb)===1?0.035:0);
+      const score=0.60*tkp+0.25*agf+support+(track?0.14*(track.rate-0.25):0);
+      return {h,score,track};
+    }).sort((a,b)=>b.score-a.score||String(a.h.horse_no).localeCompare(String(b.h.horse_no)));
+    const original=scored.find(z=>String(z.h.horse_no)===String(current.horse_no));
+    const best=scored[0];
+    // Sadece anlamlı iyileşmede seçim değişir. Hafif farklarda güçlü mevcut
+    // TEK korunur; geçmiş yarış sonucu veya yarış sonrası X kesinlikle okunmaz.
+    const changed=!!original&&best&&best.score>original.score+0.10;
+    if(changed)leg.picks=[best.h];
+    const selected=changed?best:(original||{h:current,score:0,track:null});
+    leg.confidencePlan={...(leg.confidencePlan||{}),learnedSingleOptimizer:{
+      version:'TKP_3005',preRaceOnly:true,horseNo:String(selected.h.horse_no),
+      changed,previousHorseNo:String(current.horse_no),
+      score:Number(selected.score.toFixed(4)),trackingSample:selected.track?.total||0,
+      trackingRate:selected.track?.rate??null}};
+    audit.push({leg:race.leg||null,horseNo:String(selected.h.horse_no),changed});
+  }
+  coupon.learnedSingleOptimizerAudit={version:'TKP_3005',active:true,decisions:audit};
+  return coupon;
+}
+
+  // SON TEK KILIDI: Tum kurtarma, kapsama, portfoy ve takas adimlarindan sonra.
+  // Riskli TEK "guvenilir" olarak etiketlenmez; yalniz gecerli aday varsa daraltilir.
+  // Eski salt-okunur kupon goruntuleri asla degistirilmez.
+  for(const [couponKey,role] of [['main','normal'],['alt','alt'],['surprise','expert']]){
+    const coupon=built[couponKey];
+    if(!coupon||coupon.error||coupon.disabled||coupon.readOnlySnapshot||!Array.isArray(coupon.legs)||!coupon.legs.length)continue;
+    if(!coupon.legs.some(leg=>(leg.picks||[]).length===1)){
+      tkpEnsureCouponShape(coupon,role);
+      if(!coupon.legs.some(leg=>(leg.picks||[]).length===1)){
+        // Son guvenli secenek: mevcut altı ayakta en guclu yarisa-oncesi adayi tek yap.
+        // Uygun bir aday bulunamiyorsa eksik aday uydurulmaz.
+        const candidates=coupon.legs.map(leg=>{
+          const pool=(leg.ordered||leg.displayOrder||leg.allHorses||leg.r?.horses||[])
+            .filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+          const candidate=pool.find(h=>canBeCouponSingle(h))||pool[0];
+          const score=Number(candidate?.score)||0;
+          return {leg,candidate,score};
+        }).filter(z=>z.candidate).sort((a,b)=>b.score-a.score);
+        if(candidates.length){candidates[0].leg.picks=[candidates[0].candidate];coupon.singleAutoFallback=true;}
+        else coupon.minimumSingleUnmet=true;
+      }
+      recalcCouponCost(coupon);
+      coupon.minimumSingleEnforced=true;
+    }
+    tkpFinalLearnedSingleOptimizer(coupon,role);
+    // TKP_3006: En az bir TEK kilitlendikten sonra maliyeti 2.500-3.000 TL
+    // bandina yukselt. Var olan tekler tkpRaiseCouponCostToMinimum tarafindan
+    // korunur; bu fonksiyon sadece diger ayaklara aday ekler.
+    recalcCouponCost(coupon);
+    const lastBudgetCap=TKP_COUPON_FEE_POLICY.maxBudgetTL;
+    if(Number(coupon.cost)<2500-1e-9)
+      tkpRaiseCouponCostToMinimum(coupon,2500,lastBudgetCap);
+    recalcCouponCost(coupon);
+    coupon.finalSingleCount=coupon.legs.filter(leg=>(leg.picks||[]).length===1).length;
+    coupon.minimumBudgetTargetTL=2500;
+    coupon.minimumBudgetReached=Number(coupon.cost)>=2500-1e-9;
+    coupon.budgetTargetRangeTL=[2500,3000];
+    coupon.finalSingleAndBudgetAudit={version:'TKP_3006',singleCount:coupon.finalSingleCount,costTL:Number(coupon.cost||0),
+      minimumTL:2500,maximumTL:3000,valid:coupon.finalSingleCount>=1&&Number(coupon.cost)>=2500-1e-9&&Number(coupon.cost)<=3000+1e-9};
+    if(!coupon.finalSingleAndBudgetAudit.valid){
+      // Kuponu hata durumuna dusurme: en yakin uygulanabilir bedeli ve sebebini goster.
+      coupon.budgetAutoAdapted=true;
+      coupon.budgetConflict=false;
+      coupon.budgetTargetNote=coupon.finalSingleCount<1
+        ? 'Uygun tek adayi yok; mevcut tahmin kuponu gosterildi.'
+        : (Number(coupon.cost)<2500?'2.500 TL altinda en yakin uygulanabilir kupon olusturuldu.'
+          :'3.000 TL ustu; ust sinir zorunlu kontrol edilmelidir.');
+    }
+  }
   // R17.4: final kuponlar aynı P_WIN + EV + ROI + risk motorunda sıralanır.
   // Bu katman at listesini sessizce değiştirmez; hangi kuponun sermaye önceliği
   // taşıdığını ve beklenen değer/risk profilini final seçim üstüne yazar.
@@ -3637,6 +5113,7 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
       }
     }
   }catch(_e){}
+  tkpApplyFinalSurpriseTablePriority(built);
   _tkpLiveCouponSetCache.set(key,tkpCloneCouponSet(built));
   while(_tkpLiveCouponSetCache.size>TKP_LIVE_COUPON_CACHE_LIMIT)_tkpLiveCouponSetCache.delete(_tkpLiveCouponSetCache.keys().next().value);
   const ended=typeof performance!=='undefined'&&performance.now?performance.now():Date.now();
@@ -3653,12 +5130,12 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
 // canlı, Back Test ve tarihsel kalibrasyon) aynı bütçe bandını kullanır.
 // Algoritmanın aday sırası değişebilir; bir kuponun ücret kuralı değişemez.
 const TKP_COUPON_FEE_POLICY=Object.freeze({
-  version:'R16.82-ADAPTIVE-COUPON-FEE-1000-1400-HARD-90000',
+  version:'R16.82-ADAPTIVE-COUPON-FEE-1000-3000-HARD-120000-20261020',
   monthlyTargetTL:50000,
-  monthlyHardLimitTL:90000,
-  minBudgetTL:1000,
-  maxBudgetTL:1400,
-  defaultBudgetTL:1400
+  monthlyHardLimitTL:120000,
+  minBudgetTL:2500,
+  maxBudgetTL:3000,
+  defaultBudgetTL:2500
 });
 const TKP_COUPON_BUDGET_POLICY=Object.freeze({
   version:TKP_COUPON_FEE_POLICY.version,
@@ -3673,9 +5150,17 @@ function tkpClampCouponBudget(value,policy){
   const preferred=Number.isFinite(raw)&&raw>0?raw:policy.default;
   return Math.min(policy.max,Math.max(policy.min,preferred));
 }
+// Kupon başı azami bütçe: varsayılan 3000 (politika sınırı). Optimizer (tkpAutoUpdateCouponBudget)
+// 2000 TL üstü kuponların gerçek getirisi istatistiksel olarak anlamlı biçimde kötüyse tavanı
+// db.settings.coupon_budget_optimizer.maxBudgetTL ile (en az 1400) düşürür; yükseltemez.
+function tkpCouponMaxBudget(){
+  const hard=Number(TKP_COUPON_FEE_POLICY.maxBudgetTL)||3000;
+  try{const v=Number(typeof db!=='undefined'?db?.settings?.coupon_budget_optimizer?.maxBudgetTL:NaN);if(Number.isFinite(v)&&v>=2500&&v<=hard)return v;}catch(_){ }
+  return hard;
+}
 function tkpCouponBudgetFor(value,type='main'){
   const p=type==='expert'||type==='surprise'||type==='alt'?TKP_COUPON_FEE_POLICY:TKP_COUPON_FEE_POLICY;
-  return tkpClampCouponBudget(value,{min:p.minBudgetTL,max:p.maxBudgetTL,default:p.defaultBudgetTL});
+  return tkpClampCouponBudget(value,{min:p.minBudgetTL,max:Math.min(p.maxBudgetTL,tkpCouponMaxBudget()),default:Math.min(p.defaultBudgetTL,tkpCouponMaxBudget())});
 }
 function tkpCouponUnitFor(hippodrome,legCount=6){
   const value=typeof ganyanUnitPrice==='function'?ganyanUnitPrice(hippodrome,legCount):null;
@@ -3803,6 +5288,10 @@ function tkpRequiredBudgetFromCouponError(coupon){
 }
 function tkpAttachAdaptiveBudgetMeta(built,maxMain,maxSurprise,policy=null){
   globalThis.TKP_COUPON_COVERAGE?.enforceSet?.(built);
+  if(typeof tkpSynchronizeTwoHorseLegs==='function')tkpSynchronizeTwoHorseLegs(built);
+  tkpProtectVisibleMainCoverage(built.main);
+  tkpApplyAgfOrderToCoupon(built.main,'main');tkpApplyAgfOrderToCoupon(built.surprise,'surprise');tkpApplyAgfOrderToCoupon(built.alt,'alt');
+  for(const name of ['main','alt','surprise'])tkpAlignFinalCouponOrder(built[name]);
   const meta={
     baseMain:1000,baseSurprise:1000,maxMain,maxSurprise,
     mainBudget:Number(built.main?.budgetTL)||1000,
@@ -3817,9 +5306,21 @@ function tkpAttachAdaptiveBudgetMeta(built,maxMain,maxSurprise,policy=null){
     coupon.adaptiveBudget=meta;coupon.baseBudgetTL=1000;coupon.maxBudgetTL=max;coupon.userCapTL=max;
     coupon.dynamicBudgetTargetTL=Number(coupon.budgetTL)||1000;
     coupon.adaptiveBudgetRaised=Number(coupon.budgetTL)>1000;
-    coupon.adaptiveBudgetNote=`Zorluk hedefi: ${round2ish(coupon.dynamicBudgetTargetTL)} TL · Aralık: 1.000–1.400 TL · Maliyet: ${round2ish(Number(coupon.cost)||0)} TL`;
+    coupon.adaptiveBudgetNote=`Zorluk hedefi: ${round2ish(coupon.dynamicBudgetTargetTL)} TL · Aralık: 1.000–2.000 TL · Maliyet: ${round2ish(Number(coupon.cost)||0)} TL`;
     coupon.monthlyBankrollLimitTL=Number(policy?.monthlyHardLimitTL)||TKP_COUPON_BUDGET_POLICY.monthlyHardLimitTL;
   }
+  // R19.47.32: yukarıdaki enforce/senkron/görünür-lider/sıralama katmanları BH'yi sonradan
+  // çıkarabiliyordu (özellikle Normal kupon). Nihai BH kilidi en son, 1:1 takasla (maliyet sabit).
+  if(typeof tkpApplyBmbRescueSwap==='function'){
+    for(const key of ['main','alt','surprise'])if(built?.[key])tkpApplyBmbRescueSwap(built[key]);
+  }
+  // Canonical fast return and bounded fallback also publish through this boundary.
+  tkpApplyTommyFinalCouponRules(built);
+  meta.mainBudget=Number(built.main?.budgetTL)||1000;
+  meta.surpriseBudget=Number(built.alt?.budgetTL)||1000;meta.expertBudget=Number(built.surprise?.budgetTL)||1000;
+  meta.maxMain=Number(built.main?.maxBudgetTL)||maxMain;
+  meta.maxSurprise=Math.max(Number(built.alt?.maxBudgetTL)||maxSurprise,Number(built.surprise?.maxBudgetTL)||maxSurprise);
+  meta.escalated=['main','alt','surprise'].some(k=>Number(built[k]?.cost)>2000);
   return built;
 }
 
@@ -3924,6 +5425,18 @@ async function tkpBuildCouponSetAdaptiveCriticalAsync(raceResults,budgets={},opt
   let boundedPlan=null;
   let commentatorCache=null;
   try{
+    // A newly restored archive intentionally has no stale dataset signature.
+    // Compute its exact signature once, cooperatively, before any scoring calls.
+    if(!db?.learning_state?.dataset_signature&&typeof learningDatasetSignatureAsync==='function'){
+      const source=db,revision=typeof _tkpDbRevision==='number'?_tkpDbRevision:0;
+      await tkpCouponPause('Veri kimliği');
+      const signature=await learningDatasetSignatureAsync(source);
+      if(db!==source||(typeof _tkpDbRevision==='number'&&_tkpDbRevision!==revision))throw new Error('Hesap sırasında veri değişti; yeniden deneyin.');
+      source.learning_state=source.learning_state||{};
+      source.learning_state.dataset_signature=signature;
+    }
+    if(globalThis.TKPDegreeHistory)await globalThis.TKPDegreeHistory.prepare({pause:()=>tkpCouponPause('Derece geçmişi')});
+    if(globalThis.tkpPrepareHistoricalBandAsync)await globalThis.tkpPrepareHistoricalBandAsync({pause:()=>tkpCouponPause('Tarihsel tempo indeksi')});
     if(typeof globalThis.tkpPrepareCouponCommentatorCache==='function'){
       await tkpCouponPause('Yorumcu geçmişi');
       commentatorCache=await globalThis.tkpPrepareCouponCommentatorCache({pause:()=>tkpCouponPause()});
@@ -3935,12 +5448,35 @@ async function tkpBuildCouponSetAdaptiveCriticalAsync(raceResults,budgets={},opt
     // Önce altı ayağı, gerçek bütçesi ve 1–2 TEK'i tamamlanmış bir aday üret.
     // Ağır arama biterse onun sonucu seçilir; süre dolması tüm kartları yok etmez.
     if(globalThis.TKP_ARCHIVE_COUPON_PLANNER){
+      // Stored weights are used when present. On a cold archive, provisional
+      // weights prevent the planner's first learnedScores() call from starting
+      // a synchronous full-history fit before the coupon is visible.
+      if(hasImmediatePrime){
+        for(const item of raceResults||[])globalThis.tkpPrimeOnlinePositionsForImmediateRender(item?.r||item,[1,2,3,5]);
+      }
       await tkpCouponPause('İlk kapsama planı');
       const planner=globalThis.TKP_ARCHIVE_COUPON_PLANNER;
       const candidate=typeof planner.buildAsync==='function'
         ?await planner.buildAsync(raceResults,Math.min(policy.main,policy.surprise),{current:true,pause:()=>tkpCouponPause()})
         :planner.build(raceResults,Math.min(policy.main,policy.surprise),{current:true});
       tkpCouponCheck();
+      // The browser schedules full P1–P5 training after first paint. Keep the
+      // cooperative fit only for harnesses without the immediate-prime hook.
+      if(!hasImmediatePrime&&typeof globalThis.tkpPretrainOnlinePositionsAsync==='function'){
+        for(const item of raceResults||[]){
+          await tkpCouponPause('P1 geçmiş öğrenmesi');
+          await globalThis.tkpPretrainOnlinePositionsAsync(item.r||item,[1],{
+            yieldToUi:()=>tkpCouponPause(),checkpoint:()=>tkpCouponCheck()
+          });
+        }
+      }
+      // Prepare exact historical feature statistics before synchronous TEK scoring.
+      if(typeof tkpPrewarmAltiliWinnerOrderAsync==='function'){
+        for(const item of raceResults||[]){
+          await tkpPrewarmAltiliWinnerOrderAsync(item.r||item,null,{forceFull:true,pause:()=>tkpCouponPause('Geçmiş özellik istatistikleri')});
+        }
+      }
+      for(const role of ['main','alt','surprise'])tkpApplyCouponSelectionPolicies(candidate[role]);
       if(globalThis.TKP_COUPON_COVERAGE){
         const coverage=globalThis.TKP_COUPON_COVERAGE;
         await tkpCouponPause('TEK ve ayak dağılımı');
@@ -3958,8 +5494,16 @@ async function tkpBuildCouponSetAdaptiveCriticalAsync(raceResults,budgets={},opt
         }
       }
       tkpCouponCheck();
+      // R19.47.32: canlı "hızlı kanonik plan" yolu BH kilidini hiç çalıştırmıyordu
+      // (kilit yalnız klasik kurucuda vardı). Coverage/policy katmanlarından SONRA
+      // 1:1 takasla BH1+BH2+BH3 (5+ at) ve ODB1 (8+ at) burada da uygulanır; maliyet sabit.
+      if(typeof tkpApplyBmbRescueSwap==='function'){
+        for(const role of ['main','alt','surprise'])tkpApplyBmbRescueSwap(candidate[role]);
+      }
+      tkpBridgeUnprovenBhToCoupons(candidate);
+      for(const role of ['main','alt','surprise'])if(candidate[role]?.legs)tkpCaptureCoverageAudit('canonical-final-'+role,candidate[role].legs,{cost:candidate[role].cost,capTL:3000});
       const completeCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].legs?.length===6);
-      const budgetCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].cost>=1000&&candidate[k].cost<=1400);
+      const budgetCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].cost>=1000&&candidate[k].cost<=(Number(candidate[k].budgetExpansion?.capTL)||3000));
       if((options.currentReplayFast===true&&completeCandidate)||budgetCandidate){
         boundedPlan=candidate;run.refinementBudgetMs=25000;
       }
@@ -4252,7 +5796,8 @@ function recalcCouponCost(res){
   // maliyet yeniden hesaplandığında aynı formatla tazeleniyor.
   if(res.adaptiveBudgetNote!=null&&!res.readOnlySnapshot){
     const target=Number(res.dynamicBudgetTargetTL||res.budgetTL)||1000;
-    res.adaptiveBudgetNote=`Zorluk hedefi: ${round2ish(target)} TL · Aralık: 1.000–1.400 TL · Maliyet: ${round2ish(Number(res.cost)||0)} TL`;
+    const cap=Number(res.budgetExpansion?.capTL)||3000;
+    res.adaptiveBudgetNote=`Kapsama hedefi: ${round2ish(target)} TL · Tavan: ${round2ish(cap)} TL · Maliyet: ${round2ish(Number(res.cost)||0)} TL`;
   }
 }
 
@@ -4306,6 +5851,13 @@ function tkpCouponMeetingLocked(raceResults,now=new Date()){
   }
   return starts.length?now.getTime()>=Math.min(...starts):false;
 }
+function tkpCouponGenerationPolicy(raceResults){
+  const hasRaces=Array.isArray(raceResults)&&raceResults.length>0;
+  const retrospective=hasRaces&&tkpCouponMeetingLocked(raceResults);
+  return {allowed:hasRaces,retrospective,persistPreRaceSnapshot:hasRaces&&!retrospective,
+    source:retrospective?'SONRADAN_HESAPLANAN':'SISTEM_GUNCEL_VERI'};
+}
+if(typeof globalThis!=='undefined')globalThis.tkpCouponGenerationPolicy=tkpCouponGenerationPolicy;
 // R16.46: Toplantının ilk ayağı başladı diye kullanıcıyı geçmiş/replay kuponuna
 // zorlamıyoruz. "Kupon Oluştur" mevcut yarış-öncesi snapshotın yalnız henüz
 // başlamamış ayaklarını göstermeli. Başlangıç saati bilinmeyen ve sonucu olmayan
@@ -4356,6 +5908,39 @@ function tkpPersistFinalCouponSnapshot(){
     return saveAutomaticCouponSnapshot(lastRaceResults,activeCoupons,budgets,'SON_KUPON');
   }catch(_e){return false;}
 }
+// Explicit user edits are a display record, separate from immutable pre-race
+// evidence. They cannot turn a missed historical ticket into a backtest win.
+function tkpApplyManualCouponDisplayOverrides(raceResults){
+  const ctx=couponSnapshotContext(raceResults,'');
+  const saved=db?.settings?.coupon_manual_display_overrides?.[ctx.key];
+  if(!saved)return false;
+  let applied=false;
+  for(const change of saved.changes||[]){
+    const coupon=activeCoupons?.[change.typeKey],leg=coupon?.legs?.find(l=>Number(l.r?.leg)===Number(change.leg));
+    if(!leg)continue;
+    const horses=leg.allHorses||leg.r?.horses||[];
+    const picks=(change.picks||[]).map(no=>tkpFindSnapshotHorseByNo(horses,no)).filter(Boolean);
+    if(picks.length!==change.picks.length)continue;
+    leg.picks=picks;recalcCouponCost(coupon);
+    coupon.verifiedAutomaticSnapshot=false;coupon.snapshotSource='MANUEL';coupon.decisionSnapshot=null;
+    coupon.adaptiveBudgetNote=`✏️ Kullanıcı seçimi · ${saved.created_at} · asıl yarış öncesi kayıt ve Back Test korunur`;
+    applied=true;
+  }
+  return applied;
+}
+function tkpSetManualCouponPicks(typeKey,legNo,nos){
+  const leg=tkpCouponLeg(typeKey,legNo);
+  const picks=Array.from(new Set((nos||[]).map(String)));
+  if(!leg||!picks.length||picks.some(no=>!(leg.allHorses||leg.r?.horses||[]).some(h=>String(h.horse_no)===no&&!isNonRunner(h))))return false;
+  db.settings=db.settings||{};
+  const ctx=couponSnapshotContext(lastRaceResults,''),store=db.settings.coupon_manual_display_overrides=db.settings.coupon_manual_display_overrides||{};
+  const previous=store[ctx.key]?.changes||[];
+  store[ctx.key]={created_at:new Date().toISOString(),changes:previous.filter(x=>x.typeKey!==typeKey||Number(x.leg)!==Number(legNo)).concat([{typeKey,leg:Number(legNo),picks}])};
+  tkpApplyManualCouponDisplayOverrides(lastRaceResults);renderCouponCard(typeKey);
+  log('MANUAL_COUPON_SELECTION',`${ctx.date} ${ctx.hippodrome} · ${typeKey} · ${legNo}. ayak: ${picks.join('–')}. Asıl snapshot korunur.`);
+  return saveDB(false,true);
+}
+if(typeof globalThis!=='undefined')globalThis.tkpSetManualCouponPicks=tkpSetManualCouponPicks;
 function addHorseToCouponLeg(typeKey, legNo, horseNo){
   if(tkpCouponMeetingLocked(lastRaceResults))return false;
   const res=activeCoupons[typeKey];
@@ -4379,7 +5964,7 @@ function addHorseToCouponLegFromBH(typeKey,legNo,horseNo){
 }
 function addHorseToAllCoupons(legNo,horseNo){
   let added=0;
-  for(const typeKey of ['main','main2','surprise']){
+  for(const typeKey of ['main','alt','surprise']){
     // V55: Geniş kupon kaldırıldı. Manuel BH override üç canlı kupona uygulanır;
     // otomatik TEK motorunun yarış-öncesi kuralı değişmez.
     if(addHorseToCouponLeg(typeKey,legNo,horseNo))added++;
@@ -4388,7 +5973,7 @@ function addHorseToAllCoupons(legNo,horseNo){
   return added;
 }
 function tkpHorseInAnyActiveCouponLeg(legNo,horseNo){
-  return ['main','main2','surprise'].some(typeKey=>{
+  return ['main','alt','surprise'].some(typeKey=>{
     const leg=tkpCouponLeg(typeKey,legNo);
     return !!leg?.picks?.some(h=>String(h?.horse_no)===String(horseNo));
   });
@@ -4474,11 +6059,13 @@ function _sideBetPredictionLogBaseGroups(){
     : 'V33-SIDE-BET-EXACT-P1-P5';
   const revision=typeof sideBetPredictionLogRevisionSignature==='function'
     ? sideBetPredictionLogRevisionSignature(db) : String(log.length);
-  const cacheKey=revision+'|'+currentStrategy;
+  const cacheKey=revision+'|'+currentStrategy+'|FULL_PRE_RACE_POOL_V2';
   if(_predictionLogGroupsCache.key===cacheKey && _predictionLogGroupsCache.races){
-    return {currentStrategy,races:_predictionLogGroupsCache.races};
+    return {currentStrategy,races:_predictionLogGroupsCache.races,..._predictionLogGroupsCache.provenance};
   }
-  const allRows=log.filter(x=>x.resolved===1 && Number(x.finish_position)>=1 && Number(x.finish_position)<=5);
+  // Havuz sonuçtan önceki bütün adayları korur. Yalnız ilk beşi filtrelemek,
+  // kaybeden adayları silip geniş havuzlarda yapay %100 isabet üretiyordu.
+  const allRows=log.filter(x=>Number(x.resolved)===1 && !(typeof isNonRunner==='function'&&isNonRunner(x)));
   // İstatistik ve karşılaştırma tabloları yüklenen TÜM doğrulanmış tahmin
   // kayıtlarından güncellenir. Canlı terfi kapısı yine ayrı tutulur; tarihsel
   // olarak sonradan kurulmuş kayıtlar gerçek-para canlı kanıtı gibi sayılmaz.
@@ -4498,6 +6085,7 @@ function _sideBetPredictionLogBaseGroups(){
   _predictionLogGroupsCache.key=cacheKey;
   _predictionLogGroupsCache.currentStrategy=currentStrategy;
   _predictionLogGroupsCache.races=races;
+  _predictionLogGroupsCache.provenance={researchOnly,liveEligible:liveRows.length>0&&liveRows.length===rows.length,liveRows:liveRows.length,allRows:rows.length};
   return {currentStrategy,races,researchOnly,liveEligible:liveRows.length>0&&liveRows.length===rows.length,liveRows:liveRows.length,allRows:rows.length};
 }
 
@@ -4505,6 +6093,12 @@ function sideBetPredictionLogBacktest(targetRace){
   const base=_sideBetPredictionLogBaseGroups();
   let races=base.races;
   if(targetRace){
+    const targetDate=String(targetRace.race_date||targetRace.date||'').slice(0,10);
+    races=races.filter(g=>{
+      const row=g[0]||{},date=String(row.race_date||row.date||'').slice(0,10);
+      if(/^\d{4}-\d{2}-\d{2}$/.test(targetDate)&&/^\d{4}-\d{2}-\d{2}$/.test(date))return date<targetDate;
+      return typeof tkpRowIsBeforeTarget==='function'&&tkpRowIsBeforeTarget(row,targetRace,db);
+    });
     const hip=fold(targetRace.hippodrome||''), cond=fold(targetRace.condition_family||''), surf=fold(targetRace.surface||''), breed=fold(targetRace.breed||''), dist=Number(targetRace.distance)||0;
     const exact=races.filter(g=>{
       const a=g[0]||{};
@@ -4553,8 +6147,8 @@ function sideBetPredictionLogBacktest(targetRace){
     }
   }
   for(const g of Object.values(out)){g.rate=g.total?g.ok/g.total:0;g.ready=g.total>=SIDE_BET_MIN_RACES;}
-  const researchOnly=base.researchOnly===true;
-  out._profile={level:researchOnly?'Tarihsel araştırma':'Saat-kilitli canlı tahmin',label:researchOnly?'Arşivden yeniden kurulmuş sonuçlar':'Yarış öncesi kilitli tahmin sonuçları',rows:races,source:researchOnly?'historical_research':'live_pre_race_locked',researchOnly,liveEligible:!researchOnly};
+  const researchOnly=races.some(g=>g.some(row=>!sideBetLivePreRaceLocked(row)));
+  out._profile={level:researchOnly?'Tarihsel araştırma':'Saat-kilitli canlı tahmin',label:researchOnly?'Arşivden yeniden kurulmuş sonuçlar':'Yarış öncesi kilitli tahmin sonuçları',rows:races,source:researchOnly?'historical_research':'live_pre_race_locked',researchOnly,liveEligible:races.length>0&&!researchOnly};
   return out;
 }
 
@@ -4563,7 +6157,7 @@ function sideBetPredictionLogBacktest(targetRace){
 function sideBetPanelStatsFast(targetRace){
   const revision=typeof sideBetPredictionLogRevisionSignature==='function'
     ? sideBetPredictionLogRevisionSignature(db) : String((db?.prediction_log||[]).length);
-  const cacheKey=`PANEL_STATS|${revision}|${sideBetCacheKey(targetRace)}`;
+  const cacheKey=`PANEL_STATS_V2_FULL_PRE_RACE_POOL|${revision}|${sideBetCacheKey(targetRace)}`;
   if(_sideBetPanelStatsCache.has(cacheKey)) return _sideBetPanelStatsCache.get(cacheKey);
   const logged=sideBetPredictionLogBacktest(targetRace);
   const out={};
@@ -4584,7 +6178,12 @@ function tkpOptimizeVerifiedBetCombinations(){
     const aa=a?.[0]||{},bb=b?.[0]||{};return String(aa.race_date||'').localeCompare(String(bb.race_date||''))||TKP_TR_COLLATOR.compare(fold(aa.hippodrome||''),fold(bb.hippodrome||''))||(Number(aa.leg)||0)-(Number(bb.leg)||0);
   });
   const wilson=(ok,total,z=1.96)=>{if(!total)return 0;const p=ok/total,zz=z*z,den=1+zz/total;return (p+zz/(2*total)-z*Math.sqrt((p*(1-p)+zz/(4*total))/total))/den;};
+  const _rankMemo=new WeakMap();
   const rankNos=(group,pos)=>{
+    if(group&&typeof group==='object'){let m=_rankMemo.get(group);if(!m){m=[];_rankMemo.set(group,m);}if(m[pos])return m[pos];const out=rankNosRaw(group,pos);m[pos]=out;return out;}
+    return rankNosRaw(group,pos);
+  };
+  const rankNosRaw=(group,pos)=>{
     const field='sidebet_rank_p'+pos,has=(group||[]).some(row=>Number(row?.[field])>0);
     return (group||[]).slice().sort((a,b)=>(has?((Number(a?.[field])||999)-(Number(b?.[field])||999)):((Number(a?.predicted_rank)||999)-(Number(b?.predicted_rank)||999)))||Number(b?.score||0)-Number(a?.score||0)||TKP_TR_COLLATOR_NUM.compare(String(a?.horse_no),String(b?.horse_no))).map(row=>String(row.horse_no));
   };
@@ -4601,26 +6200,207 @@ function tkpOptimizeVerifiedBetCombinations(){
     quintet:[[1,4,4,5,7],[2,5,5,6,8],[3,5,6,7,9],[3,6,7,8,10]]
   };
   const splitRows=rows=>{const a=Math.floor(rows.length*.60),b=Math.floor(rows.length*.80);return {train:rows.slice(0,a),validation:rows.slice(a,b),holdout:rows.slice(b)};};
-  const evaluate=(rows,widths)=>{let total=0,hit=0,combos=0;for(const group of rows){const seqs=actualSequences(group,widths.length);if(!seqs.length)continue;const pools=widths.map((w,i)=>rankNos(group,i+1).slice(0,w));if(pools.some(p=>!p.length))continue;total++;combos+=combinationCount(pools);if(seqs.some(seq=>seq.every((no,i)=>pools[i].includes(no))))hit++;}return {total,hit,rate:total?hit/total:0,wilsonLower:wilson(hit,total),avgCombinations:total?combos/total:0};};
+  // GETİRİ (ROI) KANITI: resmî TJK ikramiyesi (race.payouts) ile maliyet (kombinasyon x birim).
+  // İkramiyesi bilinmeyen yarış ROI'ye katılmaz. En büyük tek ödeme çıkarılmış ROI (roiExTop1)
+  // tek şanslı ikramiyenin kararı çevirmesini engeller.
+  const payoutRaceIndex=new Map();
+  for(const r of (typeof db!=='undefined'&&db?.races)||[]){if(!Array.isArray(r?.payouts)||!r.payouts.length)continue;payoutRaceIndex.set([r.race_date,fold(r.hippodrome||''),Number(r.altili_no)||0,Number(r.leg)||0].join('|'),r);}
+  const ROI_PAYOUT_KEYS={sirali:['sirali_ikili'],triple:['uclu_bahis','sirali_uclu'],quartet:['tabela'],quintet:['sirali_5li']};
+  const ROI_UNITS={sirali:'sirali',triple:'uclu',quartet:'dortlu',quintet:'sirali5li'};
+  let roiProduct='';
+  const evaluate=(rows,widths)=>{let total=0,hit=0,combos=0,rCost=0,rRet=0,rRaces=0,rMax=0;const keys=ROI_PAYOUT_KEYS[roiProduct],unit=Number((typeof SIDE_BET_UNITS!=='undefined'&&SIDE_BET_UNITS[ROI_UNITS[roiProduct]])||0);
+    for(const group of rows){const seqs=actualSequences(group,widths.length);if(!seqs.length)continue;const pools=widths.map((w,i)=>rankNos(group,i+1).slice(0,w));if(pools.some(p=>!p.length))continue;const cc=combinationCount(pools);total++;combos+=cc;const ok=seqs.some(seq=>seq.every((no,i)=>pools[i].includes(no)));if(ok)hit++;
+      if(keys&&unit>0){const g=group[0]||{},race=payoutRaceIndex.get([g.race_date,fold(g.hippodrome||''),Number(g.altili_no)||0,Number(g.leg)||0].join('|'));const entries=(race?.payouts||[]).filter(e=>keys.includes(e.key));
+        if(entries.length){rRaces++;rCost+=cc*unit;let got=0;if(ok)for(const e of entries){if(!e.rollover&&sideBetPayoutEntryMatchesPools(e,pools))got+=Number(e.amount)||0;}rRet+=got;if(got>rMax)rMax=got;}}}
+    return {total,hit,rate:total?hit/total:0,wilsonLower:wilson(hit,total),avgCombinations:total?combos/total:0,roiRaces:rRaces,roiCost:rCost,roiReturn:rRet,roi:rCost>0?(rRet-rCost)/rCost:null,roiExTop1:rCost>0?(rRet-rMax-rCost)/rCost:null};};
   const recommendations={};
+  // POZİSYON DAĞILIMI ARAMASI (Tommy 20261018): sabit aday listesi yerine, mevcut ayardan başlayıp
+  // her pozisyonun havuz genişliğini ±1 oynatan tepe-tırmanış. Hedef: doğrulama diliminde
+  // en büyük-tek-ödeme-çıkarılmış ROI (kâr yoksa en az zarar, eşitlikte en ucuz). Seçim train/validation'da
+  // yapılır, holdout yalnız son kabulde kullanılır.
+  const costTolOf=product=>(((typeof db!=="undefined"&&db?.settings||{}).verified_bet_optimizer||{}).costTolerance||{})[product]??({triple:2.5,quartet:4.5,quintet:7.5,sirali:1.25,cifte:2.5}[product]||1.25);
+  const searchWidths=({product,fallback,seeds,evalFn,rowsSplit,maxW=12})=>{
+    const cache=new Map();
+    const run=w=>{const k=w.join(',');if(!cache.has(k))cache.set(k,{widths:[...w],train:evalFn(rowsSplit.train,w),validation:evalFn(rowsSplit.validation,w),holdout:evalFn(rowsSplit.holdout,w)});return cache.get(k);};
+    const base=run(fallback);
+    const roiReady=base.validation.roiRaces>=50&&base.validation.roi!==null&&base.holdout.roiRaces>=50;
+    const cap=base.validation.avgCombinations*Math.max(1.25,Number(costTolOf(product))||1.25);
+    const score=x=>roiReady?(x.validation.roiExTop1+0.5*x.validation.roi)/1.5-0.004*Math.log1p(x.validation.avgCombinations):(x.validation.wilsonLower-Math.log1p(x.validation.avgCombinations)*.012);
+    const ok=x=>x.train.total>0&&x.validation.total>0&&x.validation.avgCombinations<=cap&&x.validation.rate>=base.validation.rate*0.6; // aşırı dar (isabeti çökerten) dağılımı engelle
+    let cur=base;for(const w of seeds||[]){const c=run(w);if(ok(c)&&(!ok(cur)||score(c)>score(cur)))cur=c;}
+    for(let step=0;step<30;step++){
+      let best=null;
+      for(let i=0;i<cur.widths.length;i++)for(const d of [-1,1]){
+        const w=cur.widths.slice();w[i]+=d;if(w[i]<1||w[i]>maxW)continue;
+        const c=run(w);if(ok(c)&&score(c)>score(best||cur)+1e-9)best=c;
+      }
+      if(!best)break;cur=best;
+    }
+    return {tested:[...cache.values()],selected:cur,baseline:base,roiReady};
+  };
+  const decide=({product,res,fallback})=>{
+    const selected=res.selected,baseline=res.baseline,roiReady=res.roiReady,h=selected.holdout,base=baseline.holdout,changed=selected.widths.join(',')!==fallback.join(',');
+    const costTol=Math.max(1.25,Number(costTolOf(product))||1.25);
+    const roiBetter=h.roiRaces>=50&&h.roi>base.roi+0.02&&h.roiExTop1>=base.roiExTop1&&h.avgCombinations<=base.avgCombinations*costTol;
+    // Kâr yoksa maliyete göre: mevcut ayar zarardaysa, getiri oranı bozulmadan en az %20 ucuzlayan dağılım kabul edilir.
+    const cheaper=h.roiRaces>=50&&base.roi<0&&h.avgCombinations<=base.avgCombinations*0.8&&h.roi>=base.roi-0.01&&h.roiExTop1>=base.roiExTop1-0.01;
+    const hitBetter=(h.wilsonLower>=base.wilsonLower&&h.rate>=base.rate&&h.avgCombinations<=base.avgCombinations*costTol&&(costTol<=1.25||h.wilsonLower>=base.wilsonLower+.03))||(h.wilsonLower>=base.wilsonLower+.03&&h.avgCombinations<=base.avgCombinations*1.10);
+    const accepted=Boolean(changed&&h.total>0&&(roiReady?(roiBetter||cheaper):hitBetter));
+    const profitable=roiReady?(accepted?h.roi:base.roi)>0:null;
+    return {accepted,leakageSafe:true,roiDriven:roiReady,profitable,widths:accepted?selected.widths:fallback,candidateWidths:selected.widths,baselineWidths:fallback,holdoutSample:h.total||0,holdout:h,baselineHoldout:base,
+      reason:accepted?(roiReady?(roiBetter?'Holdout getirisi (ROI) iyileşti':'Kâr yok: getiri korunarak maliyet düşürüldü'):'Kronolojik holdout iyileşmesi doğrulandı'):'Holdout üstünlüğü kanıtlanmadı; mevcut ayar korundu',tested:res.tested};
+  };
   for(const product of ['sirali','triple','quartet','quintet']){
-    const fallback=tkpEffectiveSideBetWidths(product),candidates=candidateSets[product];
-    if(!candidates.some(w=>w.join(',')===fallback.join(',')))candidates.push(fallback);
-    const split=splitRows(groups),tested=candidates.map(widths=>({widths:[...widths],train:evaluate(split.train,widths),validation:evaluate(split.validation,widths),holdout:evaluate(split.holdout,widths)}));
-    const viable=tested.filter(x=>x.train.total>0&&x.validation.total>0).sort((a,b)=>(b.validation.wilsonLower-Math.log1p(b.validation.avgCombinations)*.012)-(a.validation.wilsonLower-Math.log1p(a.validation.avgCombinations)*.012));
-    const selected=viable[0]||tested.find(x=>x.widths.join(',')===fallback.join(','))||tested[0],baseline=tested.find(x=>x.widths.join(',')===fallback.join(','))||selected;
-    const h=selected.holdout,base=baseline.holdout,changed=selected.widths.join(',')!==fallback.join(',');
-    const accepted=Boolean(changed&&h.total>0&&((h.wilsonLower>=base.wilsonLower&&h.rate>=base.rate&&h.avgCombinations<=base.avgCombinations*1.25)||(h.wilsonLower>=base.wilsonLower+.03&&h.avgCombinations<=base.avgCombinations*1.10)));
-    recommendations[product]={accepted,leakageSafe:true,widths:accepted?selected.widths:fallback,candidateWidths:selected.widths,baselineWidths:fallback,holdoutSample:h.total,holdout:h,baselineHoldout:base,reason:accepted?'Kronolojik holdout iyileşmesi doğrulandı':'Holdout üstünlüğü kanıtlanmadı; mevcut ayar korundu',tested};
+    roiProduct=product;
+    const fallback=tkpEffectiveSideBetWidths(product),split=splitRows(groups);
+    const res=searchWidths({product,fallback,seeds:candidateSets[product],evalFn:evaluate,rowsSplit:split});
+    recommendations[product]=decide({product,res,fallback});
   }
   // Çifte iki ardışık koşudur; aynı sıralama kanıtıyla ayrı değerlendirilir.
   const byMeeting=new Map();for(const group of groups){const a=group?.[0]||{},key=`${a.race_date||''}|${fold(a.hippodrome||'')}`;if(!byMeeting.has(key))byMeeting.set(key,new Map());byMeeting.get(key).set(Number(a.leg)||0,group);}
   const pairs=[];for(const legs of byMeeting.values())for(const [leg,a] of legs){const b=legs.get(Number(leg)+1);if(b)pairs.push([a,b]);}
-  const evalDouble=(rows,widths)=>{let total=0,hit=0,combos=0;for(const [a,b] of rows){const sa=actualSequences(a,1),sb=actualSequences(b,1);if(!sa.length||!sb.length)continue;const p1=rankNos(a,1).slice(0,widths[0]),p2=rankNos(b,1).slice(0,widths[1]);total++;combos+=p1.length*p2.length;if(sa.some(x=>p1.includes(x[0]))&&sb.some(x=>p2.includes(x[0])))hit++;}return {total,hit,rate:total?hit/total:0,wilsonLower:wilson(hit,total),avgCombinations:total?combos/total:0};};
-  {const fallback=tkpEffectiveSideBetWidths('cifte'),candidates=[[3,3],[4,4],[4,5],[5,5],[5,6],[6,6]],split=splitRows(pairs),tested=candidates.map(widths=>({widths,train:evalDouble(split.train,widths),validation:evalDouble(split.validation,widths),holdout:evalDouble(split.holdout,widths)})),selected=tested.filter(x=>x.train.total>0&&x.validation.total>0).sort((a,b)=>(b.validation.wilsonLower-Math.log1p(b.validation.avgCombinations)*.012)-(a.validation.wilsonLower-Math.log1p(a.validation.avgCombinations)*.012))[0]||tested.find(x=>x.widths.join(',')===fallback.join(',')),baseline=tested.find(x=>x.widths.join(',')===fallback.join(','))||selected,h=selected?.holdout||{},base=baseline?.holdout||{},changed=selected&&selected.widths.join(',')!==fallback.join(','),accepted=Boolean(changed&&h.total>0&&h.wilsonLower>=base.wilsonLower&&h.rate>=base.rate&&h.avgCombinations<=base.avgCombinations*1.25);recommendations.cifte={accepted,leakageSafe:true,widths:accepted?selected.widths:fallback,candidateWidths:selected?.widths||fallback,baselineWidths:fallback,holdoutSample:h.total||0,holdout:h,baselineHoldout:base,reason:accepted?'Kronolojik holdout iyileşmesi doğrulandı':'Holdout üstünlüğü kanıtlanmadı; mevcut ayar korundu',tested};}
+  // Çifte ikramiyesi ikinci koşunun (b) payouts kaydında tutulur (kartlar da nextRace'ten okur).
+  const evalDouble=(rows,widths)=>{let total=0,hit=0,combos=0,rCost=0,rRet=0,rRaces=0,rMax=0;const unit=Number((typeof SIDE_BET_UNITS!=='undefined'&&SIDE_BET_UNITS.cifte)||0);
+    for(const [a,b] of rows){const sa=actualSequences(a,1),sb=actualSequences(b,1);if(!sa.length||!sb.length)continue;const p1=rankNos(a,1).slice(0,widths[0]),p2=rankNos(b,1).slice(0,widths[1]);total++;combos+=p1.length*p2.length;const ok=sa.some(x=>p1.includes(x[0]))&&sb.some(x=>p2.includes(x[0]));if(ok)hit++;
+      if(unit>0){const g=b[0]||{},race=payoutRaceIndex.get([g.race_date,fold(g.hippodrome||''),Number(g.altili_no)||0,Number(g.leg)||0].join('|'));const entries=(race?.payouts||[]).filter(e=>e.key==='cifte');
+        if(entries.length){rRaces++;rCost+=p1.length*p2.length*unit;let got=0;if(ok)for(const e of entries){if(!e.rollover&&sideBetPayoutEntryMatchesPools(e,[p1,p2]))got+=Number(e.amount)||0;}rRet+=got;if(got>rMax)rMax=got;}}}
+    return {total,hit,rate:total?hit/total:0,wilsonLower:wilson(hit,total),avgCombinations:total?combos/total:0,roiRaces:rRaces,roiCost:rCost,roiReturn:rRet,roi:rCost>0?(rRet-rCost)/rCost:null,roiExTop1:rCost>0?(rRet-rMax-rCost)/rCost:null};};
+  {const fallback=tkpEffectiveSideBetWidths('cifte'),split=splitRows(pairs),res=searchWidths({product:'cifte',fallback,seeds:[[3,3],[4,4],[4,5],[5,5],[5,6],[6,6]],evalFn:evalDouble,rowsSplit:split});recommendations.cifte=decide({product:'cifte',res,fallback});}
   return {version:'V1-CHRONO-HOLDOUT',createdAt:new Date().toISOString(),predictionGroups:groups.length,method:{train:.60,validation:.20,holdout:.20,minimumHoldout:1,leakageRule:'Yalnız sonuçtan önce kaydedilmiş prediction_log sıraları'},recommendations};
 }
 if(typeof globalThis!=='undefined')globalThis.tkpOptimizeVerifiedBetCombinations=tkpOptimizeVerifiedBetCombinations;
+
+// OTOMATİK YAN BAHİS GENİŞLİK ÖĞRENMESİ (Tommy 20261018)
+// Optimizer (kronolojik %60/%20/%20, holdout kapılı) daha önce hiçbir yerde çağrılmıyordu;
+// genişlikler sabit tablodan geliyordu. Artık prediction_log (aktarılan yedekler dahil)
+// değiştikçe boşta çalışır; yalnız holdout'ta mevcut ayardan KANITLI iyi olan ürünler
+// güncellenir. Yalnız havuz genişliğini etkiler (diagnosticWidthsOnly): OYNA/PAS kararı,
+// bahis tutarı ve gerçek-para kapısı değişmez.
+let _tkpAutoWidthRunning=false,_tkpAutoWidthTimer=null;
+async function tkpAutoUpdateSideBetWidths({force=false}={}){
+  if(_tkpAutoWidthRunning)return {skipped:'running'};
+  _tkpAutoWidthRunning=true;
+  try{
+    if(typeof db==='undefined'||!db)return {skipped:'nodb'};
+    const sig=typeof sideBetPredictionLogRevisionSignature==='function'?sideBetPredictionLogRevisionSignature(db):String((db.prediction_log||[]).length);
+    const prev=db.settings?.verified_bet_optimizer;
+    if(!force&&prev&&prev.autoSig===sig)return {skipped:'same'};
+    // Arama ~15 sn sürebilir (3000+ yarış grubu): son kontrolden 6 saat geçmediyse ve veri belirgin değişmediyse (<200 kayıt) atla.
+    const rowsNow=(db.prediction_log||[]).length,lastAt=Date.parse(prev?.autoCheckedAt||'')||0;
+    if(!force&&prev&&Date.now()-lastAt<6*3600*1000&&Math.abs(rowsNow-(Number(prev.autoRows)||0))<200)return {skipped:'throttle'};
+    const res=tkpOptimizeVerifiedBetCombinations();
+    if(!db.settings||typeof db.settings!=='object')db.settings={};
+    const store=db.settings.verified_bet_optimizer&&typeof db.settings.verified_bet_optimizer==='object'?db.settings.verified_bet_optimizer:{};
+    const recs=store.recommendations&&typeof store.recommendations==='object'?store.recommendations:{};
+    const changed=[];
+    for(const [product,rec] of Object.entries(res?.recommendations||{})){
+      if(!rec||rec.accepted!==true||!Array.isArray(rec.widths))continue;
+      const old=recs[product],oldKey=Array.isArray(old?.widths)?old.widths.join(','):'';
+      if(oldKey===rec.widths.join(','))continue;
+      recs[product]={...(old||{}),widths:rec.widths.map(Number),accepted:false,mode:old?.mode||'SHADOW',diagnosticWidthsOnly:true,officialCombinationEvaluation:true,
+        leakageSafe:true,holdoutSample:rec.holdoutSample,holdout:rec.holdout,baselineHoldout:rec.baselineHoldout,baselineWidths:rec.baselineWidths,
+        reason:rec.reason,auto:true,updatedAt:new Date().toISOString()};
+      changed.push(product+': '+(oldKey||rec.baselineWidths.join(','))+' → '+rec.widths.join(','));
+    }
+    db.settings.verified_bet_optimizer={...store,recommendations:recs,autoSig:sig,autoCheckedAt:new Date().toISOString(),autoRows:(db.prediction_log||[]).length,autoPredictionGroups:res?.predictionGroups||0};
+    if(changed.length){
+      for(const fn of ['tkpInvalidateSideBetPlanCache','tkpInvalidateSideBetTicketHtmlCache','invalidateSideBetCache'])try{if(typeof globalThis[fn]==='function')globalThis[fn]();}catch(_){ }
+      try{if(typeof saveDB==='function')await saveDB(false,true);}catch(_){ }
+      try{if(typeof renderAll==='function')renderAll();}catch(_){ }
+      try{console.info('[TKP] Yan bahis genişlikleri otomatik güncellendi:',changed.join(' | '));}catch(_){ }
+    }
+    return {changed,groups:res?.predictionGroups||0};
+  }catch(err){try{console.warn('[TKP] Yan bahis otomatik öğrenme atlandı:',err);}catch(_){ }return {error:String(err)};}
+  finally{_tkpAutoWidthRunning=false;}
+}
+function tkpScheduleAutoSideBetWidths(delay=5000){
+  clearTimeout(_tkpAutoWidthTimer);
+  _tkpAutoWidthTimer=setTimeout(()=>{(globalThis.requestIdleCallback||(f=>setTimeout(f,0)))(()=>{tkpAutoUpdateSideBetWidths();});},delay);
+}
+// ALTILI KUPON BÜTÇE OPTİMİZERİ (Tommy 20261018): kupon başı tavan 3000. Kayıtlı (yarış-öncesi) kupon
+// anlık görüntülerinin gerçek TJK altılı ikramiyesiyle getirisi maliyet bandına göre ölçülür.
+// En üst bant (tavan-200, tavan], daha ucuz kuponlara göre bootstrap ile >=%95 olasılıkla daha kötü
+// ve kendi ROI'si negatifse (en az 40 kupon) tavan 200 TL düşürülür. Veri yoksa/az ise tavan 3000 kalır.
+// Yalnızca düşürebilir (en az 1400); yükseltme kullanıcı kararıdır.
+function tkpCouponBudgetBandStats(){
+  const races=db?.races||[],log=db?.auto_coupon_log||[];
+  const payoutByMeeting=new Map();
+  for(const r of races){if(!Array.isArray(r?.payouts))continue;const entries=r.payouts.filter(e=>e&&e.key==='altili'&&!e.rollover);if(!entries.length)continue;
+    const k=[r.race_date,fold(r.hippodrome||''),Number(r.altili_no)||0].join('|');if(!payoutByMeeting.has(k))payoutByMeeting.set(k,[]);payoutByMeeting.get(k).push(...entries);}
+  const known=new Set();for(const r of races){if(Array.isArray(r?.payouts)&&r.payouts.some(e=>e?.key==='altili'))known.add([r.race_date,fold(r.hippodrome||''),Number(r.altili_no)||0].join('|'));}
+  const rows=[];
+  for(const a of log){
+    if(!a||!/^RESOLVED/.test(String(a.resolution_state||''))||a.post_collection_reconstruction)continue;
+    const k=[a.race_date,fold(a.hippodrome||''),Number(a.altili_no)||0].join('|');
+    if(!known.has(k))continue;
+    const entries=payoutByMeeting.get(k)||[];
+    for(const role of ['main','alt','surprise']){
+      const c=a.coupons?.[role];const cost=Number(c?.cost);
+      if(!c||!(cost>0)||!Array.isArray(c.legs)||c.legs.length!==6)continue;
+      const ticket={cost,legs:c.legs.map(l=>({picks:l.picks||[],r:{leg:Number(l.leg)||0}}))};
+      let ret=0;for(const e of entries)ret+=(Number(e.amount)||0)*couponWinningPayoutLineCount(ticket,e);
+      rows.push({role,cost,ret});
+    }
+  }
+  return rows;
+}
+function tkpBudgetBootstrapWorse(hi,ref,B=600){
+  // P(ROI(hi) < ROI(ref)) — deterministik tohumlu bootstrap.
+  let seed=2463534242;const rnd=()=>{seed^=seed<<13;seed>>>=0;seed^=seed>>>17;seed^=seed<<5;seed>>>=0;return seed/4294967296;};
+  const roi=(rows,idx)=>{let c=0,r=0;for(const i of idx){c+=rows[i].cost;r+=rows[i].ret;}return c>0?(r-c)/c:0;};
+  let worse=0;
+  for(let b=0;b<B;b++){
+    const ih=Array.from({length:hi.length},()=>Math.floor(rnd()*hi.length)),ir=Array.from({length:ref.length},()=>Math.floor(rnd()*ref.length));
+    if(roi(hi,ih)<roi(ref,ir))worse++;
+  }
+  return worse/B;
+}
+function tkpOptimizeCouponBudget(){
+  const rows=tkpCouponBudgetBandStats(),hard=Number(TKP_COUPON_FEE_POLICY.maxBudgetTL)||3000;
+  const bandInfo=(lo,hi)=>{const r=rows.filter(x=>x.cost>lo&&x.cost<=hi);const c=r.reduce((s,x)=>s+x.cost,0),t=r.reduce((s,x)=>s+x.ret,0);return {lo,hi,n:r.length,hits:r.filter(x=>x.ret>0).length,roi:c>0?(t-c)/c:null};};
+  let cap=hard;const decisions=[];
+  while(cap>1400){
+    const hi=rows.filter(x=>x.cost>cap-200&&x.cost<=cap),ref=rows.filter(x=>x.cost<=cap-200);
+    const info={band:[cap-200,cap],n:hi.length,refN:ref.length};
+    if(hi.length<40||ref.length<40){info.result='yetersiz veri';decisions.push(info);break;}
+    const roi=r=>{const c=r.reduce((s,x)=>s+x.cost,0),t=r.reduce((s,x)=>s+x.ret,0);return c>0?(t-c)/c:0;};
+    info.roi=roi(hi);info.refRoi=roi(ref);
+    const p=tkpBudgetBootstrapWorse(hi,ref);info.pWorse=p;
+    if(info.roi<0&&p>=0.95){info.result='tavan düşürüldü';decisions.push(info);cap-=200;continue;}
+    info.result='korundu';decisions.push(info);break;
+  }
+  const bands=[];for(let lo=1000;lo<3000;lo+=200)bands.push(bandInfo(lo,lo+200));
+  return {maxBudgetTL:cap,hardMaxTL:hard,sampleCoupons:rows.length,bands,decisions};
+}
+async function tkpAutoUpdateCouponBudget({force=false}={}){
+  try{
+    if(typeof db==='undefined'||!db)return {skipped:'nodb'};
+    const sig=[(db.auto_coupon_log||[]).length,(db.races||[]).length].join('|');
+    const prev=db.settings?.coupon_budget_optimizer;
+    if(!force&&prev&&prev.autoSig===sig)return {skipped:'same'};
+    const res=tkpOptimizeCouponBudget();
+    if(!db.settings||typeof db.settings!=='object')db.settings={};
+    const changed=Number(prev?.maxBudgetTL||res.hardMaxTL)!==res.maxBudgetTL;
+    db.settings.coupon_budget_optimizer={maxBudgetTL:res.maxBudgetTL,hardMaxTL:res.hardMaxTL,sampleCoupons:res.sampleCoupons,bands:res.bands,decisions:res.decisions,autoSig:sig,autoCheckedAt:new Date().toISOString()};
+    if(changed){
+      for(const fn of ['invalidateActiveRacesCache','tkpInvalidateSideBetPlanCache','tkpInvalidateSideBetTicketHtmlCache','tkpInvalidateFastBacktestCache'])try{if(typeof globalThis[fn]==='function')globalThis[fn]();}catch(_){ }
+      try{if(typeof saveDB==='function')await saveDB(false,true);}catch(_){ }
+      try{if(typeof renderAll==='function')renderAll();}catch(_){ }
+      try{console.info('[TKP] Kupon başı bütçe tavanı otomatik güncellendi:',res.maxBudgetTL,'TL');}catch(_){ }
+    }
+    return {changed,maxBudgetTL:res.maxBudgetTL};
+  }catch(err){try{console.warn('[TKP] Bütçe optimizeri atlandı:',err);}catch(_){ }return {error:String(err)};}
+}
+if(typeof globalThis!=='undefined'){
+  globalThis.tkpAutoUpdateSideBetWidths=tkpAutoUpdateSideBetWidths;
+  globalThis.tkpAutoUpdateCouponBudget=tkpAutoUpdateCouponBudget;
+  globalThis.tkpOptimizeCouponBudget=tkpOptimizeCouponBudget;
+  globalThis.tkpCouponMaxBudget=tkpCouponMaxBudget;
+  if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
+    window.addEventListener('tkp:db-changed',ev=>{const d=ev?.detail||{};if(d.resultsChanged||d.learningChanged||d.backtestChanged){tkpScheduleAutoSideBetWidths(6000);setTimeout(()=>{tkpAutoUpdateCouponBudget();},3000);}});
+    window.addEventListener('load',()=>{tkpScheduleAutoSideBetWidths(15000);setTimeout(()=>{tkpAutoUpdateCouponBudget();},9000);});
+  }
+}
 
 function learnedSideBetWidthFast(n,targetRace){
   const revision=typeof sideBetPredictionLogRevisionSignature==='function'
@@ -4947,7 +6727,7 @@ let _tkpSideBetStrategyPlanCache=new WeakMap();
 function tkpSideBetStrategyPlanSignature(x){
   const r=x?.r||{},pool=x?.scored||r?.horses||[];
   const dbSig=typeof tkpFastDbSignature==='function'?tkpFastDbSignature(db):`${db?.files?.length||0}:${db?.races?.length||0}`;
-  return dbSig+'|'+[r.id||r.file_id||'',r.leg||'',...pool.map(h=>[h?.horse_no,Number(isNonRunner(h)),h?.score,h?.prediction_score_snapshot,h?.altili_winner_score,h?.agf,h?.agf_rank,h?.ypuan,h?.value_score,h?.hndkp_rank,h?.jbyg,h?.bmb,h?.odb,h?.tr_ganyan,h?.tr_puan,h?.tr_ganyan_source,h?.tr_source,0,h?.expert_consensus_total,h?.expert_positive_votes].join(':'))].join('|');
+  return dbSig+'|'+[r.id||r.file_id||'',r.leg||'',...pool.map(h=>[h?.horse_no,Number(isNonRunner(h)),h?.score,h?.prediction_score_snapshot,h?.altili_winner_score,h?.agf,h?.agf_rank,h?.ypuan,h?.atr_ypuan,h?.atr_comment_score,h?.atr_foreign_score,h?.atr_foreign_confidence,h?.atr_synthetic_agf,h?.atr_ganyan,h?.atr_or,h?.atr_form,h?.atr_comment,h?._atr_effective_winner_score,h?.value_score,h?.hndkp_rank,h?.jbyg,h?.bmb,h?.odb,h?.tr_ganyan,h?.tr_puan,h?.tr_ganyan_source,h?.tr_source,0,h?.expert_consensus_total,h?.expert_positive_votes].join(':'))].join('|');
 }
 function sideBetStrategyPlan(x){
   const cacheTarget=x&&typeof x==='object'?x:null,signature=tkpSideBetStrategyPlanSignature(x),cached=cacheTarget?_tkpSideBetStrategyPlanCache.get(cacheTarget):null;
@@ -5085,12 +6865,13 @@ function sideBetStrategyPlan(x){
   // yan bahislere de uygulanır. SONUÇ 6-8, AGF 6-11, gerçek BMB/ODB veya ilk 8 dışı Y.PUAN 8-20 ODB atları
   // -- "Altılıya para verdiren" profil -- yan bahis penceresi genişledikçe sıradan Genel
   // Bakış sırasının önüne geçirilir; sadece en güçlüsü değil, hepsi.
-  const soFarNos=new Set(core.concat(moneySignalPicks,surpriseExtra,portfolioPicks).map(h=>String(h.horse_no)));
+  const profBottomPicks=typeof tkpRankedSurpriseRows==='function'?tkpRankedSurpriseRows(x.r,common).filter(row=>tkpSurpriseCouponRule(x.r,row).eligible).map(row=>row.horse).filter(h=>!coreNos.has(String(h.horse_no))):[];
+  const soFarNos=new Set(core.concat(moneySignalPicks,profBottomPicks,surpriseExtra,portfolioPicks).map(h=>String(h.horse_no)));
   const valueExtra=common.filter(h=>valueBandMatch(h,x.r) && !soFarNos.has(String(h.horse_no)))
     .sort((a,b)=>(valueBandScore(b,x.r)-valueBandScore(a,x.r))||(tkpCouponStrengthCached(x.r,b,'surprise')-tkpCouponStrengthCached(x.r,a,'surprise')));
-  const priorityNos=new Set(core.concat(moneySignalPicks,surpriseExtra,portfolioPicks,valueExtra).map(h=>String(h.horse_no)));
-  const sequence=dedupeEkuri(core.concat(moneySignalPicks,surpriseExtra,portfolioPicks,valueExtra,common.filter(h=>!priorityNos.has(String(h.horse_no)))),x.r,'surprise',true);
-  const requiredSideCount=dedupeEkuri(core.concat(moneySignalPicks,portfolioPicks),x.r,'surprise',true).length;
+  const priorityNos=new Set(core.concat(moneySignalPicks,profBottomPicks,surpriseExtra,portfolioPicks,valueExtra).map(h=>String(h.horse_no)));
+  const sequence=dedupeEkuri(core.concat(moneySignalPicks,profBottomPicks,surpriseExtra,portfolioPicks,valueExtra,common.filter(h=>!priorityNos.has(String(h.horse_no)))),x.r,'surprise',true);
+  const requiredSideCount=dedupeEkuri(core.concat(moneySignalPicks,profBottomPicks,portfolioPicks),x.r,'surprise',true).length;
   const desired=Math.min(sequence.length,Math.max(single?1:3,hardMin||0,normalPicks.length,requiredSideCount));
   const value={sequence,picks:sequence.slice(0,desired),normalPicks,surprisePicks:surprise,portfolioPicks,moneySignalPicks,single,decision,hardMin};
   if(cacheTarget)_tkpSideBetStrategyPlanCache.set(cacheTarget,{signature,value});
@@ -5099,7 +6880,7 @@ function sideBetStrategyPlan(x){
 function tkpInvalidateSideBetPlanCache(){_tkpSideBetStrategyPlanCache=new WeakMap();}
 
 
-const V25_COUPON_SINGLE_LABELS={main:'Normal 1',main2:'Normal 2',alt:'Geniş',surprise:'Uzman+Kulis'};
+const V25_COUPON_SINGLE_LABELS={main:'Normal',main2:'Normal 2 (eski)',alt:'Sürpriz',surprise:'Uzman+Kulis'};
 
 function v25SameRaceForCouponSingle(a,b){
   if(!a||!b) return false;
@@ -5134,7 +6915,7 @@ function v25CouponGeneratedSingle(coupon,x){
 
 function v25CouponSinglesForRace(x){
   const byNo=new Map();
-  for(const typeKey of ['main','main2','surprise']){
+  for(const typeKey of ['main','alt','surprise']){
     const found=v25CouponGeneratedSingle(activeCoupons&&activeCoupons[typeKey],x);
     if(!found) continue;
     const label=V25_COUPON_SINGLE_LABELS[typeKey]||typeKey;
@@ -5147,7 +6928,7 @@ function v25CouponSinglesForRace(x){
 
 function v25CouponDoubleSinglePlans(x,nextRace){
   const byPools=new Map();
-  for(const typeKey of ['main','main2','surprise']){
+  for(const typeKey of ['main','alt','surprise']){
     const coupon=activeCoupons&&activeCoupons[typeKey];
     const a=v25CouponGeneratedSingle(coupon,x);
     const b=v25CouponGeneratedSingle(coupon,nextRace);
@@ -5262,6 +7043,32 @@ function tkpSideBetProductRankings(race,horses,product){
   if(typeof sideBetPositionRankingsForRace==='function')return sideBetPositionRankingsForRace(race,horses);
   const rows=(horses||[]).filter(h=>h&&!isNonRunner(h));const out={};for(let i=1;i<=5;i++)out['p'+i]=rows.slice();return out;
 }
+function tkpSideBetCurrentSelection(race,now=new Date()){
+  const date=String(race?.race_date||race?.date||'').slice(0,10);
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
+  return date===today && !(race?.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)>0);
+}
+function tkpSideBetTablePriority(rankings,tableRows,surpriseRows=[],{preserveFrozen=false}={}){
+  if(preserveFrozen)return {rankings,earlySurpriseNos:[]};
+  const live=[],seen=new Set();
+  for(const h of tableRows||[]){const no=String(h?.horse_no||'');if(!no||seen.has(no)||isNonRunner(h))continue;seen.add(no);live.push(h);}
+  const output={};
+  for(const [product,positions] of Object.entries(rankings||{})){
+    output[product]={};
+    for(const [position,rows] of Object.entries(positions||{})){
+      const byNo=new Map((rows||[]).map(h=>[String(h?.horse_no),h]));
+      output[product][position]=live.map(h=>byNo.get(String(h.horse_no))||h);
+    }
+  }
+  // One proven surprise joins early positions; this is cohort evidence, not a horse win probability.
+  // Kanıt puanı: 1. = 1.0, 2. = 0.5, diğer ilk-5 = 0.2 ağırlık (yan bahis İkili/Sıralı için 2.lik de değerli).
+  const placeScore=s=>Number(s?.starts)>=5?(Number(s.wins||0)+0.5*Number(s.seconds||0)+0.2*Math.max(0,Number(s.top5||0)-Number(s.wins||0)-Number(s.seconds||0)))/Number(s.starts):-1;
+  const bestSignal=row=>(row?.signals||[]).filter(s=>Number(s?.starts)>=5&&Number(s.wins||0)+Number(s.seconds||0)<=Number(s.starts)&&(Number(s.wins)>0||Number(s.seconds)>=2||Number(s.top5)>=3))
+    .sort((a,b)=>placeScore(b)-placeScore(a)||b.starts-a.starts)[0]||null;
+  const proven=(surpriseRows||[]).map(row=>({row,sig:bestSignal(row)})).filter(x=>x.sig&&seen.has(String(x.row?.horse?.horse_no||''))&&!isNonRunner(x.row.horse))
+    .sort((a,b)=>placeScore(b.sig)-placeScore(a.sig)||b.sig.starts-a.sig.starts).map(x=>x.row);
+  return {rankings:output,earlySurpriseNos:proven.length?[String(proven[0].horse.horse_no)]:[]};
+}
 function tkpSideBetScoreGap(rankings,product,pos,cutoff=1){
   const rows=rankings?.['p'+pos]||[];if(rows.length<=cutoff)return 0;
   const field=`sidebet_${product}_p${pos}_score`;
@@ -5291,10 +7098,11 @@ function tkpSideBetProductPlayDecision(product,race,rankings,pools){
       const evCandidate=r174?.play===true;
       const evReview=r174?.review===true;
       const reviewed=String(exactGate.mode||'').toUpperCase()==='REVIEW';
-      const label=evCandidate?(reviewed?'İNCELEME':'EV ADAY'):(evReview?'İNCELEME':String(exactGate.label||'SHADOW'));
-      const mode=evCandidate?'SHADOW_EV':String(exactGate.mode||'SHADOW');
-      return {play:false,strong:false,label,mode,verified:false,r174:!!r174,evDecision:r174,
-        reason:`${r174?.reason?String(r174.reason)+' · ':''}Tam bilet canlı kilidi ${Number(exactGate.events)||0}/${Number(exactGate.minimum)||150} · ${String(exactGate.reason||'Otomatik aktivasyon kapalı.')}`};
+      const active=exactGate.canActivate===true&&String(exactGate.mode||'').toUpperCase()==='ACTIVE'&&evCandidate;
+      const label=active?'AKTİF':(evCandidate?(reviewed?'İNCELEME':'EV ADAY'):(evReview?'İNCELEME':String(exactGate.label||'SHADOW')));
+      const mode=active?'AKTİF':(evCandidate?'SHADOW_EV':String(exactGate.mode||'SHADOW'));
+      return {play:active,strong:active,label,mode,verified:active,r174:!!r174,evDecision:r174,
+        reason:`${r174?.reason?String(r174.reason)+' · ':''}Tam bilet canlı kilidi ${Number(exactGate.events)||0}/${Number(exactGate.minimum)||150} · ${String(exactGate.reason||'Kalite kapısı izleniyor.')}`};
     }
   }catch(_){ }
   const verified=tkpVerifiedSideBetRecommendation(product);
@@ -5367,8 +7175,8 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
   // ve maliyet kombinasyonlarını tekrar kurmamalı. Veri/sonuç/kupon değişiklikleri
   // invalidateSideBetCache() üzerinden epoch'u artırır; WeakMap eski yarışları
   // bellekte tutmaz.
-  const ticketCacheKey=x?.r&&typeof x.r==='object'?x.r:null;
-  const ticketCacheSignature=tkpSideBetTicketHtmlSignature(x,nextRace);
+  const ticketCacheKey=options?.currentPolicyReplay===true?null:(x?.r&&typeof x.r==='object'?x.r:null);
+  const ticketCacheSignature=tkpSideBetTicketHtmlSignature(x,nextRace)+'|TABLE_PRIORITY_V2|'+Number(tkpSideBetCurrentSelection(x?.r))+'|AGFSIDE'+(tkpAgfOrderPolicy().side?1:0);
   const ticketCached=ticketCacheKey?_tkpSideBetTicketHtmlCache.get(ticketCacheKey):null;
   if(ticketCached?.signature===ticketCacheSignature){tkpSideBetDeliverExactSpecs(options,ticketCached.exactSpecs||[]);return ticketCached.html;}
   const exactSpecs=[];
@@ -5383,9 +7191,10 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
   // ayakları kullanır. Genel Bakış liderinden otomatik veya yedek TEK oluşturulmaz.
   const predictionPlan=sideBetStrategyPlan(x);
   const archived=typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(x);
-  const displayRows=typeof tkpFinalRankOrderForRace==='function'
-    ? tkpFinalRankOrderForRace(x.r,(x.scored||x.r?.horses||[]).filter(h=>!isNonRunner(h)))
-    : ((typeof predictionDisplayRows==='function')?predictionDisplayRows(x,Infinity,'score-desc').rows:strategicOrderForRace(x.r,(x.scored||[])));
+  const currentSelection=options?.currentPolicyReplay===true||!archived||tkpSideBetCurrentSelection(x.r);
+  const displayRows=tkpAgfSideReorder(typeof predictionDisplayRows==='function'
+    ? predictionDisplayRows(x,Infinity,'score-desc').rows
+    : (typeof tkpFinalRankOrderForRace==='function'?tkpFinalRankOrderForRace(x.r,(x.scored||x.r?.horses||[]).filter(h=>!isNonRunner(h))):strategicOrderForRace(x.r,(x.scored||[]))));
   // TABELA / DÖRTLÜ DÜZELTMESİ:
   // Görünür Tahmin tablosu bazı koşularda ilk 10 satırla sınırlı olabilir. Yan bahis motoru
   // gerçek koşan at sayısını ve hesaplanan tam sıralamayı kullanır; görünür Tahmin sırası
@@ -5440,13 +7249,18 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
         return out;
       })()
     : (typeof sideBetPositionRankingsForRace==='function'?sideBetPositionRankingsForRace(x.r,sideBetHorseSource):null);
-  const genericPositionRankings=!archived&&globalThis.TKP_POSITION_RUNTIME?.orderedPairRankings
+  let genericPositionRankings=!archived&&globalThis.TKP_POSITION_RUNTIME?.orderedPairRankings
     ?globalThis.TKP_POSITION_RUNTIME.orderedPairRankings(x.r,sideBetHorseSource,baseGenericPositionRankings):baseGenericPositionRankings;
   const productRankings={
     triple:tkpSideBetProductRankings(x.r,sideBetHorseSource,'triple'),
     quartet:tkpSideBetProductRankings(x.r,sideBetHorseSource,'quartet'),
     quintet:tkpSideBetProductRankings(x.r,sideBetHorseSource,'quintet')
   };
+  const priority=tkpSideBetTablePriority({...productRankings,generic:genericPositionRankings},visibleOrder,
+    currentSelection&&typeof tkpRankedSurpriseRows==='function'?tkpRankedSurpriseRows(x.r,visibleOrder):[],{preserveFrozen:!currentSelection});
+  Object.assign(productRankings,priority.rankings);
+  genericPositionRankings=priority.rankings.generic;
+  const earlySurpriseNos=priority.earlySurpriseNos,earlySurpriseSet=new Set(earlySurpriseNos);
   const productPositionNos=product=>Array.from({length:5},(_,index)=>
     ((product==='generic'?genericPositionRankings:productRankings[product])?.['p'+(index+1)]||[]).map(h=>String(h.horse_no))
   );
@@ -5460,7 +7274,7 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
   // bütçe daraltması sırasında bütün pozisyon havuzlarından birden yok edilemez.
   // Bu koruma atı her pozisyona zorlamaz; yalnız bilette en az bir gerçek pozisyon şansı bırakır.
   const exactTop5Nos=new Set(Array.from({length:5},(_,i)=>(baseGenericPositionRankings?.['p'+(i+1)]||[]).slice(0,5).map(h=>String(h.horse_no))).flat());
-  const criticalCoverageNos=new Set(ord.slice(0,5).map(String).filter(no=>exactTop5Nos.has(no)));
+  const criticalCoverageNos=new Set(ord.slice(0,5).map(String).filter(no=>currentSelection||exactTop5Nos.has(no)));
   const canSiraliIkili=betAvailable(['sirali_ikili']) && seq.length>=2;
   const canTriple=betAvailable(['sirali_uclu','uclu_bahis']) && seq.length>=3;
   const canQuartet=betAvailable(['tabela']) && seq.length>=4;
@@ -5495,7 +7309,8 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
       // 1. sıra dar iken 3.-5. sıra otomatik genişleyebilir; sabit 5×6×7 vb.
       // yalnız güvenli başlangıç genişliğidir.
       const ranked=(productRankings?.[product]?.['p'+(posIndex+1)]||[]);
-      return uniq(exact.slice(0,learnedSideBetWidth(product,posIndex,width,ranked)));
+      const selected=exact.slice(0,learnedSideBetWidth(product,posIndex,width,ranked));
+      return uniq(selected.concat(posIndex<2?earlySurpriseNos:[]));
     }
     // Pozisyona özel öğrenilmiş sıra ana omurgadır. BMB/ODB/TKP para sinyalleri
     // bunun sonuna eklenir; sıralı bahislerin hiçbir pozisyon havuzundan sessizce düşmez.
@@ -5590,9 +7405,9 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
     while(c*unit<minCost && guard<200){
       guard++;
       let idx=-1, minLen=Infinity;
-      current.forEach((p,i)=>{ if(p.length<seqSource.length && p.length<maxWidth && p.length<minLen){ minLen=p.length; idx=i; } });
+      current.forEach((p,i)=>{ if(p.length<maxWidth && p.length<minLen && seqSource.some(no=>!p.includes(no))){ minLen=p.length; idx=i; } });
       if(idx===-1) break;
-      current[idx]=seqSource.slice(0,current[idx].length+1);
+      current[idx].push(seqSource.find(no=>!current[idx].includes(no)));
       c=count(current);
     }
     return {pools:current,c};
@@ -5605,6 +7420,7 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
     const removableAt=(allPools,poolIndex,itemIndex)=>{
       const pool=allPools[poolIndex]||[];
       if(itemIndex<0||itemIndex>=pool.length) return false;
+      if(poolIndex===0&&earlySurpriseSet.has(String(pool[itemIndex])))return false;
       // Lider mümkün olduğunca korunur; minPoolLen zaten matematiksel tabanı korur.
       if(itemIndex===0 && pool.length>Math.max(2,minPoolLen)) return false;
       return tkpSideBetCanRemoveCandidate(allPools,poolIndex,itemIndex,protectedCoverageNos,criticalCoverageNos,minPoolLen);
@@ -5751,37 +7567,21 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
     function historicalPools(nos){
       return pools.map((p,i)=>nos.slice(i,i+Math.max(1,(p||[]).length)));
     }
-    function currentTicketOutcome(){
-      const n=pools.length, actual=[];
-      for(let pos=1;pos<=n;pos++){
-        const hs=(x.r.horses||[]).filter(z=>Number(z.finish_position)===pos || (pos===1&&Number(z.winner)===1));
-        if(!hs.length) return null;
-        actual.push(String(hs[0].horse_no));
-      }
-        return actual.every((no,i)=>(pools[i]||[]).some(p=>_v25SameHorseExact(p,no)));
-    }
-    let ok=0,total=0,currentSeen=false;
+    let ok=0,total=0;
     const n=pools.length;
     for(const row of rows){
+      if(isCurrentRow(row))continue;
+      const historical=Array.isArray(row)?row[0]:(row?.row||row),date=String(historical?.race_date||'').slice(0,10),targetDate=String(x.r?.race_date||'').slice(0,10);
+      if(/^\d{4}-\d{2}-\d{2}$/.test(targetDate)&&/^\d{4}-\d{2}-\d{2}$/.test(date)&&date>=targetDate)continue;
       const nos=orderedNosForRow(row);
       const seqs=actualSequencesForRow(row,n);
       if(!nos.length||!seqs.length) continue;
       const hp=historicalPools(nos);
-      let hit=seqs.some(seq=>seq.every((no,i)=>(hp[i]||[]).some(p=>_v25SameHorseExact(p,no))));
-      if(isCurrentRow(row)){
-        const live=currentTicketOutcome();
-        if(live!==null){ hit=live; currentSeen=true; }
-      }
+      const hit=seqs.some(seq=>seq.every((no,i)=>(hp[i]||[]).some(p=>_v25SameHorseExact(p,no))));
       total++; if(hit) ok++;
     }
     if(!total) return fallback;
-    // Profil kaydı mevcut yarışı kimlik farkı nedeniyle tanıyamasa bile ekrandaki sonuçla
-    // yüzde birbirini inkâr edemez. TUTMADI kartı asla %100; TUTTU kartı asla %0 göstermez.
-    const live=currentTicketOutcome();
-    if(live!==null && !currentSeen){
-      if(live && ok===0) ok=1;
-      if(!live && ok===total) ok=Math.max(0,total-1);
-    }
+    // Güncel kupon sonucu tarihsel örneklemin isabetini değiştiremez.
     return {ok,total,rate:total?ok/total:0,ready:total>=SIDE_BET_MIN_RACES,ticketSpecific:true};
   }
 
@@ -5906,7 +7706,7 @@ function sideBetTicketForRace(x, stats, nextRace=null, options={}){
     let altPos2=positionPool(1,Math.max(siraliWidths[1]||5,sideBetWindowWidth(1)));
     const widened=ensureMinPoolCost([altPos1,altPos2],SIDE_BET_UNITS.sirali,SIRALI_MIN_COST,seq,10,permCount);
     altPos1=widened.pools[0]; altPos2=widened.pools[1];
-    if(altPos2.length<altPos1.length) altPos2=seq.slice(0,altPos1.length);
+    if(altPos2.length<altPos1.length) altPos2=altPos2.concat(seq.filter(no=>!altPos2.includes(no)).slice(0,altPos1.length-altPos2.length));
 
     const {pools:altPools,c:altC}=applyCostControl([altPos1,altPos2],SIDE_BET_UNITS.sirali,COST_LIMIT.sirali,permCount,2);
     const altStatus=sideBetOutcomeStatus(altPools,x.r.horses);
@@ -6204,10 +8004,10 @@ function _v25BuildBacktestCoupons(rows,budgets){
       live=tkpBuildCouponSetAdaptive(rr,{
         main:Number(budgets?.main)||1000,
         main2:Number(budgets?.main2??budgets?.main)||1000,
-        mainMax:1400,
+        mainMax:3000,
         alt:0,
         surprise:Number(budgets?.surprise)||1000,
-        surpriseMax:1400,
+        surpriseMax:3000,
         normalMode:budgets?.normalMode==='coverage'?'coverage':'standard'
       });
     }catch(e){
@@ -6874,11 +8674,15 @@ function buildInvestmentBacktestHTML(budgets, limit=25){
 function couponSnapshotContext(raceResults,source=''){
   const p=window.__lastPredictionPayload||{};
   const first=raceResults?.[0]?.r||{};
-  const file=p.file || db?.files?.find?.(f=>String(f.id)===String(first.file_id)) || {};
-  const date=String(file.race_date||file.date||first.race_date||first.date||'').trim();
-  const hippodrome=couponCanonicalTrackName(file.hippodrome||first.hippodrome||'');
-  const altiliNo=Math.max(1,Number(file.altili_no)||Number(first.altili_no)||1);
-  const meetingUid=String(file.meeting_uid||first.meeting_uid||'').trim();
+  // Archive rendering can still carry the previous screen's payload. The races
+  // being restored, never that previous screen, own the snapshot identity.
+  const fileId=String(first.file_id??'');
+  const file=(fileId?db?.files?.find?.(f=>String(f.id)===fileId):null)
+    || (fileId&&String(p.file?.id??'')===fileId?p.file:{}) || {};
+  const date=String(first.race_date||first.date||file.race_date||file.date||'').trim();
+  const hippodrome=couponCanonicalTrackName(first.hippodrome||file.hippodrome||'');
+  const altiliNo=Math.max(1,Number(first.altili_no)||Number(file.altili_no)||1);
+  const meetingUid=String(first.meeting_uid||file.meeting_uid||'').trim();
   return {
     date,hippodrome,altiliNo,meetingUid,source:String(source||''),
     key:[date,hippodrome,altiliNo,String(source||'')].join('|')
@@ -6963,7 +8767,7 @@ function tkpScheduleExactSideBetTickets(snapshot,raceResults){
 // kayıtlı kuponunu yarış sonrasında salt okunur göstermek için geçerlidirler.
 const TKP_LOCKED_COUPON_DISPLAY_SOURCE_PRIORITY=[
   'SON_AGF_OTOMATIK','YARISTAN_40_DK_ONCE','SISTEM_GUNCEL_VERI','X_GUNCEL_OTOMATIK',
-  'HISTORICAL_CALIBRATION_FULL','ORIGINAL_TAHMIN','GUNCEL_KURAL_ONIZLEME','SON_KUPON','MANUEL'
+  'HISTORICAL_CALIBRATION_FULL','SONRADAN_HESAPLANAN','ORIGINAL_TAHMIN','GUNCEL_KURAL_ONIZLEME','SON_KUPON','MANUEL'
 ];
 // Kupon kartı oluştuğu anda küçük bir write-ahead kopya da saklanır. Büyük
 // parçalı DB manifest yazımı tarayıcı/sekme kapanışına yetişmese bile Ctrl+F5
@@ -7041,6 +8845,21 @@ if(typeof globalThis!=='undefined'){
   globalThis.tkpReadCurrentCouponSnapshotWal=tkpReadCurrentCouponSnapshotWal;
   globalThis.tkpReadCurrentCouponSnapshotWals=tkpReadCurrentCouponSnapshotWals;
 }
+function tkpFindSnapshotHorseByNo(horses,savedNo){
+  const rows=Array.isArray(horses)?horses:[];
+  const wanted=String(savedNo??'').trim();
+  if(!wanted)return null;
+  const exact=rows.find(h=>String(h?.horse_no??'').trim()===wanted);
+  if(exact)return exact;
+  const wantedBase=typeof ekuriBase==='function'?String(ekuriBase(wanted)):wanted.replace(/-E\d+$/i,'');
+  const baseMatches=rows.filter(h=>{
+    const current=String(h?.horse_no??'').trim();
+    const currentBase=typeof ekuriBase==='function'?String(ekuriBase(current)):current.replace(/-E\d+$/i,'');
+    return currentBase===wantedBase;
+  });
+  return baseMatches.length===1?baseMatches[0]:null;
+}
+
 function tkpLockedCouponDisplaySourcePriority(source){
   const i=TKP_LOCKED_COUPON_DISPLAY_SOURCE_PRIORITY.indexOf(String(source||''));
   return i<0?Number.MAX_SAFE_INTEGER:i;
@@ -7064,8 +8883,8 @@ function tkpRestoreForwardTrackedCoupons(raceResults){
     for(const row of rows.slice().sort((a,b)=>(Number(a?.leg)||0)-(Number(b?.leg)||0))){
       const x=raceByLeg.get(Number(row?.leg)||0),nos=Array.isArray(row?.coupons?.[typeKey])?row.coupons[typeKey]:[];
       if(!x||!nos.length)continue;
-      const horses=x?.r?.horses||x?.scored||[],byNo=new Map(horses.map(h=>[String(h?.horse_no),h]));
-      const picks=nos.map(no=>byNo.get(String(no))).filter(Boolean);if(!picks.length)continue;
+      const horses=x?.r?.horses||x?.scored||[];
+      const picks=nos.map(no=>tkpFindSnapshotHorseByNo(horses,no)).filter(Boolean);if(!picks.length)continue;
       legs.push({x,r:x.r,picks,displayOrder:x.scored||horses,ordered:x.scored||horses,allHorses:horses,restoredPreRaceSnapshot:true});
     }
     restored[typeKey]=legs.length?{typeKey,label:labels[typeKey],legs,unit:0,cost:0,combos:0,legCount:legs.length,budgetTL:0,leftover:0,readOnlySnapshot:true,snapshotSource:'ILERI_TAKIP',verifiedAutomaticSnapshot:true,adaptiveBudgetNote:'🔒 İleri Takip yarış-öncesi kupon kaydı'}:{typeKey,error:'Bu strateji için kayıtlı kupon bulunamadı.'};
@@ -7074,7 +8893,7 @@ function tkpRestoreForwardTrackedCoupons(raceResults){
   activeCoupons.main=restored.main;activeCoupons.main2={disabled:true,removed:true,legs:[],cost:0};activeCoupons.alt=restored.alt;activeCoupons.surprise=restored.surprise;
   return {id:'FORWARD-'+ctx.key,source:'ILERI_TAKIP',created_at:'',coupons:restored,forwardTrackingFallback:true};
 }
-function tkpRestoreLatestPreRaceCouponSnapshot(raceResults){
+function tkpRestoreLatestPreRaceCouponSnapshot(raceResults,options={}){
   if(!db||!Array.isArray(raceResults)||!raceResults.length)return null;
   if(!Array.isArray(db.auto_coupon_log))db.auto_coupon_log=[];
   const ctx=couponSnapshotContext(raceResults,'');
@@ -7085,10 +8904,15 @@ function tkpRestoreLatestPreRaceCouponSnapshot(raceResults){
     && s?.coupons&&typeof s.coupons==='object'
     && snapshotUsable(s)
   );
-  const verified=matching
+  const generatedAfterStart=s=>Number(s?.post_collection_reconstruction)===1&&(s?.source==='SONRADAN_HESAPLANAN'||Number(s?.manual_adjustment)!==1);
+  const firstReconstruction=matching.filter(generatedAfterStart).sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')))[0];
+  const displayCandidates=matching.filter(s=>!generatedAfterStart(s)||s===firstReconstruction);
+  const verified=displayCandidates
     .filter(s=>tkpBacktestEligibleSnapshotSource(s?.source)&&Number(s?.manual_adjustment)!==1)
     .sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')))[0]||null;
-  const snapshot=verified||matching.slice().sort((a,b)=>
+  const firstLockedAutomatic=displayCandidates.filter(s=>Number(s.pre_race_only)===1&&Number(s.snapshot_time_verified)===1&&s.coupon_timing_class==='pre_race'&&Number(s.manual_adjustment)!==1)
+    .sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')))[0]||null;
+  const snapshot=firstLockedAutomatic||verified||displayCandidates.slice().sort((a,b)=>
     tkpLockedCouponDisplaySourcePriority(a?.source)-tkpLockedCouponDisplaySourcePriority(b?.source)
     || String(b?.created_at||'').localeCompare(String(a?.created_at||''))
   )[0]||null;
@@ -7104,28 +8928,108 @@ function tkpRestoreLatestPreRaceCouponSnapshot(raceResults){
     const legs=(saved.legs||[]).map(row=>{
       const x=raceByLeg.get(Number(row?.leg)||0);if(!x)return null;
       const horses=x?.r?.horses||x?.scored||[];
-      const byNo=new Map(horses.map(h=>[String(h?.horse_no),h]));
-      const picks=(row?.picks||[]).map(no=>byNo.get(String(no))).filter(Boolean);
+      const picks=(row?.picks||[]).map(no=>tkpFindSnapshotHorseByNo(horses,no)).filter(Boolean);
       return {x,r:x.r,picks,displayOrder:x.scored||horses,ordered:x.scored||horses,allHorses:horses,restoredPreRaceSnapshot:true,selectionOrderNos:row.selectionOrderNos||saved.policyAudit?.legs?.find(l=>Number(l.leg)===Number(row.leg))?.input?.map(h=>h.no)||row.picks,policyAudit:saved.policyAudit?.legs?.find(l=>Number(l.leg)===Number(row.leg))||null};
     }).filter(Boolean);
     const unit=Number(saved.unit)||0,cost=Number(saved.cost)||0;
     restored[typeKey]={typeKey,label:labels[typeKey],legs,unit,cost,combos:unit?cost/unit:0,legCount:legs.length,
       budgetTL:Number(snapshot.effective_budgets?.[typeKey]??snapshot.budgets?.[typeKey]??snapshot.effective_budgets?.surprise??snapshot.budgets?.surprise??snapshot.effective_budgets?.main??snapshot.budgets?.main)||cost,
-      leftover:0,readOnlySnapshot:true,snapshotId:snapshot.id,snapshotSource:snapshot.source,
+      leftover:0,readOnlySnapshot:true,snapshotId:snapshot.id,snapshotSource:snapshot.source,currentPricing:snapshot.current_pricing?.coupons?.[typeKey]||null,
+      postCollectionReconstruction:Number(snapshot?.post_collection_reconstruction)===1,
       calculationLimited:saved.calculationLimited===true,algorithmVersion:saved.algorithmVersion||snapshot.algorithm_version,policyAudit:saved.policyAudit||null,
       singlePolicyWarning:distinctSingles?'':'Eski kayıt: üç kupon için farklı TEK şartı sağlanmıyor. Bu kayıt güncel öneri değildir.',
       verifiedAutomaticSnapshot:verifiedAutomatic,decisionSnapshot:saved.decision||null,
-      adaptiveBudgetNote:Number(snapshot?.archive_snapshot)===1
+      adaptiveBudgetNote:Number(snapshot?.post_collection_reconstruction)===1
+        ?`🕒 Sonradan oluşturulan gerçek kupon kaydı · ${String(snapshot.created_at||'').replace('T',' ').slice(0,16)} · resmi koşu sonucu ayrı tutulur`
+        :Number(snapshot?.archive_snapshot)===1
         ?`📚 Eski kayıt · ${String(snapshot.created_at||'').replace('T',' ').slice(0,10)} · güncel algoritma yeniden çalıştırılmadı`
         :`🔒 ${verifiedAutomatic?'Doğrulanmış otomatik':'Kayıtlı eski'} yarış öncesi kupon · ${String(snapshot.source||'KAYIT')} · ${String(snapshot.created_at||'').replace('T',' ').slice(0,16)}`};
   }
   activeCoupons.main=restored.main;activeCoupons.main2={disabled:true,removed:true,legs:[],cost:0};
   activeCoupons.alt=restored.alt;activeCoupons.surprise=restored.surprise;
+  if(options?.skipManualOverrides!==true)tkpApplyManualCouponDisplayOverrides(raceResults);
   return snapshot;
 }
 // Ctrl+F5 yalnız RAM'i temizler. Aynı veri parmak iziyle daha önce üretilmiş
 // canlı kupon yeniden hesaplanmaz; eski/başka veriyle üretilmiş snapshot geri
 // bağlanamaz.
+// Foreign historical view contract: keep the OLD saved selections (including
+// singles). The post-race replay is research only and cannot displace an old
+// recorded set. This preference never changes prediction or coupon algorithms.
+// 2026-10-18 Santa Anita: the user identified the ORIGINAL archived triple
+// by its pre-existing selections. Select an existing matching snapshot only;
+// NEVER synthesize a winning coupon from post-race results.
+function tkpSantaAnitaOriginalSnapshotMatch(snapshot,ctx){
+  const name=String(ctx?.hippodrome||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');
+  if(String(ctx?.date||'')!=='2026-10-18'||!name.includes('SANTAAN'))return false;
+  const expected={
+    main:[[4,5,2,6,1],[6,1,3,2,5],[10,8,2,9,1,3,6,4],[3,2,5],[7],[5,7,4,3]],
+    surprise:[[4,5,2,6,1],[6,1,3,2],[10],[3,2,5,4,1],[7,1,2,4,5,8],[5,7,4,3]],
+    alt:[[4,5,2,6,1],[6,1,3,2],[10,2,9,5,1,6,7],[3],[7,2,1,4],[5,7,4,6]]
+  };
+  return Object.entries(expected).every(([key,legs])=>{
+    const saved=snapshot?.coupons?.[key]?.legs;
+    return Array.isArray(saved)&&saved.length===6&&legs.every((want,index)=>{
+      const actual=saved[index]?.picks;
+      return Array.isArray(actual)&&actual.length===want.length
+        &&want.every(no=>actual.some(x=>Number(x)===no));
+    });
+  });
+}
+function tkpPreferredForeignHistoricalCouponRecord(raceResults){
+  if(!db||!Array.isArray(db.auto_coupon_log)||!Array.isArray(raceResults)||!raceResults.length)return null;
+  const ctx=couponSnapshotContext(raceResults,'');
+  const complete=s=>['main','alt','surprise'].every(k=>{
+    const legs=s?.coupons?.[k]?.legs;
+    return Array.isArray(legs)&&legs.length===6&&legs.every(l=>Array.isArray(l?.picks)&&l.picks.length>0);
+  });
+  const grade=s=>{
+    if(Number(s?.pre_race_only)===1&&Number(s?.snapshot_time_verified)===1&&s?.coupon_timing_class==='pre_race'&&Number(s?.manual_adjustment)!==1)return 0;
+    if(Number(s?.archive_snapshot)===1)return 1;
+    if(s?.source==='SONRADAN_HESAPLANAN'||Number(s?.post_collection_reconstruction)===1)return 3;
+    return 2;
+  };
+  const rows=db.auto_coupon_log.filter(s=>couponSnapshotMatchesContext(s,ctx)
+    && tkpLockedCouponDisplaySourcePriority(s?.source)<Number.MAX_SAFE_INTEGER
+    && complete(s));
+  rows.sort((a,b)=>Number(tkpSantaAnitaOriginalSnapshotMatch(b,ctx))-Number(tkpSantaAnitaOriginalSnapshotMatch(a,ctx))
+    || grade(a)-grade(b)
+    || String(a?.created_at||'').localeCompare(String(b?.created_at||''))
+    || String(a?.id||'').localeCompare(String(b?.id||'')));
+  const track=String(ctx?.hippodrome||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');
+  if(String(ctx?.date||'')==='2026-10-18'&&track.includes('SANTAAN')){
+    // Fail closed: do not present a different historical set as the known good one.
+    return rows.find(s=>tkpSantaAnitaOriginalSnapshotMatch(s,ctx))||null;
+  }
+  return rows[0]||null;
+}
+function tkpRestorePreferredForeignHistoricalCoupon(raceResults){
+  const snapshot=tkpPreferredForeignHistoricalCouponRecord(raceResults);
+  if(!snapshot)return null;
+  const beforeLog=db.auto_coupon_log;
+  const before={main:activeCoupons.main,main2:activeCoupons.main2,alt:activeCoupons.alt,surprise:activeCoupons.surprise};
+  try{
+    db.auto_coupon_log=[snapshot];
+    const restored=tkpRestoreLatestPreRaceCouponSnapshot(raceResults,{skipManualOverrides:true});
+    const good=restored&&String(restored.id)===String(snapshot.id)
+      && ['main','alt','surprise'].every(k=>{
+        const saved=snapshot.coupons[k].legs;
+        const legs=activeCoupons[k]?.legs||[];
+        return legs.length===6&&saved.every((leg,i)=>{
+          const picks=legs[i]?.picks||[];
+          return picks.length===leg.picks.length
+            && leg.picks.every((no,j)=>String(picks[j]?.horse_no??'')===String(no));
+        });
+      });
+    if(good)return restored;
+    Object.assign(activeCoupons,before);
+    return null;
+  }finally{db.auto_coupon_log=beforeLog;}
+}
+if(typeof globalThis!=='undefined'){
+  globalThis.tkpPreferredForeignHistoricalCouponRecord=tkpPreferredForeignHistoricalCouponRecord;
+  globalThis.tkpRestorePreferredForeignHistoricalCoupon=tkpRestorePreferredForeignHistoricalCoupon;
+}
 function tkpCouponSnapshotMatchesRequestedBudgets(snapshot,requested){
   if(!requested||typeof requested!=='object')return true;
   const targetMain=Number(requested.main),targetSurprise=Number(requested.surprise);
@@ -7147,8 +9051,10 @@ function tkpCouponSnapshotMatchesRequestedBudgets(snapshot,requested){
 }
 function tkpRestoreCurrentCouponSnapshotIfFresh(raceResults,budgets=null){
   if(!db||!Array.isArray(raceResults)||!raceResults.length||typeof tkpLiveCouponFingerprint!=='function')return null;
+  const locked=typeof tkpCouponMeetingLocked==='function'&&tkpCouponMeetingLocked(raceResults);
   const fingerprint=tkpLiveCouponFingerprint(raceResults);
   const ctx=couponSnapshotContext(raceResults,'');
+  const frozenAutomatic=s=>Number(s?.pre_race_only)===1&&Number(s?.snapshot_time_verified)===1&&s?.coupon_timing_class==='pre_race'&&Number(s?.manual_adjustment)!==1;
   const requested=budgets&&typeof budgets==='object'&&typeof tkpCouponBudgetPolicy==='function'
     ?tkpCouponBudgetPolicy(budgets)
     :null;
@@ -7156,8 +9062,8 @@ function tkpRestoreCurrentCouponSnapshotIfFresh(raceResults,budgets=null){
     couponSnapshotMatchesContext(snapshot,ctx)
     && globalThis.TKP_COUPON_COVERAGE?.auditSet?.(snapshot.coupons)?.valid===true
     && snapshot.single_policy_version===globalThis.TKP_COUPON_COVERAGE?.singlePolicyVersion
-    && String(snapshot?.data_signature||'')===fingerprint
-    && tkpCouponSnapshotMatchesRequestedBudgets(snapshot,requested)
+    && (locked||frozenAutomatic(snapshot)||String(snapshot?.data_signature||'')===fingerprint)
+    && (locked||tkpCouponSnapshotMatchesRequestedBudgets(snapshot,requested))
     && snapshot?.coupons&&typeof snapshot.coupons==='object'
   ).sort((a,b)=>String(b?.created_at||'').localeCompare(String(a?.created_at||'')));
   // Büyük manifest yazısı henüz tamamlanmadan Ctrl+F5 gelirse küçük WAL aynı
@@ -7168,19 +9074,119 @@ function tkpRestoreCurrentCouponSnapshotIfFresh(raceResults,budgets=null){
     if(couponSnapshotMatchesContext(wal,ctx)
       && globalThis.TKP_COUPON_COVERAGE?.auditSet?.(wal.coupons)?.valid===true
       && wal.single_policy_version===globalThis.TKP_COUPON_COVERAGE?.singlePolicyVersion
-      && String(wal?.data_signature||'')===fingerprint
-      && tkpCouponSnapshotMatchesRequestedBudgets(wal,requested)
+      && (locked||frozenAutomatic(wal)||String(wal?.data_signature||'')===fingerprint)
+      && (locked||tkpCouponSnapshotMatchesRequestedBudgets(wal,requested))
       && wal?.coupons&&typeof wal.coupons==='object'
       && !rows.some(snapshot=>String(snapshot?.id||'')===String(wal?.id||''))) rows.push(wal);
   }
   if(!rows.length)return null;
+  // Sonuçlar ve sonuç sonrası öğrenme değişse de kilitlenen seçim/TEK korunur.
+  // İlk geç üretim araştırma kaydı olarak kalır; gerçek yarış-öncesi veya
+  // kullanıcının elle düzenlediği kayıtlar mevcut kaynak önceliğini korur.
+  const generatedAfterStart=s=>Number(s?.post_collection_reconstruction)===1&&(s?.source==='SONRADAN_HESAPLANAN'||Number(s?.manual_adjustment)!==1);
+  const firstReconstruction=locked?rows.filter(generatedAfterStart).sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')))[0]:null;
+  let candidates=locked?[...rows.filter(s=>!generatedAfterStart(s)),...(firstReconstruction?[firstReconstruction]:[])]:rows;
+  const firstAutomatic=candidates.filter(frozenAutomatic).sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')))[0];
+  if(firstAutomatic)candidates=[firstAutomatic,...candidates.filter(s=>Number(s.manual_adjustment)===1)];
   const original=db.auto_coupon_log;
-  try{db.auto_coupon_log=rows;return tkpRestoreLatestPreRaceCouponSnapshot(raceResults);}
+  try{db.auto_coupon_log=candidates;return tkpRestoreLatestPreRaceCouponSnapshot(raceResults);}
   finally{db.auto_coupon_log=original;}
 }
 if(typeof globalThis!=='undefined')globalThis.tkpRestoreCurrentCouponSnapshotIfFresh=tkpRestoreCurrentCouponSnapshotIfFresh;
+// Geçmiş toplantının kupon hesaplama GIRDILERINE ait sabit imza.
+// Sonuç, finish_position, sonuç puanı, DB öğrenme sayacı ve arşiv satır
+// sayısı bu imzaya dahil değildir: yarış sonrası sonuç importu, görünen
+// tarihsel kuponun TEK/seçimlerini silemez. Bu imza yalnız araştırma
+// replaysi içindir; canlı kupon imzasının yerine GEÇMEZ.
+function tkpHistoricalReplayInputFingerprint(raceResults){
+  let hash=2166136261>>>0;
+  const mix=value=>{
+    const s=String(value??'');
+    for(let i=0;i<s.length;i++){hash^=s.charCodeAt(i);hash=Math.imul(hash,16777619)>>>0;}
+    hash^=124;hash=Math.imul(hash,16777619)>>>0;
+  };
+  mix('TKP_FOREIGN_ARCHIVE_INPUT_V1');
+  for(const item of raceResults||[]){
+    const r=item?.r||item||{};
+    for(const k of ['file_id','race_date','hippodrome','altili_no','leg','distance','surface','breed','condition_family'])mix(r[k]);
+    for(const h of (r.horses||item?.scored||[])){
+      for(const k of ['horse_no','horse_name','non_runner','atr_non_runner','prediction_score_snapshot',
+        'prediction_order_snapshot','score','tkp_score','agf','agf_rank','bmb','odb',
+        'ypuan','atr_ypuan','atr_comment_score','atr_foreign_score','atr_foreign_confidence',
+        'atr_form','atr_or','atr_ganyan','tr_ganyan','tr_puan','weight_kg','hndkp','g800'])mix(h[k]);
+    }
+  }
+  return 'HIST1-'+(hash>>>0).toString(36);
+}
+// Geçmiş yabancı toplantı: yarış öncesi doğrulanmış kuponlar dokunulmazdır.
+// Sadece AYNI yarış/veri-imzası/bütçe ile SONRADAN oluşturulmuş ve tam üçlü
+// kuponları geri açar. Eski LEGACY snapshot burada ASLA yeniden hesaplamanın
+// yerine geçmez. Sonuca bakılarak üretilen kupon pre-race/backtest sayılmaz.
+function tkpHasVerifiedHistoricalCouponSnapshot(raceResults){
+  if(!db||!Array.isArray(db.auto_coupon_log))return false;
+  const ctx=couponSnapshotContext(raceResults,'');
+  return db.auto_coupon_log.some(s=>
+    couponSnapshotMatchesContext(s,ctx)
+    && Number(s?.pre_race_only)===1
+    && Number(s?.snapshot_time_verified)===1
+    && s?.coupon_timing_class==='pre_race'
+    && Number(s?.manual_adjustment)!==1
+    && Number(s?.archive_snapshot)!==1
+    && ['main','alt','surprise'].every(k=>Array.isArray(s?.coupons?.[k]?.legs)&&s.coupons[k].legs.length===6));
+}
+function tkpExactHistoricalReplayRecord(raceResults,budgets){
+  if(!db||!Array.isArray(db.auto_coupon_log)||!Array.isArray(raceResults)||!raceResults.length)return null;
+  if(typeof tkpLiveCouponFingerprint!=='function')return null;
+  const ctx=couponSnapshotContext(raceResults,'');
+  const fingerprint=tkpHistoricalReplayInputFingerprint(raceResults);
+  const requested=budgets&&typeof tkpCouponBudgetPolicy==='function'?tkpCouponBudgetPolicy(budgets):budgets;
+  const policyVersion=globalThis.TKP_COUPON_COVERAGE?.singlePolicyVersion;
+  return db.auto_coupon_log.filter(s=>
+    couponSnapshotMatchesContext(s,ctx,'SONRADAN_HESAPLANAN')
+    && Number(s?.post_collection_reconstruction)===1
+    && s?.coupon_timing_class==='post_collection'
+    && (String(s?.archive_replay_signature||'')===fingerprint
+      || (!s?.archive_replay_signature&&String(s?.data_signature||'')===tkpLiveCouponFingerprint(raceResults)))
+    && tkpCouponSnapshotMatchesRequestedBudgets(s,requested)
+    && s?.single_policy_version===policyVersion
+    && globalThis.TKP_COUPON_COVERAGE?.auditSet?.(s.coupons)?.valid===true
+    && ['main','alt','surprise'].every(k=>
+      Array.isArray(s?.coupons?.[k]?.legs)&&s.coupons[k].legs.length===6
+      && s.coupons[k].legs.every(l=>Array.isArray(l?.picks)&&l.picks.length))
+  ).sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')))[0]||null;
+}
+function tkpRestoreExactHistoricalReplayCoupon(raceResults,budgets){
+  const snapshot=tkpExactHistoricalReplayRecord(raceResults,budgets);
+  if(!snapshot)return null;
+  const original=db.auto_coupon_log;
+  const before={main:activeCoupons.main,main2:activeCoupons.main2,alt:activeCoupons.alt,surprise:activeCoupons.surprise};
+  try{
+    db.auto_coupon_log=[snapshot];
+    // Kayıtlı atları mevcut koşu atlarına bağla. Manuel override'lar kayıtlı
+    // sonradan hesaplama sonucunu değiştiremez; bu yol salt-okunurdur.
+    const restored=tkpRestoreLatestPreRaceCouponSnapshot(raceResults,{skipManualOverrides:true});
+    const valid=['main','alt','surprise'].every(k=>
+      (activeCoupons[k]?.legs||[]).length===6
+      && activeCoupons[k].legs.every(l=>Array.isArray(l?.picks)&&l.picks.length>0)
+      && activeCoupons[k].legs.every((l,i)=>l.picks.length===Number(snapshot?.coupons?.[k]?.legs?.[i]?.picks?.length)));
+    if(valid)return restored;
+    Object.assign(activeCoupons,before);
+    return null;
+  }finally{db.auto_coupon_log=original;}
+}
+if(typeof globalThis!=='undefined'){
+  globalThis.tkpHasVerifiedHistoricalCouponSnapshot=tkpHasVerifiedHistoricalCouponSnapshot;
+  globalThis.tkpRestoreExactHistoricalReplayCoupon=tkpRestoreExactHistoricalReplayCoupon;
+}
 function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
-  if(!db || tkpCouponMeetingLocked(raceResults)) return false;
+  const postCollection=String(source||'')==='SONRADAN_HESAPLANAN';
+  if(!db || (tkpCouponMeetingLocked(raceResults)&&!postCollection)) return false;
+  if(postCollection){
+    // Eski arşiv kaydının varlığı, taze ve ayrı imzalı araştırma kuponunu
+    // kaydetmeyi engellemez. Eşleşen bir sonradan-hesaplama varsa kullan.
+    const existing=tkpExactHistoricalReplayRecord(raceResults,budgets);
+    if(existing)return existing;
+  }
   if(!Array.isArray(db.auto_coupon_log)) db.auto_coupon_log=[];
   const ctx=couponSnapshotContext(raceResults,source);
   const backtestEligible=tkpBacktestEligibleSnapshotSource(source);
@@ -7213,9 +9219,13 @@ function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
     snapshot_time_verified:timeVerified?1:0,
     meeting_start_at:meetingStartAt,
     snapshot_locked_at:createdAt,
-    resolution_state:'PENDING',
+    resolution_state:postCollection?'POST_COLLECTION_ONLY':'PENDING',
+    record_type:'coupon_snapshot',
+    coupon_timing_class:postCollection?'post_collection':'pre_race',
+    post_collection_reconstruction:postCollection?1:0,
     race_date:ctx.date,hippodrome:ctx.hippodrome,altili_no:ctx.altiliNo,meeting_uid:ctx.meetingUid,
     data_signature:typeof tkpLiveCouponFingerprint==='function'?tkpLiveCouponFingerprint(raceResults):'',
+    archive_replay_signature:postCollection?tkpHistoricalReplayInputFingerprint(raceResults):'',
     source_type:sourceMetadata.source_type,source_id:sourceMetadata.source_id,author_id:sourceMetadata.author_id,
     // `budgets` geriye dönük sözleşmede kullanıcı tavanıdır. Yeni alanlar açık
     // isimli tutulur ki eski backup/diagnostics satırları da okunabilsin.
@@ -7227,19 +9237,31 @@ function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
       : {cost:Number(c?.cost)||0,unit:Number(c?.unit)||0,
         calculationLimited:c?.calculationLimited===true,algorithmVersion:c?.calculationLimited?'R16.80-BOUNDED-COVERAGE':c?.algorithmVersion||globalThis.TKP_V55_ALGORITHM_VERSION||'V55',
         policyAudit:c?.policyAudit?JSON.parse(JSON.stringify(c.policyAudit)):null,
+        deepSurpriseShadow:typeof globalThis.tkpBuildDeepSurpriseShadowCoupon==='function'?globalThis.tkpBuildDeepSurpriseShadowCoupon(c,{capturedAt:createdAt}):null,
         decision:(()=>{try{const d=typeof tkpCouponDecisionData==='function'?tkpCouponDecisionData(c):null;return d?{label:d.label,summary:d.summary,reason:d.reason}:null;}catch(_e){return null;}})(),
         legs:(c?.legs||[]).map(l=>({
           leg:Number(l?.x?.r?.leg??l?.r?.leg??l?.race?.leg)||0,
           picks:(l?.picks||[]).map(h=>String(h?.horse_no??h)).filter(Boolean),
+          deepSurpriseProtection:{flag:l?.protectedFlag===true,nos:[...new Set([...(l?.protectedValueNos||[]),...(l?.protectedSignalNos||[]),...(l?.protectedBombNos||[]),...(l?.kulisPriorityNos||[])].map(String))]},
           selectionOrderNos:l.selectionOrderNos||(l.ordered||l.allHorses||l.picks||[]).map(h=>String(h?.horse_no??h)).filter(Boolean)
         }))}
     ]))
   };
-  db.auto_coupon_log=db.auto_coupon_log.filter(x=>x.key!==ctx.key);
+  if(postCollection){
+    // Geçmiş yarışın gerçek orijinal kuponuna asla dokunma. Bütçe ve/veya
+    // veri imzası değişmiş diğer araştırma kayıtlarını da kaybetme.
+    const allReplays=db.auto_coupon_log.filter(x=>x.key===ctx.key&&x.source==='SONRADAN_HESAPLANAN')
+      .sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+    const keep=new Set([...allReplays.slice(0,1),...allReplays.slice(-7)]);
+    db.auto_coupon_log=db.auto_coupon_log.filter(x=>x.key!==ctx.key||keep.has(x));
+  }else{
+    db.auto_coupon_log=db.auto_coupon_log.filter(x=>x.key!==ctx.key);
+  }
   db.auto_coupon_log.push(snapshot);
   tkpWriteCurrentCouponSnapshotWal(snapshot);
   // Yarış öncesi gerçek snapshotlar öğrenme/backtest kanıtıdır; son-N diye silinmez.
   if(backtestEligible){
+    try{for(const x of raceResults||[])globalThis.tkpDeepSurpriseTrackerCaptureRace?.(x);}catch(_e){}
     try{ if(typeof tkpForwardTrackingAttachCouponSnapshot==='function') tkpForwardTrackingAttachCouponSnapshot(snapshot,{persist:false}); }catch(_e){}
     try{ if(typeof tkpWeeklyModelTrackerAttachCouponSnapshot==='function') tkpWeeklyModelTrackerAttachCouponSnapshot(snapshot,{persist:false}); }catch(_e){}
     try{ tkpScheduleExactSideBetTickets(snapshot,raceResults); }catch(_e){}
@@ -7265,7 +9287,7 @@ function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
   // arka plandaki 6-7 saniyelik tam-arşiv yazımıyla kilitlenmez.
   try{
     const changedCollections=['auto_coupon_log'];
-    if(backtestEligible)changedCollections.push('forward_tracking_log','weekly_model_log','sidebet_ticket_log');
+    if(backtestEligible)changedCollections.push('forward_tracking_log','weekly_model_log','sidebet_ticket_log','deep_surprise_tracking_log');
     const persist=typeof globalThis.tkpPersistCollections==='function'
       ?globalThis.tkpPersistCollections(changedCollections,{metaPatch:{settings:db.settings},label:'coupon-snapshot'})
       :saveDB(false,false);
@@ -7318,7 +9340,8 @@ async function autoBuildCouponsAfterFinalAgf(){
 }
 async function tkpBuildCouponsAfterDataCollection(raceResults=null){
   const rows=Array.isArray(raceResults)&&raceResults.length?raceResults:lastRaceResults;
-  if(!Array.isArray(rows)||!rows.length||tkpCouponMeetingLocked(rows))return {ok:false,reason:'locked_or_empty'};
+  const policy=tkpCouponGenerationPolicy(rows);
+  if(!policy.allowed)return {ok:false,reason:'empty'};
   const budgets=_v24ReadBudgets();
   const restored=tkpRestoreCurrentCouponSnapshotIfFresh(rows,budgets);
   if(restored)return {ok:true,restored:true,snapshot:restored};
@@ -7332,17 +9355,40 @@ async function tkpBuildCouponsAfterDataCollection(raceResults=null){
   if(typeof refreshRecommendedHorsePanelsFromCoupon==='function')refreshRecommendedHorsePanelsFromCoupon();
   // Snapshot restore anahtarı kullanıcının istek tavanıdır; efektif motor hedefi
   // saveAutomaticCouponSnapshot içinde ayrı alan olarak üretilir.
-  saveAutomaticCouponSnapshot(rows,activeCoupons,budgets,'SISTEM_GUNCEL_VERI');
+  for(const coupon of [activeCoupons.main,activeCoupons.alt,activeCoupons.surprise])if(coupon)coupon.postCollectionReconstruction=policy.retrospective;
+  const snapshotQueued=saveAutomaticCouponSnapshot(rows,activeCoupons,budgets,policy.source);
   // İlk otomatik üretimde ikinci SON_KUPON kaydını yazmak yalnızca DB/WAL işini
   // ikiye katlıyordu. SON_KUPON, kullanıcı manuel değişiklik yaptığında veya A4
   // paylaşımı istediğinde zaten tkpPersistFinalCouponSnapshot ile kaydedilir.
   if(typeof refreshRenderedSideBetPanel==='function')refreshRenderedSideBetPanel();
-  return {ok:true,restored:false,fastSet};
+  return {ok:true,restored:false,fastSet,retrospective:policy.retrospective,snapshotQueued};
 }
 if(typeof globalThis!=='undefined')globalThis.tkpBuildCouponsAfterDataCollection=tkpBuildCouponsAfterDataCollection;
 async function autoBuildCouponsAfterLiveXUpdate(){
   if(!lastRaceResults?.length||tkpCouponMeetingLocked(lastRaceResults))return false;
   const budgets=_v24ReadBudgets();
+  // X güncellemesi tavsiye/kanıt getirebilir; var olan kupon seçimini
+  // sessizce değiştiremez. İlk geçerli aynı-toplantı snapshotını yeğle.
+  const xCtx=couponSnapshotContext(lastRaceResults,'');
+  const xPrior=(Array.isArray(db?.auto_coupon_log)?db.auto_coupon_log:[])
+    .filter(s=>couponSnapshotMatchesContext(s,xCtx)
+      && s?.coupons && typeof s.coupons==='object'
+      && (s.source==='SON_AGF_OTOMATIK'||s.source==='SISTEM_GUNCEL_VERI'||s.source==='SON_KUPON'||s.source==='X_GUNCEL_OTOMATIK')
+      && globalThis.TKP_COUPON_COVERAGE?.auditSet?.(s.coupons)?.valid===true)
+    .sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+  if(xPrior.length){
+    const oldLog=db.auto_coupon_log;
+    let pinned=null;
+    try{
+      db.auto_coupon_log=[xPrior[0]];
+      pinned=tkpRestoreLatestPreRaceCouponSnapshot(lastRaceResults);
+    }finally{db.auto_coupon_log=oldLog;}
+    if(pinned){
+      if(typeof refreshRecommendedHorsePanelsFromCoupon==='function')refreshRecommendedHorsePanelsFromCoupon();
+      if(typeof refreshRenderedSideBetPanel==='function')refreshRenderedSideBetPanel();
+      return {restored:true,xLocked:true,snapshot:pinned};
+    }
+  }
   const restored=tkpRestoreCurrentCouponSnapshotIfFresh(lastRaceResults,budgets);
   if(restored){
     if(typeof refreshRecommendedHorsePanelsFromCoupon==='function')refreshRecommendedHorsePanelsFromCoupon();
@@ -7382,4 +9428,197 @@ async function autoBuildCouponsFortyMinutesBefore(){
     return {restored:true,snapshot:restored};
   }
   const fastSet=typeof tkpBuildCouponSetAdaptiveAsync==='function'?await tkpBuildCouponSetAdaptiveAsync(lastRaceResults,budgets):buildCouponSetFast(lastRaceResults,budgets);activeCoupons.main=fastSet.main;activeCoupons.main2=fastSet.main2;activeCoupons.alt=fastSet.alt;activeCoupons.surprise=fastSet.surprise;if(typeof refreshRecommendedHorsePanelsFromCoupon==='function') refreshRecommendedHorsePanelsFromCoupon();saveAutomaticCouponSnapshot(lastRaceResults,activeCoupons,budgets,'YARISTAN_40_DK_ONCE'); if(typeof refreshRenderedSideBetPanel==='function') refreshRenderedSideBetPanel(); return true;
+}
+
+// ===== OTOMATİK KENDİ KENDİNE BACK TEST (Tommy 20261018) =====
+// Yarış-öncesi kayıtlı kuponların ayak genişlikleriyle (maliyet eşit) Champion sırası ile AGF sırasını sonuçlanmış
+// toplantılarda karşılaştırır; tek isabeti ve yan bahis (sıralı ikili, üçlü bahis) getirisini de ölçer.
+// KARAR yalnız "since" tarihinden sonraki yeni toplantılarla verilir (arşiv yalnızca bilgi). Otomatik değişiklik:
+// AGF sırası bir rolde yeni veride Champion'dan anlamlı kötüyse (en az 15 farklı sonuçlu toplantı, tek yönlü işaret
+// testi p<=0.10) o rol kapatılır; anlamlı iyiyse tekrar açılır. Rol başına 7 gün bekleme. Yan bahis/tek sonuçları
+// yalnızca rapordur (örnek küçük/gürültülü); model terfisi haftalık model takibinin kendi kapısındadır.
+const TKP_SELFTEST_SIDE_AUTO=false; // Tommy 20261018: yan bahisler Champion'da KALIR; otomatik geçiş kapalı (yalnız rapor).
+const TKP_SELFTEST_MIN_DISCORDANT=15,TKP_SELFTEST_ALPHA=0.10,TKP_SELFTEST_COOLDOWN_MS=7*864e5;
+function tkpSignTestLE(k,n){ // P(X<=k), X~Bin(n,.5)
+  if(n<=0)return 1;let c=1,sum=0;
+  for(let i=0;i<=k;i++){if(i>0)c=c*(n-i+1)/i;sum+=c;}
+  return Math.min(1,sum/Math.pow(2,n));
+}
+function tkpBootstrapMeanPositive(arr,B=1000){ // P(ortalama>0), deterministik tohum
+  let seed=88172645,n=arr.length;const rnd=()=>{seed^=seed<<13;seed>>>=0;seed^=seed>>>17;seed^=seed<<5;seed>>>=0;return seed/4294967296;};
+  let pos=0;for(let b=0;b<B;b++){let t=0;for(let i=0;i<n;i++)t+=arr[Math.floor(rnd()*n)];if(t>0)pos++;}
+  return pos/B;
+}
+function tkpSelfTestMeetingIndex(){
+  const idx=new Map(),fo=typeof fold==='function'?fold:(s=>String(s||'').toLocaleUpperCase('tr-TR'));
+  for(const r of (db?.races||[])){
+    if(!r||r.active===false||!r.altili_no)continue;
+    const k=[r.race_date,fo(r.hippodrome||''),Number(r.altili_no)||0].join('|');
+    let m=idx.get(k);if(!m){m=new Map();idx.set(k,m);}
+    const leg=Number(r.leg)||0;if(leg>=1&&leg<=6&&!m.has(leg))m.set(leg,r);
+  }
+  return {idx,fo};
+}
+function tkpSelfTestRank(r,mode){
+  const nr=h=>{try{return typeof isNonRunner==='function'&&isNonRunner(h);}catch(_){return false;}};
+  const hs=(r?.horses||[]).filter(h=>h&&h.horse_no&&!nr(h));
+  if(!hs.length)return null;
+  if(mode==='agf'){if(!hs.every(h=>Number(h.agf)>0))return null;return hs.slice().sort((a,b)=>(Number(b.agf)||0)-(Number(a.agf)||0)||(Number(a.horse_no)||0)-(Number(b.horse_no)||0));}
+  if(!hs.every(h=>Number.isFinite(Number(h.prediction_score_snapshot))))return null;
+  return hs.slice().sort((a,b)=>(Number(b.prediction_score_snapshot)||0)-(Number(a.prediction_score_snapshot)||0)||(Number(a.horse_no)||0)-(Number(b.horse_no)||0));
+}
+function tkpRunSelfTest(since){
+  const {idx,fo}=tkpSelfTestMeetingIndex();
+  const roles={main:'normal',surprise:'surprise',alt:'alt'};
+  const mk=()=>({n:0,champ:0,agf:0,agfOnly:0,champOnly:0});
+  const out={roles:{},side:{},single:{}};
+  for(const role of Object.keys(roles))out.roles[role]={archive:mk(),fresh:mk()};
+  const mkS=()=>({races:0,champCost:0,champRet:0,agfCost:0,agfRet:0,champHits:0,agfHits:0});
+  out.side={sirali_ikili:mkS(),uclu_bahis:mkS()};out.single={legs:0,champ:0,agf:0,champOnly:0,agfOnly:0};out.sideDiffs=[];
+  const seen=new Set();
+  for(const a of (db?.auto_coupon_log||[])){
+    if(!a||!/^RESOLVED/.test(String(a.resolution_state||''))||a.post_collection_reconstruction)continue;
+    const k=[a.race_date,fo(a.hippodrome||''),Number(a.altili_no)||0].join('|');
+    const legs=idx.get(k);if(!legs||legs.size<6)continue;
+    const fresh=String(a.race_date||'')>=since;
+    const win=[];let okWin=true;
+    for(let l=1;l<=6;l++){const r=legs.get(l);const w=(r?.horses||[]).filter(h=>h&&(h.winner===1||h.finish_position===1)).map(h=>String(h.horse_no));if(!w.length){okWin=false;break;}win.push(w);}
+    if(!okWin)continue;
+    for(const role of Object.keys(roles)){
+      const c=a.coupons?.[role];if(!c||c.error||!Array.isArray(c.legs)||c.legs.length!==6)continue;
+      let ch=true,ag=true,ok=true;
+      for(let l=1;l<=6;l++){
+        const r=legs.get(l),w=Math.max(1,(c.legs.find(x=>Number(x.leg)===l)||c.legs[l-1])?.picks?.length||0);
+        const rc=tkpSelfTestRank(r,'champ'),ra=tkpSelfTestRank(r,'agf');
+        if(!rc||!ra||rc.length<w){ok=false;break;}
+        if(!rc.slice(0,w).some(h=>win[l-1].includes(String(h.horse_no))))ch=false;
+        if(!ra.slice(0,w).some(h=>win[l-1].includes(String(h.horse_no))))ag=false;
+      }
+      if(!ok)continue;
+      for(const bucket of (fresh?['archive','fresh']:['archive'])){
+        const s=out.roles[role][bucket];s.n++;if(ch)s.champ++;if(ag)s.agf++;if(ag&&!ch)s.agfOnly++;if(ch&&!ag)s.champOnly++;
+      }
+    }
+    if(!fresh||seen.has(k))continue;seen.add(k);
+    for(let l=1;l<=6;l++){
+      const r=legs.get(l),rc=tkpSelfTestRank(r,'champ'),ra=tkpSelfTestRank(r,'agf');if(!rc||!ra)continue;
+      out.single.legs++;const c1=win[l-1].includes(String(rc[0].horse_no)),a1=win[l-1].includes(String(ra[0].horse_no));if(c1)out.single.champ++;if(a1)out.single.agf++;if(c1&&!a1)out.single.champOnly++;if(a1&&!c1)out.single.agfOnly++;
+      for(const [key,widths] of [['sirali_ikili',[1,5]],['uclu_bahis',[1,2,7]]]){
+        const pe=(r.payouts||[]).find(p=>p&&p.key===key&&!p.rollover&&p.combo);if(!pe)continue;
+        const combo=String(pe.combo).split('/').map(x=>x.trim());if(combo.length!==widths.length||new Set(combo).size!==combo.length)continue;
+        const s=out.side[key];s.races++;const net={champ:0,agf:0};
+        for(const [rank,pre] of [[rc,'champ'],[ra,'agf']]){
+          const nos=rank.map(h=>String(h.horse_no)),sets=widths.map(w=>nos.slice(0,w));
+          let tuples=[[]];for(const st of sets){const nt=[];for(const t of tuples)for(const h of st)if(!t.includes(h))nt.push(t.concat([h]));tuples=nt;}
+          const hit=sets.every((st,i)=>st.includes(combo[i]));
+          s[pre+'Cost']+=tuples.length;net[pre]-=tuples.length;if(hit){s[pre+'Ret']+=Number(pe.amount)||0;s[pre+'Hits']++;net[pre]+=Number(pe.amount)||0;}
+        }
+        out.sideDiffs.push(net.agf-net.champ);
+      }
+    }
+  }
+  return out;
+}
+function tkpApplySelfTestDecisions(res,st,now){
+  const log=[];let pol=tkpAgfOrderPolicy();let roles=pol.roles.slice(),enabled=pol.enabled,changed=false;
+  const last=st.lastChange||{};
+  for(const role of ['main','surprise','alt']){
+    const f=res.roles[role].fresh,disc=f.agfOnly+f.champOnly;
+    const active=enabled&&roles.includes(role);
+    if(disc<TKP_SELFTEST_MIN_DISCORDANT)continue;
+    if(last[role]&&now-Date.parse(last[role])<TKP_SELFTEST_COOLDOWN_MS)continue;
+    const pWorse=tkpSignTestLE(f.agfOnly,disc),pBetter=tkpSignTestLE(f.champOnly,disc);
+    if(active&&f.champOnly>f.agfOnly&&pWorse<=TKP_SELFTEST_ALPHA){
+      roles=roles.filter(x=>x!==role);last[role]=new Date(now).toISOString();changed=true;
+      log.push({at:last[role],role,action:'AGF sırası KAPATILDI',agfOnly:f.agfOnly,champOnly:f.champOnly,p:pWorse});
+    }else if(!active&&f.agfOnly>f.champOnly&&pBetter<=TKP_SELFTEST_ALPHA){
+      if(!roles.includes(role))roles.push(role);enabled=true;last[role]=new Date(now).toISOString();changed=true;
+      log.push({at:last[role],role,action:'AGF sırası AÇILDI',agfOnly:f.agfOnly,champOnly:f.champOnly,p:pBetter});
+    }
+  }
+  // TEK ayak lideri: eşleştirilmiş işaret testi (farklı sonuçlu ayaklar), en az 30.
+  const sg=res.single,sdisc=sg.agfOnly+sg.champOnly,tekOn=tkpAgfOrderPolicy().tek;
+  if(sdisc>=30&&!(last.tek&&now-Date.parse(last.tek)<TKP_SELFTEST_COOLDOWN_MS)){
+    if(!tekOn&&sg.agfOnly>sg.champOnly&&tkpSignTestLE(sg.champOnly,sdisc)<=TKP_SELFTEST_ALPHA){tkpSetAgfScope('tek',true);last.tek=new Date(now).toISOString();changed=true;log.push({at:last.tek,role:'tek',action:'TEK ayaklarda AGF lideri AÇILDI',agfOnly:sg.agfOnly,champOnly:sg.champOnly,p:tkpSignTestLE(sg.champOnly,sdisc)});}
+    else if(tekOn&&sg.champOnly>sg.agfOnly&&tkpSignTestLE(sg.agfOnly,sdisc)<=TKP_SELFTEST_ALPHA){tkpSetAgfScope('tek',false);last.tek=new Date(now).toISOString();changed=true;log.push({at:last.tek,role:'tek',action:'TEK ayaklarda AGF lideri KAPATILDI',agfOnly:sg.agfOnly,champOnly:sg.champOnly,p:tkpSignTestLE(sg.agfOnly,sdisc)});}
+  }
+  // YAN BAHİS sırası: yarış-başı net fark (AGF − Champion) için deterministik bootstrap; en az 150 ölçüm ve 25 isabet.
+  const sd=res.sideDiffs||[],sideOn=tkpAgfOrderPolicy().side,sideHits=Object.values(res.side).reduce((a,x)=>a+Math.max(x.champHits,x.agfHits),0);
+  if(!TKP_SELFTEST_SIDE_AUTO&&sideOn){tkpSetAgfScope('side',false);changed=true;log.push({at:new Date(now).toISOString(),role:'yan bahis',action:'Yan bahis Champion sırasına geri alındı (kullanıcı kararı)',agfOnly:0,champOnly:0,p:1});}
+  if(TKP_SELFTEST_SIDE_AUTO&&sd.length>=150&&sideHits>=25&&!(last.side&&now-Date.parse(last.side)<TKP_SELFTEST_COOLDOWN_MS)){
+    const pBetter=tkpBootstrapMeanPositive(sd);
+    if(!sideOn&&pBetter>=0.95){tkpSetAgfScope('side',true);last.side=new Date(now).toISOString();changed=true;log.push({at:last.side,role:'yan bahis',action:'Yan bahiste AGF sırası AÇILDI',agfOnly:0,champOnly:0,p:1-pBetter});}
+    else if(sideOn&&pBetter<=0.05){tkpSetAgfScope('side',false);last.side=new Date(now).toISOString();changed=true;log.push({at:last.side,role:'yan bahis',action:'Yan bahiste AGF sırası KAPATILDI',agfOnly:0,champOnly:0,p:pBetter});}
+  }
+  if(changed){
+    if(!roles.length)tkpSetAgfOrderPolicy(false,['main','surprise','alt']);else tkpSetAgfOrderPolicy(true,roles);
+    for(const fn of ['invalidateActiveRacesCache','tkpInvalidateSideBetPlanCache','tkpInvalidateSideBetTicketHtmlCache','tkpInvalidateFastBacktestCache'])try{if(typeof globalThis[fn]==='function')globalThis[fn]();}catch(_){ }
+  }
+  st.lastChange=last;return log;
+}
+let _tkpSelfTestRunning=false,_tkpSelfTestTimer=null;
+async function tkpAutoSelfTest({force=false}={}){
+  if(_tkpSelfTestRunning)return {skipped:'running'};
+  try{
+    if(typeof db==='undefined'||!db)return {skipped:'nodb'};
+    _tkpSelfTestRunning=true;
+    const prev=db.settings?.auto_selftest||{};
+    const sig=[(db.auto_coupon_log||[]).length,(db.races||[]).length].join('|');
+    if(!force&&prev.sig===sig)return {skipped:'same'};
+    if(!db.settings||typeof db.settings!=='object')db.settings={};
+    const since=prev.since||new Date().toISOString().slice(0,10); // karar penceresi: ilk çalıştırma günü ve sonrası
+    const res=tkpRunSelfTest(since);
+    const st={version:'SELFTEST-V1',since,sig,checkedAt:new Date().toISOString(),result:res,lastChange:prev.lastChange||{},history:(prev.history||[]).slice(-19)};
+    const acts=tkpApplySelfTestDecisions(res,st,Date.now());
+    if(acts.length)st.history=st.history.concat(acts);
+    st.policy=tkpAgfOrderPolicy();
+    db.settings.auto_selftest=st;
+    try{if(typeof saveDB==='function')await saveDB(false,true);}catch(_){ }
+    try{tkpRenderSelfTestPanel();}catch(_){ }
+    if(acts.length){try{if(typeof renderAll==='function')renderAll();}catch(_){ }}
+    return {ok:true,actions:acts};
+  }catch(err){try{console.warn('[TKP] Otomatik self-test atlandı:',err);}catch(_){ }return {error:String(err)};}
+  finally{_tkpSelfTestRunning=false;}
+}
+function tkpScheduleAutoSelfTest(delay=12000){
+  clearTimeout(_tkpSelfTestTimer);
+  _tkpSelfTestTimer=setTimeout(()=>{(globalThis.requestIdleCallback||(f=>setTimeout(f,0)))(()=>{tkpAutoSelfTest();});},delay);
+}
+function tkpSelfTestHtml(){
+  const st=db?.settings?.auto_selftest;
+  const box=(inner)=>`<div class="card" style="border-left:5px solid #0369a1;"><div class="sectionTitle"><div><h2 style="margin:0 0 4px;">Otomatik kendi kendine test</h2><p class="muted" style="margin:0;">Yeni sonuçlanan toplantılarla arka planda çalışır; ekranı açmanız gerekmez. Karar yalnız test başlangıcından sonraki toplantılarla verilir.</p></div></div>${inner}</div>`;
+  if(!st||!st.result)return box('<div class="empty">Henüz ölçüm yok; ilk çalıştırma birkaç saniye içinde arka planda yapılır.</div>');
+  const pct=(a,b)=>b>0?(a/b*100).toFixed(1)+'%':'-',roi=(r,c)=>c>0?((r/c-1)*100).toFixed(0)+'%':'-';
+  const names={main:'Normal',surprise:'Sürpriz',alt:'Alt / Uzman'};
+  const pol=st.policy||tkpAgfOrderPolicy();
+  const rows=['main','surprise','alt'].map(role=>{
+    const a=st.result.roles[role].archive,f=st.result.roles[role].fresh,disc=f.agfOnly+f.champOnly;
+    const on=pol.enabled&&(pol.roles||[]).includes(role);
+    const need=disc>=TKP_SELFTEST_MIN_DISCORDANT?'karar verilebilir':`kanıt birikiyor (${disc}/${TKP_SELFTEST_MIN_DISCORDANT})`;
+    return `<tr><td>${names[role]}</td><td>${on?'AGF sırası AÇIK':'Champion sırası'}</td><td>${a.n}</td><td>${a.champ} / ${a.agf}</td><td>${f.n}</td><td>${f.champ} / ${f.agf}</td><td>${f.champOnly} / ${f.agfOnly}</td><td>${need}</td></tr>`;
+  }).join('');
+  const s=st.result.single,sb=st.result.side;
+  const sideRow=(k,label)=>{const x=sb[k];return `<tr><td>${label}</td><td>${x.races}</td><td>${roi(x.champRet,x.champCost)} (${x.champHits})</td><td>${roi(x.agfRet,x.agfCost)} (${x.agfHits})</td></tr>`;};
+  const hist=(st.history||[]).slice(-6).reverse().map(h=>`<li>${String(h.at||'').slice(0,16).replace('T',' ')} · ${h.role} · ${h.action} (Champion-tek ${h.champOnly}, AGF-tek ${h.agfOnly}, p=${Number(h.p).toFixed(3)})</li>`).join('');
+  return box(`
+    <div class="tableWrap"><table class="miniTable"><thead><tr><th>Kupon</th><th>Şu an</th><th>Arşiv top.</th><th>6/6 Champ/AGF</th><th>Yeni top.</th><th>6/6 Champ/AGF</th><th>Sadece Champ / sadece AGF</th><th>Durum</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="margin:8px 0 4px;">TEK ayaklar için de otomatik: 30 farklı ayakta p≤0.10. Yan bahisler Champion'da sabit (otomatik geçiş kapalı, yalnız rapor). Kural: yeni veride en az ${TKP_SELFTEST_MIN_DISCORDANT} farklı sonuçlu toplantı ve işaret testi p≤${TKP_SELFTEST_ALPHA} olursa AGF sırası o kupon için otomatik kapanır/açılır (rol başına 7 gün bekleme). Arşiv sütunları bilgi amaçlıdır.</p>
+    <div class="tableWrap"><table class="miniTable"><thead><tr><th>Yeni veri · yan bahisler: Champion sabit · AGF ile karşılaştırma ölçümü ${(st.result.sideDiffs||[]).length}</th><th>Örnek</th><th>Champion</th><th>AGF</th></tr></thead><tbody>
+      <tr><td>Tek ayak isabeti (ilk seçim) · AGF lideri: ${pol.tek?'AÇIK':'kapalı'} · sadece Champ/AGF ${s.champOnly||0}/${s.agfOnly||0} (karar için 30)</td><td>${s.legs}</td><td>${pct(s.champ,s.legs)}</td><td>${pct(s.agf,s.legs)}</td></tr>
+      ${sideRow('sirali_ikili','Sıralı ikili getirisi (1+5)')}${sideRow('uclu_bahis','Üçlü bahis getirisi (1+2+7)')}
+    </tbody></table></div>
+    ${hist?`<p class="muted" style="margin:8px 0 2px;">Otomatik değişiklikler:</p><ul style="margin:0 0 0 18px;">${hist}</ul>`:''}
+    <p class="muted" style="margin:8px 0 0;">Son kontrol: ${String(st.checkedAt||'').slice(0,16).replace('T',' ')} · karar penceresi başlangıcı: ${st.since}</p>`);
+}
+function tkpRenderSelfTestPanel(){
+  if(typeof document==='undefined')return;
+  const el=document.getElementById('tkpSelfTestPanel');if(!el)return;
+  el.innerHTML=tkpSelfTestHtml();
+}
+if(typeof globalThis!=='undefined'){
+  globalThis.tkpAutoSelfTest=tkpAutoSelfTest;globalThis.tkpRunSelfTest=tkpRunSelfTest;globalThis.tkpRenderSelfTestPanel=tkpRenderSelfTestPanel;globalThis.tkpSignTestLE=tkpSignTestLE;globalThis.tkpSetAgfScope=tkpSetAgfScope;
+  if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
+    window.addEventListener('tkp:db-changed',ev=>{const d=ev?.detail||{};if(d.resultsChanged||d.learningChanged||d.backtestChanged)tkpScheduleAutoSelfTest(20000);});
+    window.addEventListener('load',()=>{tkpScheduleAutoSelfTest(20000);setTimeout(()=>{try{tkpRenderSelfTestPanel();}catch(_){ }},4000);});
+  }
 }

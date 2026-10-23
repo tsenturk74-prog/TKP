@@ -19,6 +19,7 @@
   });
   const BUSY_STATES = new Set(['loading', 'calculating', 'testing', 'saving', 'working']);
   const TKP_UI_DEADLINE_MS = 15000;
+  const TKP_HARD_OPERATION_LIMIT_MS = 50000;
   const resetTimers = new WeakMap();
 
   // Menü metinleri eski kompakt düzenle korunur. Simgeler ayrı çip olarak
@@ -140,7 +141,21 @@
 
     const backgroundMarker={background:true};
     let safetyTimer=0;
+    let hardLimitExceeded=false;
     const taskPromise=Promise.resolve().then(task);
+    // 50 sn kesin sınır: görev güvenli biçimde kesilemiyorsa arka planda tamamlanmasına
+    // izin verilir, fakat kritik darboğaz telemetrisi yazılır ve UI hiçbir zaman kilitli kalmaz.
+    const hardTimer=window.setTimeout(()=>{
+      hardLimitExceeded=true;
+      const error=new Error(`${actionName}: 50 sn kritik gecikme sınırı aşıldı`);
+      try{window.tkpRecordAction?.(actionName,actionStarted,error,{budgetMs:TKP_HARD_OPERATION_LIMIT_MS,timedOut:true,hardLimit:true});}catch(_){ }
+      try{window.tkpRecordSlowOperation?.('ui-action',{name:actionName,durationMs:TKP_HARD_OPERATION_LIMIT_MS,error:error.message});}catch(_){ }
+      try{if(typeof options.onHardTimeout==='function')options.onHardTimeout(error);}catch(_){ }
+      if(button.dataset.operationToken===token && button.dataset.operationBusy==='true'){
+        setButtonState(button,'background',options.hardTimeoutDetail||'50 sn sınırı aşıldı; işlem arka planda',options);
+      }
+    },TKP_HARD_OPERATION_LIMIT_MS);
+    taskPromise.finally(()=>window.clearTimeout(hardTimer)).catch(()=>{});
     const deadlinePromise=new Promise(resolve=>{
       safetyTimer=window.setTimeout(()=>resolve(backgroundMarker),safetyTimeoutMs);
     });
@@ -178,7 +193,7 @@
       return undefined;
     } finally {
       window.clearTimeout(safetyTimer);
-      try{window.tkpRecordAction?.(actionName,actionStarted,actionError,{budgetMs:actionBudgetMs,timedOut});}catch(_){ }
+      try{window.tkpRecordAction?.(actionName,actionStarted,actionError,{budgetMs:actionBudgetMs,timedOut:timedOut||hardLimitExceeded,hardLimit:hardLimitExceeded});}catch(_){ }
     }
   }
 
@@ -191,6 +206,7 @@
   window.tkpResetButtonState = resetButtonState;
   window.tkpRunButtonTask = runButtonTask;
   window.TKP_UI_DEADLINE_MS = TKP_UI_DEADLINE_MS;
+  window.TKP_HARD_OPERATION_LIMIT_MS = TKP_HARD_OPERATION_LIMIT_MS;
   window.tkpResetAllBusyButtons = resetAllBusyButtons;
   window.tkpRestoreTopTabs = restoreTopTabs;
 
@@ -257,12 +273,15 @@
       const card=badge.closest('.card');
       if(!card)return null;
       const has=id=>Boolean(card.querySelector('#'+id));
-      const isCoverageCard = has('surfaceTable')||has('breedTable')||has('hippoTable')||has('conditionTable')||has('distanceTable')
+      // FIX (Tommy talebi): Pist/Safkan/Hipodrom/Koşu ailesi/Mesafe artık tek
+      // birleşik kart/id (categoryAnalysisTable) — eski 5 id de geriye dönük
+      // uyumluluk için bırakıldı (artık DOM'da yoklar ama zararsız).
+      const isCoverageCard = has('categoryAnalysisTable')||has('surfaceTable')||has('breedTable')||has('hippoTable')||has('conditionTable')||has('distanceTable')
         ||has('agfRankTableEl')||has('conditionRankTable')||has('kulvarTable')||has('valueTable')
         ||has('accurateSpeedTable')||has('xKulisAnalysisTable')||has('signalPerfTable')||has('hippoSignalTable');
       if(!isCoverageCard)return null;
       if(!coverage)return 'NOT_LOADED';
-      if(has('surfaceTable')||has('breedTable')||has('hippoTable')||has('conditionTable')||has('distanceTable'))return Number(coverage.races)||0;
+      if(has('categoryAnalysisTable')||has('surfaceTable')||has('breedTable')||has('hippoTable')||has('conditionTable')||has('distanceTable'))return Number(coverage.races)||0;
       if(has('agfRankTableEl')||has('conditionRankTable')||has('kulvarTable'))return Number(coverage.verifiedRaces)||0;
       if(has('valueTable'))return Math.max(Number(coverage.value)||0,Number(coverage.ypuan)||0,Number(coverage.expertCommentRows)||0);
       if(has('accurateSpeedTable'))return Math.max(Number(coverage.accurate)||0,Number(coverage.priorAccurate)||0);
@@ -477,43 +496,14 @@
 
   function restoreScreenSnapshots() {
     const state = readScreenSnapshots();
-    const prediction = document.getElementById('predictionResult');
-    const budget = document.getElementById('budgetCouponResult');
     const backtest = document.getElementById('couponBacktestResult');
-    // Tahmin ekranı HTML olarak restore edilmez. Parçalı DOM'un eksik alt panellerini
-    // saklamak tablo kaybına yol açar; kayıtlı yarış kendi frozen/model verisinden
-    // normal render yoluyla açılır.
-    // Eski oturum ekranı, kritik yolda oluşmuş hata metnini de saklayabiliyor.
-    // Bu metin yeni hesaplama başlamadan önce geri basılırsa kullanıcı güncel
-    // plan yerine eski "stageStarted"/timeout hatasını görür. Geçerli kart
-    // işaretleri dışındaki snapshot'ları geri yükleme; güncel render tek kaynaktır.
-    const budgetSnapshot = String(state.prediction?.budgetHtml || '');
-    const staleBudgetSnapshot = /Kupon oluşturulamadı:|Süre sınırında durduruldu|stageStarted is not defined/i.test(budgetSnapshot);
-    const usableBudgetSnapshot = budgetSnapshot && !staleBudgetSnapshot &&
-      /budgetCouponTriple|budgetCouponCompact|couponCard-|KAYITLI\s+3\s+KUPON/i.test(budgetSnapshot);
-    if (budget && usableBudgetSnapshot && !stableScreenHtml(budget, 'prediction')) {
-      budget.innerHTML = budgetSnapshot;
-    }
+    // Açılışta eski tahmin/kupon ekran görüntüsünü getirme. Gerçek kayıtlar
+    // değişmez; kullanıcı programı seçince normal kayıt açma yolu kullanılır.
     if (backtest && state.backtest?.html && !stableScreenHtml(backtest, 'backtest')) {
       backtest.innerHTML = state.backtest.html;
       backtest.dataset.ready = '1';
     }
 
-    // Dosya listesi veritabanı açıldıktan sonra dolduğu için seçimi kısa süre
-    // tekrar deneriz; çıktı bunun başarısına bağlı değildir.
-    const selectedValue = state.prediction?.selectedValue;
-    if (selectedValue) {
-      let attempts = 0;
-      const restoreSelection = () => {
-        const select = document.getElementById('tkpRecalcFileSelect');
-        if (select && Array.from(select.options || []).some(option => option.value === selectedValue)) {
-          select.value = selectedValue;
-          return;
-        }
-        if (++attempts < 8) window.setTimeout(restoreSelection, 250);
-      };
-      restoreSelection();
-    }
   }
 
   function observePersistentScreens() {
@@ -572,6 +562,36 @@
     // #pane-analytics içinde statik olarak var; izleme kökü oraya daraltıldı.
     const badgeObserveRoot = document.getElementById('pane-analytics') || document.body;
     badgeObserver.observe(badgeObserveRoot, {childList: true, subtree: true});
-    window.addEventListener('tkp:db-changed', refreshLearningBadges);
+    // Her kayıt/snapshot olayında 33 bin atlık coverage taraması senkron çalışıyor ve
+    // ekranı ~1 sn kilitliyordu. Rozetler yalnız Ayrıntılı analiz panelinde olduğundan:
+    // panel görünmüyorsa iş "kirli" işaretlenir ve panele girilince yapılır; görünüyorsa
+    // olaylar birleştirilip kullanıcı boştayken çalıştırılır.
+    let badgeDirty = false, badgeTimer = 0;
+    const analyticsVisible = () => {
+      const pane = document.getElementById('pane-analytics');
+      return Boolean(pane && pane.offsetParent !== null);
+    };
+    const runBadgeRefresh = () => {
+      badgeTimer = 0;
+      if (!analyticsVisible()) return;
+      badgeDirty = false;
+      refreshLearningBadges();
+    };
+    const scheduleBadgeRefresh = () => {
+      if (badgeTimer) return;
+      badgeTimer = window.setTimeout(() => {
+        if (typeof window.tkpRunWhenUserIdle === 'function') {
+          window.tkpRunWhenUserIdle(runBadgeRefresh, {minIdleMs: 800, retryMs: 300, maxWaitMs: 5000});
+        } else runBadgeRefresh();
+      }, 600);
+    };
+    window.addEventListener('tkp:db-changed', () => {
+      badgeDirty = true;
+      if (analyticsVisible()) scheduleBadgeRefresh();
+    });
+    document.addEventListener('click', event => {
+      const tab = event.target && event.target.closest ? event.target.closest('[data-tab="analytics"],[data-pane="analytics"]') : null;
+      if (tab && badgeDirty) window.setTimeout(() => { if (badgeDirty) scheduleBadgeRefresh(); }, 50);
+    }, true);
   });
 })();

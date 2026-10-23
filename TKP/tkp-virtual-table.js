@@ -12,6 +12,7 @@
   function foldSafe(v){ try { return typeof fold==='function' ? fold(v) : String(v||'').toLowerCase(); } catch(_){ return String(v||'').toLowerCase(); } }
   function hipShort(v){ try { return typeof global.displayHippodromeShort==='function' ? global.displayHippodromeShort(v) : v; } catch(_){ return v; } }
   function d(v){ return v===null||v===undefined||String(v).trim()===''?'—':v; }
+  function d2(v){ if(v===null||v===undefined||String(v).trim()==='')return '—'; const n=Number(String(v).replace(',','.')); return Number.isFinite(n)?n.toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2}):v; }
 
   // V1.1.334 — 10M bounded arama. Kaynak satırları da sınırlıdır: eski sürüm
   // filtre limiti koysa da tkpMasterRowsFast(0) ile önce bütün atları üretiyordu.
@@ -40,16 +41,59 @@
     return {rows:out,totalMatched:out.length,totalSource:source.length,limit,scanned,scanLimit,truncated:out.length>=limit&&scanned<source.length,searchWindowLimited:source.length>=scanLimit};
   }
 
-  function tkpDataTableHTML(query, limit){
-    const res=tkpDataRowsFiltered(query, limit||750);
-    const rows=res.rows;
-    const body=rows.map(x => `<tr ${x.winner ? 'style="background:#f0fdf4;"' : ''}><td>${e(d(x.file))}</td><td>${e(d(x.status))}</td><td>${e(d(x.date?dateTR(x.date):null))}</td><td>${e(d(hipShort(x.hippodrome)))}</td><td>${d(x.leg)}</td><td>${e(d(x.surface))}</td><td>${e(d(x.breed))}</td><td>${e(d(x.condition))}</td><td>${d(x.distance)}</td><td>${e(d(x.horse_no))}</td><td>${e(d(x.horse))}</td><td>${d(x.agf)}</td><td>${d(x.kg)}</td><td>${e(d(x.best_time))}</td><td>${d(x.g800)}</td><td>${d(x.hndkp)}</td><td>${d(x.s_value)}</td><td>${d(x.tr)}</td><td>${d(x.value)}</td><td>${d(x.sp)}</td><td>${d(x.result)}</td><td>${Number(x.bmb)===1?'BMB':'—'}</td><td>${d(x.finish_position)}</td></tr>`).join('') || '<tr><td colspan="23" class="empty">Veri yok.</td></tr>';
-    const note = res.searchWindowLimited
-      ? `Büyük arşiv koruması: sıcak penceredeki ilk ${res.scanLimit} satır tarandı; ${rows.length} kayıt gösteriliyor.`
-      : (res.truncated
-        ? `İlk ${rows.length} eşleşme gösteriliyor; performans için tarama burada durduruldu. Daha dar arama yazarsan hedef kayıt daha hızlı bulunur.`
-        : (res.totalSource>rows.length&&!String(query||'').trim()?`Gösterilen ${rows.length} / ${res.totalSource} kayıt.`:`Gösterilen ${rows.length} kayıt.`));
-    return `<div class="tableWrap"><table><thead><tr><th>Dosya</th><th>Durum</th><th>Tarih</th><th>Hipodrom</th><th>Ayak</th><th>Pist</th><th>Tür</th><th>Koşu</th><th>Mesafe</th><th>No</th><th>At</th><th>AGF</th><th>KG</th><th>DERECE</th><th>800G</th><th>HNDKP</th><th>S</th><th>TR PUAN</th><th>VALUE</th><th>SP</th><th>SONUÇ</th><th>BMB</th><th>Derece</th></tr></thead><tbody>${body}</tbody></table></div><p class="muted" style="margin-top:8px;">${e(note)}</p>`;
+  const dataColumns=[['Dosya','file'],['Durum','status'],['Tarih','date'],['Hipodrom','hippodrome'],['Ayak','leg'],['Pist','surface'],['Tür','breed'],['Koşu','condition'],['Mesafe','distance'],['No','horse_no'],['At','horse'],['AGF','agf'],['YPUAN','ypuan'],['KG','kg'],['DERECE','best_time'],['800G','g800'],['HNDKP','hndkp'],['S','s_value'],['TR PUAN','tr'],['VALUE','value'],['SP','sp'],['SONUÇ','result'],['BMB','bmb'],['Bitiriş','finish_position']];
+  const numberFields=new Set(['leg','distance','agf','ypuan','kg','g800','hndkp','s_value','tr','value','sp','result','finish_position']);
+  function dataRowsHTML(rows,note){
+    const cell=(x,key)=>{
+      let value=x[key];
+      if(key==='result')value=x.result??x.result_score;
+      if(value==null||String(value).trim()==='')return '<td data-tkp-missing="true" title="Kaynak değer mevcut değil.">—</td>';
+      if(key==='date')value=dateTR(value);
+      if(key==='file')return `<td class="tkpFilenameCell" title="${e(value)}"><span class="tkpFilenameName">${e(value)}</span></td>`;
+      if(key==='hippodrome')return `<td class="tkpHippodromeCell" title="${e(value)}"><span class="tkpHippodromeName">${e(value)}</span></td>`;
+      if(key==='bmb')return `<td>${Number(value)===1?'BMB':'0'}</td>`;
+      if(numberFields.has(key)){
+        const n=Number(String(value).replace(',','.'));
+        if(Number.isFinite(n)){
+          const label=key==='result'?(x.result!=null?d2(x.result):d2(value)):n.toLocaleString('tr-TR',{maximumFractionDigits:2});
+          return `<td class="num" data-tkp-number="${n}">${e(label)}</td>`;
+        }
+      }
+      return `<td>${e(value)}</td>`;
+    };
+    const body=rows.map(x=>`<tr ${Number(x.winner)===1?'class="actualWinnerRow"':''}>${dataColumns.map(([,key])=>cell(x,key)).join('')}</tr>`).join('')||`<tr><td colspan="${dataColumns.length}" class="empty">Eşleşen veri yok.</td></tr>`;
+    return `<div class="tableWrap"><table data-tkp-sort="preserve" data-tkp-scope="full"><thead><tr>${dataColumns.map(([label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div><p class="muted">${e(note)}</p>`;
+  }
+  function tkpDataTableHTML(query,limit){
+    const res=tkpDataRowsFiltered(query,limit||150);
+    return dataRowsHTML(res.rows,'Sınırlı bellek önizlemesi; tam arşiv araması asenkron veri tablosundadır.');
+  }
+  async function tkpRenderDataTableAsync(container,database,query){
+    if(!container)return;
+    container.__tkpDataAbort?.abort();
+    const abort=new AbortController();container.__tkpDataAbort=abort;
+    const cursors=[null];let page=0;
+    const signature=()=>[database.__segmented_storage?.baseGeneration,database.races,database.files,typeof _tkpDbRevision==='number'?_tkpDbRevision:0];
+    const initial=signature();
+    async function draw(){
+      if(abort.signal.aborted)return;
+      if(signature().some((x,i)=>x!==initial[i])){return tkpRenderDataTableAsync(container,database,query);}
+      container.innerHTML='<p role="status">Tüm arşiv taranıyor…</p><button type="button" data-tkp-cancel>Taramayı durdur</button>';
+      container.querySelector('[data-tkp-cancel]').onclick=()=>{abort.abort();container.innerHTML='<p>Tarama durduruldu. Yeniden başlatmak için aramayı değiştirin.</p>';};
+      try{
+        const result=await global.TKPDataTableQuery.query(database,{query,limit:150,after:cursors[page],signal:abort.signal,onProgress:progress=>{
+          const status=container.querySelector('[role="status"]');if(status)status.textContent=progress.phase==='file-index'?`Dosya indeksi hazırlanıyor: ${progress.processed}`:`Tüm arşiv taranıyor: ${progress.processed} at satırı`;
+        }});
+        if(abort.signal.aborted)return;
+        if(signature().some((x,i)=>x!==initial[i]))return tkpRenderDataTableAsync(container,database,query);
+        const note=`${result.totalMatched.toLocaleString('tr-TR')} eşleşme · Sayfa ${page+1} · ${result.rows.length} satır · Tüm arşivde YPUAN yüksekten düşüğe. — kaynak değerin eksik olduğunu gösterir.`;
+        container.innerHTML=dataRowsHTML(result.rows,note)+'<div class="tkpTablePager"><button type="button" data-prev>Önceki</button><button type="button" data-next>Sonraki</button></div>';
+        const prev=container.querySelector('[data-prev]'),next=container.querySelector('[data-next]');
+        prev.disabled=page===0;next.disabled=!result.hasMore;
+        prev.onclick=()=>{page--;draw();};next.onclick=()=>{cursors[++page]=result.nextCursor;draw();};
+      }catch(error){if(!abort.signal.aborted)container.innerHTML=`<p role="alert">Tablo tamamlanamadı: ${e(error.message)}. Eksik tarama sonucu gösterilmedi.</p>`;}
+    }
+    return draw();
   }
 
   // V1.1.308-MEM-FIX: tek satır şablonu, hem senkron tkpFilesTableHTML hem de
@@ -71,7 +115,7 @@
           ${hasRace ? `<button class="fileActBtn" onclick="window.__tkp_downloadFileOds(${Number(f.id)})">📥 ODS indir</button>` : ''}
           ${f.status==='REVIEW_NEAR_DUPLICATE' ? `<button class="fileActBtn" onclick="window.__tkp_toggleFileStatus(${Number(f.id)},true)">Analize dahil et</button>` : (f.duplicate_of ? `<button class="fileActBtn" onclick="window.__tkp_toggleFileStatus(${Number(f.id)},false)">İncelemeye al</button>` : '')}
           <button class="fileActBtn" onclick="window.__tkp_editFile(${Number(f.id)})">✏️ Düzelt</button>
-          <button class="fileActBtn danger" onclick="window.__tkp_deleteFile(${Number(f.id)})">Dosyayı sil</button>
+          <button class="fileActBtn danger" onclick="window.__tkp_deleteFile(${Number(f.id)},${Number(f.sequence_no)})">Dosyayı sil</button>
         </div></td>
       </tr>`;
   }
@@ -84,7 +128,8 @@
   function tkpFilesTableHTML(files, options){
     const opts=options||{};
     const limit=Number(opts.limit)||600;
-    const list=(files||[]).slice(0,limit);
+    const offset=Math.max(0,Number(opts.offset)||0);
+    const list=(files||[]).slice(offset,offset+limit);
     const ix=typeof global.tkpGetIndexes==='function' ? global.tkpGetIndexes() : null;
     const body=list.map(f=>_tkpFileRowHTML(f,ix)).join('') || '<tr><td colspan="8" class="empty">Henüz dosya yok.</td></tr>';
     return _tkpFilesTableShell(body, files, list).wrap(body);
@@ -104,8 +149,10 @@
     const opts=options||{};
     const limit=Number(opts.limit)||600;
     const chunkSize=Number(opts.chunkSize)||40;
-    const list=(files||[]).slice(0,limit);
+    const offset=Math.max(0,Number(opts.offset)||0);
+    const list=(files||[]).slice(offset,offset+limit);
     const ix=typeof global.tkpGetIndexes==='function' ? global.tkpGetIndexes() : null;
+    const generation=(container.__tkpFilesRenderGen=(container.__tkpFilesRenderGen||0)+1);
     const shell=_tkpFilesTableShell('', files, list);
     if(!list.length){
       container.innerHTML=shell.wrap('<tr><td colspan="8" class="empty">Henüz dosya yok.</td></tr>');
@@ -114,7 +161,6 @@
     container.innerHTML=shell.wrap('');
     const tbody=container.querySelector('tbody');
     if(!tbody){ container.innerHTML=shell.wrap(list.map(f=>_tkpFileRowHTML(f,ix)).join('')); return; }
-    const generation=(container.__tkpFilesRenderGen=(container.__tkpFilesRenderGen||0)+1);
     for(let i=0;i<list.length;i+=chunkSize){
       if(container.__tkpFilesRenderGen!==generation) return; // sekme değişti/yeniden render edildi
       const chunkHtml=list.slice(i,i+chunkSize).map(f=>_tkpFileRowHTML(f,ix)).join('');
@@ -124,8 +170,17 @@
         else await new Promise(res=>setTimeout(res,0));
       }
     }
+    if((files||[]).length>limit){
+      const nav=document.createElement('div');nav.className='tkpTablePager';
+      nav.innerHTML='<button type="button" data-prev>Önceki</button><span></span><button type="button" data-next>Sonraki</button>';
+      nav.querySelector('span').textContent=`${offset+1}–${offset+list.length} / ${files.length}`;
+      const prev=nav.querySelector('[data-prev]'),next=nav.querySelector('[data-next]');prev.disabled=offset===0;next.disabled=offset+limit>=files.length;
+      prev.onclick=()=>tkpRenderFilesTableProgressive(container,files,{...opts,offset:Math.max(0,offset-limit)});
+      next.onclick=()=>tkpRenderFilesTableProgressive(container,files,{...opts,offset:offset+limit});container.appendChild(nav);
+    }
   }
 
+  global.tkpRenderDataTableAsync = tkpRenderDataTableAsync;
   global.tkpDataTableHTML = tkpDataTableHTML;
   global.tkpDataRowsFiltered = tkpDataRowsFiltered;
   global.tkpFilesTableHTML = tkpFilesTableHTML;

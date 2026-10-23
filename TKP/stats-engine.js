@@ -20,11 +20,16 @@ let _similarConditionProfileStatsCache=new WeakMap();
 // tek at, her geçmiş koşudan bir örnek olarak alınır. Böylece genel Son 6 formu
 // yanlışlıkla "benzer koşu" diye gösterilmez ve bir geçmiş yarış çok sayıda
 // eşleşmeyle paydayı şişiremez.
+function tkpGprNonWinnerCondition(r){
+  const label=[r?.condition_family,r?.condition_text].filter(Boolean).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ı/g,'i').toUpperCase();
+  if(/MAIDEN/.test(label))return 'MAIDEN';
+  const match=label.match(/SARTLI\s*(19|1)(?=\D|$)/);return match?'SARTLI '+match[1]:'';
+}
 function similarConditionProfileStats(targetRace,targetHorse){
   if(!targetRace||!targetHorse) return {starts:0,wins:0,top3:0,strength:0,level:'Veri yok',direct:false};
   const signature=db?.learning_state?.dataset_signature
     || (typeof learningDatasetSignature==='function'?learningDatasetSignature(db):String((db?.races||[]).length));
-  const cacheKey=[signature,String(targetHorse.horse_no||''),fold(targetHorse.horse_name||'')].join('|');
+  const cacheKey=['GPR_NONWINNER_V2',signature,String(targetHorse.horse_no||''),fold(targetHorse.horse_name||'')].join('|');
   let raceCache=_similarConditionProfileStatsCache.get(targetRace);
   if(!raceCache){ raceCache=new Map(); _similarConditionProfileStatsCache.set(targetRace,raceCache); }
   if(raceCache.has(cacheKey)) return raceCache.get(cacheKey);
@@ -34,9 +39,11 @@ function similarConditionProfileStats(targetRace,targetHorse){
   // olarak burada durur: stats modülü başka bir sağlayıcıdan satır aldığında da
   // hedef tarih/no sonrasını asla kullanamaz. Eski "yalnız 23.08 sonrası" istisnası
   // kaldırıldı; 503 geçmiş kartı da aynı kurala uyar.
-  const rows=typeof tkpTrainingRowsBeforeTarget==='function'
+  const eligibleRows=typeof tkpTrainingRowsBeforeTarget==='function'
     ?tkpTrainingRowsBeforeTarget(profile.rows||[],targetRace,db)
     :(profile.rows||[]);
+  const nonWinnerKind=tkpGprNonWinnerCondition(targetRace);
+  const rows=nonWinnerKind?eligibleRows.filter(past=>tkpGprNonWinnerCondition(past)===nonWinnerKind):eligibleRows;
   const targetName=fold(targetHorse.horse_name||'');
   const directRows=[];
   for(const race of rows){
@@ -49,7 +56,9 @@ function similarConditionProfileStats(targetRace,targetHorse){
     ['sp_rank',0.8],['value_rank',0.8],['g800',0.7],['jbyg',0.6],['start_no',0.4]
   ];
   const nearest=[];
-  if(!directRows.length){
+  const directWins=directRows.filter(h=>Number(h.winner)===1||Number(h.finish_position)===1).length;
+  const useNearest=!directRows.length||(nonWinnerKind&&!directWins);
+  if(useNearest){
     for(const race of rows){
       let best=null;
       for(const horse of (race.horses||[])){
@@ -70,13 +79,14 @@ function similarConditionProfileStats(targetRace,targetHorse){
       if(best) nearest.push(best.horse);
     }
   }
-  const samples=directRows.length?directRows:nearest;
+  const usedNearest=useNearest&&nearest.length>0;
+  const samples=usedNearest?nearest:directRows;
   const wins=samples.filter(h=>Number(h.winner)===1||Number(h.finish_position)===1).length;
   const top3=samples.filter(h=>{const p=Number(h.finish_position ?? (Number(h.winner)===1?1:NaN));return p>=1&&p<=3;}).length;
   const result={
     starts:samples.length,wins,top3,
     strength:samples.length&&wins>0?wilson(wins,samples.length):0,
-    level:profile.level||'Benzer profil',label:profile.label||'',direct:directRows.length>0
+    level:profile.level||'Benzer profil',label:profile.label||'',direct:!usedNearest&&directRows.length>0
   };
   raceCache.set(cacheKey,result);
   return result;
@@ -90,7 +100,7 @@ function tkpStatsCacheSignature(){
   // R16.36: Dashboard/istatistik özeti prediction_log, kupon, tanı veya diğer
   // yardımcı loglardan etkilenmez. Geniş tkpFastDbSignature() bunlardan biri
   // değiştiğinde aynı 3.054 koşuyu yeniden taratıyordu.
-  return ['STATS_CORE_V3',String(db?.learning_state?.dataset_signature||''),String(db?.learning_state?.outcome_signature||''),(db?.files||[]).length,(db?.races||[]).length].join('|');
+  return ['STATS_CORE_V5_LEGACY_RESULT_FIELDS',String(db?.learning_state?.dataset_signature||''),String(db?.learning_state?.outcome_signature||''),(db?.files||[]).length,(db?.races||[]).length,typeof _tkpDbRevision==='number'?_tkpDbRevision:0].join('|');
 }
 // Eski/aktarılmış sonuçlarda winner bayrağı her zaman doldurulmaz. Tabloların
 // tamamı aynı doğrulanmış bitiriş yorumunu kullanmalı; aksi halde aynı kayıt bir
@@ -101,7 +111,8 @@ function tkpAnalysisFinishPosition(horse){
   }
   return Number(horse?.winner)===1?1:0;
 }
-function tkpAnalysisIsWinner(horse){return tkpAnalysisFinishPosition(horse)===1||Number(horse?.winner)===1;}
+function tkpAnalysisRank(value){const n=Number(value);return Number.isInteger(n)&&n>0?n:null;}
+function tkpAnalysisIsWinner(horse){return tkpAnalysisFinishPosition(horse)===1;}
 function tkpAnalysisRaces(){return tkpBoundedRacesForReport(learningEligibleRaces());}
 if(typeof globalThis!=='undefined'){
   globalThis.tkpAnalysisFinishPosition=tkpAnalysisFinishPosition;
@@ -129,7 +140,7 @@ function detailedBmbStats(target){
   if(_detailedBmbStatsCache.has(cacheKey)) return _detailedBmbStatsCache.get(cacheKey);
   const m=detailedProfileMatch(target,5);
   let bmbRaces=0,bmbWin=0;
-  for(const r of m.rows){ const bs=r.horses.filter(h=>h.bmb===1); if(bs.length){bmbRaces++; if(bs.some(tkpAnalysisIsWinner)) bmbWin++;} }
+  for(const r of m.rows){ const bs=r.horses.filter(h=>Number(h.bmb)===1); if(bs.length){bmbRaces++; if(bs.some(tkpAnalysisIsWinner)) bmbWin++;} }
   const result={match:m,bmbRaces,bmbWin};
   _detailedBmbStatsCache.set(cacheKey,result);
   if(_detailedBmbStatsCache.size>40) _detailedBmbStatsCache.delete(_detailedBmbStatsCache.keys().next().value);
@@ -145,8 +156,8 @@ function winnerRankDistributionBroad(rankField){
     let g = groups[key] || (groups[key] = {'1':0,'2':0,'3':0,'4':0,'5':0,'6':0,'7':0,'alt1':0,'alt2':0,'alt3':0,'alt4':0,'yok':0, total:0});
     for (const w of winners){
       g.total++;
-      let rk = w[rankField];
-      if (rk == null) g.yok++;
+      const rk = Number(w[rankField]);
+      if (!Number.isInteger(rk) || rk < 1) g.yok++;
       else if (rk <= 7) g[String(rk)]++;
       else if (rk === 8) g.alt1++;
       else if (rk === 9) g.alt2++;
@@ -223,7 +234,7 @@ function tkpConditionPrefixIndex(){
           if(rk==null)g.yok++;else if(rk<=7)g[String(rk)]++;else if(rk===8)g.alt1++;else if(rk===9)g.alt2++;else if(rk===10)g.alt3++;else g.alt4++;
         }
       }
-      const bmb=(r.horses||[]).filter(h=>h.bmb);
+      const bmb=(r.horses||[]).filter(h=>Number(h.bmb)===1);
       if(bmb.length){
         const g=bmbAccum[condition]||(bmbAccum[condition]={bmbRaces:0,bmbWin:0});
         g.bmbRaces++;if(bmb.some(tkpAnalysisIsWinner))g.bmbWin++;
@@ -265,7 +276,7 @@ function tkpTargetConditionBundle(targetRace){
         if(rk==null)g.yok++;else if(rk<=7)g[String(rk)]++;else if(rk===8)g.alt1++;else if(rk===9)g.alt2++;else if(rk===10)g.alt3++;else g.alt4++;
       }
     }
-    const bs=(r.horses||[]).filter(h=>h.bmb);
+    const bs=(r.horses||[]).filter(h=>Number(h.bmb)===1);
     if(bs.length){
       const g=bmb[condition]||(bmb[condition]={bmbRaces:0,bmbWin:0});
       g.bmbRaces++;if(bs.some(tkpAnalysisIsWinner))g.bmbWin++;
@@ -319,7 +330,7 @@ function bmbWinRateByCondition(){
   for (const r of learningEligibleRaces()){
     let key = broadConditionKey(r.condition_family);
     let g = groups[key] || (groups[key] = {bmbRaces:0, bmbWin:0});
-    let bs = r.horses.filter(h=>h.bmb);
+    let bs = r.horses.filter(h=>Number(h.bmb)===1);
     if (bs.length){
       g.bmbRaces++;
       if (bs.some(tkpAnalysisIsWinner)) g.bmbWin++;
@@ -348,7 +359,7 @@ function bmbWinRateByConditionForTarget(targetRace){
   for(const r of tkpTrainingRowsForStats(targetRace)){
     const condition=broadConditionKey(r.condition_family);
     const group=groups[condition]||(groups[condition]={bmbRaces:0,bmbWin:0});
-    const bmb=(r.horses||[]).filter(h=>h.bmb);
+    const bmb=(r.horses||[]).filter(h=>Number(h.bmb)===1);
     if(!bmb.length)continue;
     group.bmbRaces++;if(bmb.some(tkpAnalysisIsWinner))group.bmbWin++;
   }
@@ -365,7 +376,7 @@ function conditionRankWinRate(r, h){
 }
 
 function conditionBmbWinRate(r, h){
-  if (h.bmb !== 1) return 0;
+  if (Number(h.bmb) !== 1) return 0;
   const cond = broadConditionKey(r.condition_family);
   const st = bmbWinRateByConditionForTarget(r)[cond];
   return st && st.bmbRaces ? st.bmbWin / st.bmbRaces : 0;
@@ -391,7 +402,7 @@ function historicalWinnerProfilesForRace(r){
         const v=w[f];
         if(v!=null && Number.isFinite(Number(v))) sets[f].add(Number(v));
       }
-      if(w.bmb===1) bmbWon=true;
+      if(Number(w.bmb)===1) bmbWon=true;
     }
   }
   const result = {match:m,sets,bmbWon};
@@ -409,7 +420,7 @@ function historicalSurpriseProfileMatch(r,h){
   if(h.agf_rank!=null && h.agf_rank>=4 && p.sets.agf_rank.has(Number(h.agf_rank))) labels.push('AGF '+h.agf_rank);
   if(h.g800!=null && h.g800>=3 && p.sets.g800.has(Number(h.g800))) labels.push('800G '+h.g800);
   if(h.sp_rank!=null && p.sets.sp_rank.has(Number(h.sp_rank))) labels.push('SP '+h.sp_rank);
-  if(h.bmb===1 && p.bmbWon) labels.push('BMB');
+  if(Number(h.bmb)===1 && p.bmbWon) labels.push('BMB');
   return {matched:labels.length>0,labels,level:p.match?.level||'Veri yok'};
 }
 
@@ -629,7 +640,7 @@ function atomicFeatures(racesOverride){
   add('degree','DERECE hızlı üst grup',(h,r)=>tkpDegreeSignalValue(r,h)>=0.67, ['best_time']);
   add('degree','DERECE var',(h)=>tkpHorseBestTimeSeconds(h)!=null, ['best_time']);
   add('sband','S 38-41',(h)=>h.s_value!==null && h.s_value>=38 && h.s_value<=41, ['s_value']);
-  add('bmb','BMB',(h)=>h.bmb===1);
+  add('bmb','BMB',(h)=>Number(h.bmb)===1);
   add('accurate_speed','Geçmiş Accurate hız > alan ortalaması',(h,r)=>{
     const acc=Number(h?.priorAccurateAvgSpeed);
     if(!Number.isFinite(acc)||acc<=0) return false;
@@ -1071,7 +1082,9 @@ async function buildRulesAsync(racesOverride){
 // getirmesin diye kaldırıldı (bkz. buildrules-sync-path-unreachable-regression.test.js).
 
 let _tkpStatsSummaryCache={signature:'',value:null};
+function tkpTableHasNumber(v){return (typeof v==='number'||typeof v==='string')&&String(v).trim()!==''&&Number.isFinite(Number(String(v).replace(',','.')));}
 function stats(){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive)return archive.stats;
   const signature=tkpStatsCacheSignature();
   if(_tkpStatsSummaryCache.signature===signature&&_tkpStatsSummaryCache.value) return _tkpStatsSummaryCache.value;
   const persisted=db?.learning_state?.stats_summary_v2;
@@ -1097,10 +1110,10 @@ function stats(){
     for(const h of rows){
       if(tkpAnalysisIsWinner(h))winners++;
       if(h?.value_score!==null&&Number(h?.value_score)>0){hasValue=true;horseCoverage.value++;}
-      if(h?.hndkp!==null&&h?.hndkp!==undefined)horseCoverage.hndkp++;
+      if(tkpTableHasNumber(h?.hndkp))horseCoverage.hndkp++;
       if(typeof tkpTrustedGcTrValue==='function'&&tkpTrustedGcTrValue(h)!==null)horseCoverage.tr++;
-      if(h?.sp!==null&&h?.sp!==undefined)horseCoverage.sp++;
-      if(h?.result_score!==null&&h?.result_score!==undefined)horseCoverage.result++;
+      if(tkpTableHasNumber(h?.sp))horseCoverage.sp++;
+      if(tkpTableHasNumber(h?.result_score))horseCoverage.result++;
     }
     if(hasValue)valueRaces++;
   }
@@ -1127,6 +1140,7 @@ function stats(){
 }
 const _categoryAnalysisCache=new Map();
 function categoryAnalysis(key){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive?.categories[key])return archive.categories[key];
   // R16.14: kategori kapsamı sonuç varlığına bağlı değildir. Pist/safkan/hipodrom/
   // koşu ailesi/mesafe gibi boyutlar mevcut bütün arşivden sayılır; yalnız başarı
   // metrikleri doğrulanmış sonuçlu yarışlarda hesaplanır. Böylece 3.000+ koşu
@@ -1138,7 +1152,7 @@ function categoryAnalysis(key){
   let groups = {};
   for (const r of tkpBoundedRacesForReport(allRows)){
     let k = r[key] || 'BİLİNMİYOR';
-    let g = groups[k] || (groups[k] = {races:0,resultRaces:0,horses:0,valueRaces:0,agf1:0,result1:0,bmbWin:0,bmbRaces:0});
+    let g = groups[k] || (groups[k] = {races:0,resultRaces:0,agfRaces:0,resultRankRaces:0,horses:0,valueRaces:0,agf1:0,result1:0,bmbWin:0,bmbRaces:0});
     const allHorses=Array.isArray(r?.horses)?r.horses:[];
     const horses=typeof tkpLiveHorses==='function'?tkpLiveHorses(r):allHorses.filter(h=>!(typeof isNonRunner==='function'&&isNonRunner(h)));
     g.races++;
@@ -1147,8 +1161,10 @@ function categoryAnalysis(key){
     const hasResult=typeof raceHasConfirmedResult==='function'?raceHasConfirmedResult(horses):horses.some(tkpAnalysisIsWinner);
     if(!hasResult) continue;
     g.resultRaces++;
-    if (horses.some(h=>h.agf_rank===1 && tkpAnalysisIsWinner(h))) g.agf1++;
-    if (horses.some(h=>h.result_rank===1 && tkpAnalysisIsWinner(h))) g.result1++;
+    if (horses.some(h=>Number(h.agf_rank)===1)) g.agfRaces++;
+    if (horses.some(h=>Number(h.agf_rank)===1 && tkpAnalysisIsWinner(h))) g.agf1++;
+    if (horses.some(h=>Number(h.result_rank)===1)) g.resultRankRaces++;
+    if (horses.some(h=>Number(h.result_rank)===1 && tkpAnalysisIsWinner(h))) g.result1++;
     let bs = horses.filter(h=>Number(h?.bmb)===1);
     if (bs.length){ g.bmbRaces++; if (bs.some(tkpAnalysisIsWinner)) g.bmbWin++; }
   }
@@ -1160,6 +1176,7 @@ function categoryAnalysis(key){
 
 let _globalSignalStatsCache={signature:'',value:null};
 function globalSignalStats(){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive)return archive.signals;
   const signature=tkpStatsCacheSignature();
   if(_globalSignalStatsCache.signature===signature&&_globalSignalStatsCache.value) return _globalSignalStatsCache.value;
   const sig = {
@@ -1179,11 +1196,11 @@ function globalSignalStats(){
   for (const r of tkpBoundedRacesForReport(learningEligibleRaces())){
     for (const h of r.horses){
       if (isNonRunner(h)) continue;
-      if (h.bmb === 1) mark(sig.bmb, h);
-      if (h.result_rank === 1) mark(sig.r1, h);
-      else if (h.result_rank != null && h.result_rank <= 6) mark(sig.r26, h);
-      if (h.agf_rank === 1) mark(sig.agf1, h);
-      else if (h.agf_rank != null && h.agf_rank <= 6) mark(sig.agf26, h);
+      if (Number(h.bmb) === 1) mark(sig.bmb, h);
+      if (tkpAnalysisRank(h.result_rank) === 1) mark(sig.r1, h);
+      else if (tkpAnalysisRank(h.result_rank)>=2 && tkpAnalysisRank(h.result_rank)<=6) mark(sig.r26, h);
+      if (tkpAnalysisRank(h.agf_rank) === 1) mark(sig.agf1, h);
+      else if (tkpAnalysisRank(h.agf_rank)>=2 && tkpAnalysisRank(h.agf_rank)<=6) mark(sig.agf26, h);
       if (isOdbCandidate(h)) mark(sig.extra, h);
       if (h.g800 === 1) mark(sig.g8001, h);
     }
@@ -1222,6 +1239,7 @@ function tkpHippodromeSignalGroupKey(hip){
 
 let _hippodromeSignalStatsCache={signature:'',value:null};
 function hippodromeSignalStats(){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive)return archive.hippos;
   const signature=tkpStatsCacheSignature();
   if(_hippodromeSignalStatsCache.signature===signature&&_hippodromeSignalStatsCache.value) return _hippodromeSignalStatsCache.value;
   const groups = {};
@@ -1236,9 +1254,9 @@ function hippodromeSignalStats(){
     };
     for (const h of r.horses){
       if (isNonRunner(h)) continue;
-      if (h.bmb===1) mark(g.bmb,h);
-      if (h.result_rank!=null && h.result_rank<=6) mark(g.r6,h);
-      if (h.agf_rank===1) mark(g.agf1,h);
+      if (Number(h.bmb)===1) mark(g.bmb,h);
+      if (tkpAnalysisRank(h.result_rank)>=1 && tkpAnalysisRank(h.result_rank)<=6) mark(g.r6,h);
+      if (tkpAnalysisRank(h.agf_rank)===1) mark(g.agf1,h);
       if (isOdbCandidate(h)) mark(g.extra,h);
     }
   }
@@ -1249,6 +1267,7 @@ function hippodromeSignalStats(){
 
 const _winnerRankDistributionCache=new Map();
 function winnerRankDistribution(rankField){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive?.ranks[rankField])return archive.ranks[rankField];
   const cacheKey=`${tkpStatsCacheSignature()}|${rankField}`;
   if(_winnerRankDistributionCache.has(cacheKey)) return _winnerRankDistributionCache.get(cacheKey);
   let groups = {};
@@ -1261,8 +1280,8 @@ function winnerRankDistribution(rankField){
     if (winners.length > 1) g.ties++;
     for (const w of winners){
       g.total++;
-      let rk = w[rankField];
-      if (rk == null) g.yok++;
+      const rk = Number(w[rankField]);
+      if (!Number.isInteger(rk) || rk < 1) g.yok++;
       else if (rk <= 7) g[String(rk)]++;
       else if (rk === 8) g.alt1++;
       else if (rk === 9) g.alt2++;
@@ -1591,6 +1610,7 @@ function resolvePredictionLogWithRaces(races){
   return changed;
 }
 
+let _matchedRulesMemo={ready:null,key:'',rules:null};
 function matchedRuleStrength(r,h){
   // Canlı tahmin/kupon çizimi salt-okuma yoludur. Geçerli önbellek yoksa burada
   // getCurrentRules()->buildRules() zincirini başlatmak 503 dosyada ana thread'i
@@ -1598,10 +1618,18 @@ function matchedRuleStrength(r,h){
   // yapılır; hazır/hydrate edilmiş kurallar varsa aynı sonuç aynen kullanılır.
   const ready=typeof tkpPeekCurrentRules==='function'?tkpPeekCurrentRules():null;
   if(!Array.isArray(ready))return 0;
-  const perfect=ready.filter(x=>x.single>=db.settings.perfect_min_single&&x.rate>=db.settings.perfect_min_rate&&x.lb>=db.settings.perfect_min_lb&&x.files>=2).slice(0,3);
-  const best=ready.filter(x=>x.single>=db.settings.best_min_single).slice(0,5);
-  const seenRules=new Set(perfect);
-  const rules=perfect.concat(best.filter(x=>!seenRules.has(x)));
+  // Aynı hazır kural dizisi için at başına iki kez filter yapmak (binlerce kural x yüzlerce çağrı)
+  // gereksizdi; seçilen kural listesi dizi kimliği + eşik ayarlarına göre bir kez hesaplanır.
+  const st=db.settings,ruleKey=[st.perfect_min_single,st.perfect_min_rate,st.perfect_min_lb,st.best_min_single,ready.length].join('|');
+  let rules;
+  if(_matchedRulesMemo.ready===ready&&_matchedRulesMemo.key===ruleKey)rules=_matchedRulesMemo.rules;
+  else{
+    const perfect=ready.filter(x=>x.single>=st.perfect_min_single&&x.rate>=st.perfect_min_rate&&x.lb>=st.perfect_min_lb&&x.files>=2).slice(0,3);
+    const best=ready.filter(x=>x.single>=st.best_min_single).slice(0,5);
+    const seenRules=new Set(perfect);
+    rules=perfect.concat(best.filter(x=>!seenRules.has(x)));
+    _matchedRulesMemo={ready,key:ruleKey,rules};
+  }
   let strongest=0;
   for(const rule of rules){
     if(rule.features && rule.features.every(f=>f.test(h,r)) && rule.lb>strongest) strongest=rule.lb;
@@ -1708,7 +1736,16 @@ function adaptiveSignalValue(r,h,key){
     const field=Math.max(1,live.length);
     return Math.max(0,Math.min(1,1-(start-1)/field));
   }
-  if(key==='condition') return Math.max(0,Math.min(1,conditionSingleStrength(r,h)));
+  if(key==='condition'){
+    if(Object.prototype.hasOwnProperty.call(r,'__tkpArchiveCondition')){
+      const prefix=r.__tkpArchiveCondition,rk=tkpAnalysisRank(h.result_rank);
+      const key=rk===null?'yok':rk<=7?String(rk):rk===8?'alt1':rk===9?'alt2':rk===10?'alt3':'alt4';
+      const rankRate=rk!==null&&prefix?.rank?.total?(prefix.rank[key]||0)/prefix.rank.total:0;
+      const bmbRate=Number(h.bmb)===1&&prefix?.bmbRaces?prefix.bmbWin/prefix.bmbRaces:0;
+      return Math.max(0,Math.min(1,Math.max(rankRate,bmbRate,historyStrengthForCandidate(h))*.70+(Number(h.score)||0)*.30));
+    }
+    return Math.max(0,Math.min(1,conditionSingleStrength(r,h)));
+  }
   if(key==='history') return Math.max(0,Math.min(1,historyStrengthForCandidate(h)));
   if(key==='last6') return typeof tkpLastSixFormValue==='function' ? tkpLastSixFormValue(h) : 0;
   if(key==='profile') return profileStrengthPct(r,h)/100;
@@ -1736,7 +1773,7 @@ function adaptiveSignalValue(r,h,key){
     if(typeof isOdbCandidate!=='function') return historicalSurpriseProfileMatch(r,h).matched ? 1 : 0;
     return 0;
   }
-  if(key==='bmb') return h.bmb===1 && h.bmb_source!=='ŞABLON KURALI' ? 1 : 0;
+  if(key==='bmb') return Number(h.bmb)===1 && h.bmb_source!=='ŞABLON KURALI' ? 1 : 0;
   if(key==='rules') return matchedRuleStrength(r,h);
   return 0;
 }
@@ -1744,9 +1781,9 @@ function adaptiveSignalValue(r,h,key){
 // Bir kaynak/alan eksik olduğunda atın diğer gerçek sinyalleri cezalandırılmaz.
 // Bu yardımcı yalnız puanlama paydasını belirler; eksik değer hiçbir zaman yapay
 // bir değerle doldurulmaz.
-function adaptiveSignalPresentForHorse(r,h,key){
+function adaptiveSignalPresentForHorse(r,h,key,available=false){
   const present=value=>adaptiveNumericOrNull(value)!==null;
-  if(!adaptiveSignalAvailable(r,typeof tkpLiveHorses==='function'?tkpLiveHorses(r):(r?.horses||[]),key))return false;
+  if(!available&&!adaptiveSignalAvailable(r,typeof tkpLiveHorses==='function'?tkpLiveHorses(r):(r?.horses||[]),key))return false;
   if(key==='tkp')return present(h?.score);
   if(key==='agf')return present(h?.agf)||present(h?.agf_rank);
   if(key==='ypuan')return present(h?.ypuan);
@@ -1758,8 +1795,8 @@ function adaptiveSignalPresentForHorse(r,h,key){
   if(key==='history')return present(h?.priorStarts)||present(h?.priorWins);
   if(key==='last6')return Boolean(String(h?.son6_raw||'').trim()) || (typeof tkpLastSixStats==='function'&&tkpLastSixStats(h).starts>0);
   if(key==='profile')return Boolean(String(h?.horse_name||'').trim());
-  if(key==='bmb')return h?.bmb===1&&h?.bmb_source!=='ŞABLON KURALI';
-  if(key==='extra')return present(h?.result_rank)||present(h?.agf_rank)||h?.bmb===1;
+  if(key==='bmb')return Number(h?.bmb)===1&&h?.bmb_source!=='ŞABLON KURALI';
+  if(key==='extra')return present(h?.result_rank)||present(h?.agf_rank)||Number(h?.bmb)===1;
   if(key==='rules')return ['value_score','result_score','hndkp','s_value','g800'].some(field=>present(h?.[field]));
   return true;
 }
@@ -1780,16 +1817,26 @@ function adaptiveSignalAvailable(r,live,key){
   if(key==='ganyan_tr') return rows.filter(h=>Number.isFinite(adaptiveGcTrValue(h))).length>=2;
   if(key==='accurate') return rows.filter(h=>{const v=adaptiveNumericOrNull(h?.priorAccurateAvgSpeed);return v!==null&&v>0;}).length>=2;
   if(key==='st') return rows.filter(h=>adaptiveStartValue(h)!==null).length>=2;
-  if(key==='bmb') return rows.some(h=>h?.bmb===1&&h?.bmb_source!=='ŞABLON KURALI');
+  if(key==='bmb') return rows.some(h=>Number(h?.bmb)===1&&h?.bmb_source!=='ŞABLON KURALI');
   if(key==='rules') return rows.some(h=>adaptiveSignalValue(r,h,'rules')>0);
   if(key==='history') return rows.some(h=>(Number(h?.priorStarts)||0)>0 || (Number(h?.priorWins)||0)>0);
   if(key==='last6') return rows.some(h=>typeof tkpLastSixStats==='function'&&tkpLastSixStats(h).starts>0);
-  if(key==='extra') return rows.some(h=>adaptiveNumericOrNull(h?.result_rank)!==null||adaptiveNumericOrNull(h?.agf_rank)!==null||h?.bmb===1);
+  if(key==='extra') return rows.some(h=>adaptiveNumericOrNull(h?.result_rank)!==null||adaptiveNumericOrNull(h?.agf_rank)!==null||Number(h?.bmb)===1);
   return rows.length>0;
 }
 
+// Ölçümde açık BMB=0 bir kayıptır; puanlama için sinyal varlığı değişmez.
+// Alanı eksik atlar ve şablon işaretleri gerçek BMB kanıtı sayılmaz.
+function adaptiveSignalEvaluationHorses(r,live,key){
+  if(key==='bmb')return live.filter(h=>{
+    const value=adaptiveNumericOrNull(h?.bmb);
+    return (value===0||value===1)&&h?.bmb_source!=='ŞABLON KURALI';
+  });
+  return live.filter(h=>adaptiveSignalPresentForHorse(r,h,key,true));
+}
+
 function adaptiveCacheKey(targetRace){
-  if(!targetRace) return '__ALL__';
+  if(!targetRace) return '__ALL_BMB_DENOMINATOR_V2__';
   // V1.1.198 KÖK FIX: anahtar yalnız şart/pist/mesafe/tür kombinasyonundan oluşuyordu,
   // tarih/ayak bilgisi yoktu. adaptiveRaceRows() içindeki sızıntı koruması (isPast)
   // hedef koşunun TARİHİNE göre geçmişi filtreliyor; ama bu cache tarihsiz anahtarla
@@ -1800,7 +1847,7 @@ function adaptiveCacheKey(targetRace){
   // doğru geçmiş penceresiyle önbelleğe alınması garanti edilir. Merkezi kesim
   // anahtarı tarih bozuk/eski kayıtta sequence_no fallback'ini de kapsar.
   const cutoff=typeof tkpChronologyCutoffKey==='function'?tkpChronologyCutoffKey(targetRace,db):'';
-  return [`C${cutoff}`,broadConditionKey(targetRace.condition_family), normalizeSurface(targetRace.surface), distanceGroup(targetRace.distance), normalizeBreed(targetRace.breed)].join('|');
+  return ['BMB_DENOMINATOR_V2',`C${cutoff}`,broadConditionKey(targetRace.condition_family), normalizeSurface(targetRace.surface), distanceGroup(targetRace.distance), normalizeBreed(targetRace.breed)].join('|');
 }
 
 // V1.1.308-MEM-FIX: tek bir yarışı out biriktiricisine işleyen paylaşılan yardımcı.
@@ -1811,7 +1858,7 @@ function _adaptiveAccumulateRace(r, keys, out){
   const live=typeof tkpLiveHorses==='function'?tkpLiveHorses(r):(r.horses||[]).filter(h=>!isNonRunner(h));
   const actualByPos={};
   for(let pos=1;pos<=5;pos++){
-    actualByPos[pos]=live.filter(h=>Number(h.finish_position)===pos || (pos===1&&Number(h.winner)===1));
+    actualByPos[pos]=live.filter(h=>tkpAnalysisFinishPosition(h)===pos);
   }
   if(!actualByPos[1].length) return;
   const sameActual=(horse,targets)=>targets.some(target=>
@@ -1824,13 +1871,13 @@ function _adaptiveAccumulateRace(r, keys, out){
     // bulunduğu atlar kendi aralarında ölçülür; gerçek hedefte sinyal yoksa o
     // pozisyonun paydası artırılmaz. Ayrıca eşitliği TKP skoru ile çözmek sinyalin
     // isabetini başka modelden ödünç alıyordu; tie-break yalnız at numarasıdır.
-    const eligible=live.filter(h=>adaptiveSignalPresentForHorse(r,h,key));
+    const eligible=adaptiveSignalEvaluationHorses(r,live,key);
     if(!eligible.length)continue;
     const eligibleSet=new Set(eligible);
     const signalValues=new Map();
     for(const h of eligible){
       const v = key==='extra'
-        ? ((Number(h.result_rank)>=7 || Number(h.agf_rank)>=4 || h.bmb===1) ? 1 : 0)
+        ? ((Number(h.result_rank)>=7 || Number(h.agf_rank)>=4 || Number(h.bmb)===1) ? 1 : 0)
         : adaptiveSignalValue(r,h,key);
       signalValues.set(h,v);
     }
@@ -1875,6 +1922,7 @@ function _adaptiveStatsFinalize(out, keys, source){
 }
 
 function adaptiveSignalStats(targetRace){
+  const archive=!targetRace&&globalThis.TKPArchiveAnalytics?.peek();if(archive?.adaptive)return archive.adaptive;
   const cacheKey=adaptiveCacheKey(targetRace);
   if(_adaptiveStatsCache.has(cacheKey)) return _adaptiveStatsCache.get(cacheKey);
   // V1.1.286 HIZ KÖK FIX: runtime Map boşsa (yeni oturum/sayfa yenileme), atlamadan
@@ -1923,7 +1971,7 @@ async function _adaptiveAccumulateRaceAsync(r, keys, out, state){
   const live=typeof tkpLiveHorses==='function'?tkpLiveHorses(r):(r.horses||[]).filter(h=>!isNonRunner(h));
   const actualByPos={};
   for(let pos=1;pos<=5;pos++){
-    actualByPos[pos]=live.filter(h=>Number(h.finish_position)===pos || (pos===1&&Number(h.winner)===1));
+    actualByPos[pos]=live.filter(h=>tkpAnalysisFinishPosition(h)===pos);
   }
   if(!actualByPos[1].length)return;
   const now=()=>(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
@@ -1944,13 +1992,13 @@ async function _adaptiveAccumulateRaceAsync(r, keys, out, state){
   );
   for(const key of keys){
     if(!adaptiveSignalAvailable(r,live,key))continue;
-    const eligible=live.filter(h=>adaptiveSignalPresentForHorse(r,h,key));
+    const eligible=adaptiveSignalEvaluationHorses(r,live,key);
     if(!eligible.length)continue;
     const eligibleSet=new Set(eligible);
     const signalValues=new Map();
     for(const h of eligible){
       const v=key==='extra'
-        ? ((Number(h.result_rank)>=7||Number(h.agf_rank)>=4||h.bmb===1)?1:0)
+        ? ((Number(h.result_rank)>=7||Number(h.agf_rank)>=4||Number(h.bmb)===1)?1:0)
         : adaptiveSignalValue(r,h,key);
       signalValues.set(h,v);
       const pause=yieldIfNeeded(); if(pause)await pause;
@@ -1978,7 +2026,8 @@ async function _adaptiveAccumulateRaceAsync(r, keys, out, state){
     const pause=yieldIfNeeded(); if(pause)await pause;
   }
 }
-async function adaptiveSignalStatsAsync(targetRace){
+async function adaptiveSignalStatsAsync(targetRace,retryCount=0){
+  if(!targetRace&&globalThis.TKPArchiveAnalytics?.required()){const full=await globalThis.TKPArchiveAnalytics.ensureAdaptive();return full.adaptive;}
   const cacheKey=adaptiveCacheKey(targetRace);
   if(_adaptiveStatsCache.has(cacheKey)) return _adaptiveStatsCache.get(cacheKey);
   const inFlight=_adaptiveStatsInFlight.get(cacheKey);
@@ -1996,6 +2045,7 @@ async function adaptiveSignalStatsAsync(targetRace){
     for(const r of source.rows){
       if(generation!==_adaptiveStatsGeneration)throw new DOMException('Adaptif hesap geçersiz kılındı','AbortError');
       await _adaptiveAccumulateRaceAsync(r,keys,out,state);
+      if(generation!==_adaptiveStatsGeneration)throw new DOMException('Adaptif hesap geçersiz kılındı','AbortError');
       // Hesap devam ederken önbellek yarım durumda okunmasın; yalnız UI'ye nefes aldır.
       if(_adaptiveStatsCache.has(cacheKey))return _adaptiveStatsCache.get(cacheKey);
     }
@@ -2006,6 +2056,14 @@ async function adaptiveSignalStatsAsync(targetRace){
   })();
   _adaptiveStatsInFlight.set(cacheKey,promise);
   try{return await promise;}
+  catch(error){
+    // A concurrent save can invalidate the generation while this calculation yields.
+    if(error?.name==='AbortError'&&generation!==_adaptiveStatsGeneration&&retryCount<2){
+      if(_adaptiveStatsInFlight.get(cacheKey)===promise)_adaptiveStatsInFlight.delete(cacheKey);
+      return await adaptiveSignalStatsAsync(targetRace,retryCount+1);
+    }
+    throw error;
+  }
   finally{if(_adaptiveStatsInFlight.get(cacheKey)===promise)_adaptiveStatsInFlight.delete(cacheKey);}
 }
 if(typeof globalThis!=='undefined'){
@@ -2107,7 +2165,7 @@ function valueBandSignalWeights(){
   const criteria = {
     sonuc678: h => h.result_rank!=null && h.result_rank>=6 && h.result_rank<=8,
     agf6_11: h => h.agf_rank!=null && h.agf_rank>=6 && h.agf_rank<=11,
-    bmbOdb: h => h.bmb===1 || isOdbCandidate(h),
+    bmbOdb: h => Number(h.bmb)===1 || isOdbCandidate(h),
     ypuan8_20: h => (typeof isOdbCandidate==='function' && isOdbCandidate(h) && Number(h.ypuan)>=8 && Number(h.ypuan)<=20)
   };
 
@@ -2154,7 +2212,7 @@ function adaptiveWeightsForRace(targetRace, k=4){
   if(_adaptiveWeightsCache.has(cacheKey)) return _adaptiveWeightsCache.get(cacheKey);
   const stats=adaptiveSignalStats(targetRace);
   const keys=Object.keys(ADAPTIVE_BASE_WEIGHTS);
-  const sample=stats._source.rows.length;
+  const sample=stats._source.count??stats._source.rows.length;
   const ready=sample>=ADAPTIVE_MIN_RACES;
   const kk='p'+safeK;
   const availableKeys=keys.filter(key=>(Number(stats[key]?.[kk]?.total)||0)>0);
@@ -2252,6 +2310,10 @@ function adaptiveCompositeScore(r,h,learned=null){
 }
 
 let _adaptiveOrderResultCache=new WeakMap();
+// strategicOrderForRace/hit-first çağrıları her seferinde taze `.slice()` dizisi verdiği için
+// dizi-kimliğine bağlı önbellek hiç isabet almıyordu. İkinci katman yarış nesnesi + içerik
+// imzasına bağlıdır; yalnız sonuçtaki her at mevcut kaynakta aynı nesne olarak varsa kullanılır.
+let _adaptiveOrderByRace=new WeakMap();
 
 function adaptiveOrderSignature(r,source){
   const racePart=[
@@ -2280,6 +2342,18 @@ function adaptiveOrderForRace(r, horses=null){
   const signature=canCache?adaptiveOrderSignature(r,source):'';
   const cached=canCache?_adaptiveOrderResultCache.get(source):null;
   if(cached&&cached.signature===signature) return cached.ordered.slice();
+  const raceKeyObj=canCache&&r&&typeof r==='object'?r:null;
+  if(raceKeyObj){
+    const perRace=_adaptiveOrderByRace.get(raceKeyObj),hit=perRace&&perRace.get(signature);
+    if(hit){
+      const present=new Set(source);let liveCount=0;
+      for(const h of source)if(!isNonRunner(h))liveCount++;
+      if(hit.length===liveCount&&hit.every(h=>present.has(h))){
+        _adaptiveOrderResultCache.set(source,{signature,ordered:hit.slice()});
+        return hit.slice();
+      }
+    }
+  }
 
   const remaining=Array.from(source).filter(h=>!isNonRunner(h)).slice();
   const ordered=[];
@@ -2310,7 +2384,8 @@ function adaptiveOrderForRace(r, horses=null){
     const composite=scoreCandidates(remaining,position);
     remaining.sort((a,b)=>
       (composite.get(b)||0)-(composite.get(a)||0) ||
-      (Number(b.score)||0)-(Number(a.score)||0)
+      (Number(b.score)||0)-(Number(a.score)||0) ||
+      String(a.horse_no??'').localeCompare(String(b.horse_no??''),'tr',{numeric:true})
     );
     const pick=remaining.shift();
     pick.adaptive_position=position;
@@ -2321,16 +2396,22 @@ function adaptiveOrderForRace(r, horses=null){
     const composite5=scoreCandidates(remaining,5);
     remaining.sort((a,b)=>
       (composite5.get(b)||0)-(composite5.get(a)||0) ||
-      (Number(b.score)||0)-(Number(a.score)||0)
+      (Number(b.score)||0)-(Number(a.score)||0) ||
+      String(a.horse_no??'').localeCompare(String(b.horse_no??''),'tr',{numeric:true})
     );
     ordered.push(...remaining);
   }
   if(canCache) _adaptiveOrderResultCache.set(source,{signature,ordered:ordered.slice()});
+  if(raceKeyObj){
+    let perRace=_adaptiveOrderByRace.get(raceKeyObj);
+    if(!perRace||perRace.size>=4){perRace=new Map();_adaptiveOrderByRace.set(raceKeyObj,perRace);}
+    perRace.set(signature,ordered.slice());
+  }
   return ordered;
 }
 
 if(typeof window!=='undefined'&&window.addEventListener){
-  window.addEventListener('tkp:db-changed',()=>{ _adaptiveOrderResultCache=new WeakMap(); });
+  window.addEventListener('tkp:db-changed',()=>{ _adaptiveOrderResultCache=new WeakMap(); _adaptiveOrderByRace=new WeakMap(); });
 }
 
 function learnedSideBetWidth(n, targetRace){
@@ -2867,3 +2948,177 @@ if(typeof globalThis!=='undefined'){
   globalThis.tkpCouponHistoricalEvidenceSummaryAsync=tkpCouponHistoricalEvidenceSummaryAsync;
   globalThis.tkpWinnerComboSummaryReady=tkpWinnerComboSummaryReady;
 }
+
+// Shared read-only PROF order for archive tracking and horse-name labels.
+function tkpProfBottomPositions(r){
+  const rows=(r?.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+  const values=[];
+  for(const h of rows){
+    let raw;try{raw=profileStrengthPct(r,h);}catch(_){return new Map();}
+    if(raw==null||raw===''||!Number.isFinite(Number(raw)))return new Map();
+    values.push({h,prof:Number(raw)});
+  }
+  const out=new Map();
+  for(const v of values)out.set(String(v.h.horse_no),{prof:v.prof,rank:1+values.filter(x=>x.prof<v.prof).length,total:values.length});
+  return out;
+}
+// END PROF BOTTOM POSITIONS
+
+const _tkpTableBottomPastWinnerCache=new Map();
+// ALT tracks positions in similar historical races, never this horse's own wins.
+function tkpTableBottomConditionStats(r){
+  const day=String(r?.race_date||'').slice(0,10);
+  const sig=typeof tkpStatsCacheSignature==='function'?tkpStatsCacheSignature():'';
+  const key=['SURPRISE_RATE_V8_LEG',typeof db!=='undefined'?(db.bomb_hunter_shadow_log||[]).length:0,r?.id,day,r?.hippodrome,r?.condition_family,r?.breed,r?.surface,r?.distance_m,sig].join('|');
+  if(_tkpTableBottomPastWinnerCache.has(key))return _tkpTableBottomPastWinnerCache.get(key);
+  const out={signals:{BMB:{starts:0,wins:0,seconds:0,top5:0},ODB:{starts:0,wins:0,seconds:0,top5:0},BH1:{starts:0,wins:0,seconds:0,top5:0},BH2:{starts:0,wins:0,seconds:0,top5:0},BH3:{starts:0,wins:0,seconds:0,top5:0}},ranks:[1,2,3,4].map(rank=>({rank,starts:0,wins:0,seconds:0,top5:0,bmbStarts:0,bmbWins:0})),level:'Veri yok',label:'',excluded:0,winners:[]};
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||typeof detailedProfileMatch!=='function'||typeof tkpHistoricalFrozenOrderForRace!=='function')return out;
+  const profile=detailedProfileMatch(r,5);out.level=profile.level||'Benzer koşullar';out.label=profile.label||'';
+  out.surpriseRaces={starts:0,wins:0,excluded:0};
+  const seen=new Set();
+  const bhLogs=typeof db!=='undefined'?(db.bomb_hunter_shadow_log||[]):[];
+  const bhByRace=new Map(bhLogs.map(rec=>[rec.race_key,rec]));
+  for(const past of profile.rows||[]){
+    const pastDay=String(past?.race_date||'').slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(pastDay)||pastDay>=day)continue;
+    const status=String(past?.result_integrity_status||'').toUpperCase(),source=String(past?.result_integrity_source||'').toUpperCase();
+    const verified=(status==='VERIFIED'&&source==='TJK_OFFICIAL_ORDERED_PAYOUT')||(Number(past?.result_verified_depth)>=1&&(status==='VERIFIED'||status==='VERIFIED_TJK_PAYOUT'||source==='TJK_OFFICIAL_ORDERED_PAYOUT'));
+    const live=(past.horses||[]).filter(h=>h&&!isNonRunner(h));
+    const order=tkpHistoricalFrozenOrderForRace(past);
+    const nums=new Set(order.map(h=>String(h.horse_no)));
+    const finish=h=>typeof tkpAnalysisFinishPosition==='function'?tkpAnalysisFinishPosition(h):(Number(h?.winner)===1?1:Number(h?.finish_position)||null);
+    if(!verified||!live.some(h=>finish(h)===1)){out.excluded++;continue;}
+    const identity=String(past.id??[pastDay,past.hippodrome,past.race_no,past.altili_no,past.file_id].join('|'));
+    const dedupe=past.id!=null||past.race_no!=null?identity:past;
+    if(seen.has(dedupe))continue;seen.add(dedupe);
+    const winners=live.filter(h=>finish(h)===1);
+    if(winners.every(h=>Number(h.agf_rank)>=1)){
+      out.surpriseRaces.starts++;
+      if(winners.some(h=>Number(h.agf_rank)>=6))out.surpriseRaces.wins++;
+    }else out.surpriseRaces.excluded++;
+    const recordWinner=(h,tag)=>{
+      let row=out.winners.find(row=>row.raceIdentity===identity&&row.horse_no===String(h.horse_no));
+      if(!row){row={raceIdentity:identity,date:pastDay,hippodrome:past.hippodrome||'',condition:past.condition_family||'',horse_no:String(h.horse_no),horse_name:h.horse_name||'',signals:[]};out.winners.push(row);}
+      if(!row.signals.includes(tag))row.signals.push(tag);
+    };
+    for(const h of live){
+      const tags=[];if(Number(h.bmb)===1&&h.bmb_source!=='ŞABLON KURALI')tags.push('BMB');
+      if(Number(h.odb)===1||h.bmb_source==='ŞABLON KURALI')tags.push('ODB');
+      for(const tag of tags){out.signals[tag].starts++;if(finish(h)===1){out.signals[tag].wins++;recordWinner(h,tag);}else if(finish(h)===2)out.signals[tag].seconds++;if(finish(h)>=1&&finish(h)<=5)out.signals[tag].top5++;}
+    }
+    // Category evidence comes from the original pre-race BH snapshot only.
+    const raceKey=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(past):'';
+    const original=raceKey?bhByRace.get(raceKey):null;
+    const frozen=original&&String(original.created_at||'').slice(0,10).length===10&&String(original.created_at).slice(0,10)<=pastDay?original:null;
+    const counted=new Set();
+    for(const c of frozen?.candidates||[]){
+      if(String(c.kind||'').toUpperCase()==='ODB')continue;
+      const tag='BH'+Number(c.category_rank||c.rank);
+      const h=live.find(h=>String(h.horse_no)===String(c.horse_no));
+      if(!out.signals[tag]||!h||counted.has(tag))continue;
+      counted.add(tag);out.signals[tag].starts++;if(finish(h)===1)out.signals[tag].wins++;else if(finish(h)===2)out.signals[tag].seconds++;
+      if(finish(h)>=1&&finish(h)<=5)out.signals[tag].top5++;
+    }
+    if(order.length!==live.length||nums.size!==live.length||!live.every(h=>nums.has(String(h.horse_no)))){out.excluded++;continue;}
+    for(const row of out.ranks){
+      const h=order[order.length-row.rank];if(!h)continue;
+      row.starts++;const won=finish(h)===1;if(won){row.wins++;recordWinner(h,'ALT '+row.rank);}else if(finish(h)===2)row.seconds++;
+      if(finish(h)>=1&&finish(h)<=5)row.top5++;
+      if(Number(h.bmb)===1&&h.bmb_source!=='ŞABLON KURALI'){row.bmbStarts++;if(won)row.bmbWins++;}
+    }
+  }
+  if(_tkpTableBottomPastWinnerCache.size>=32)_tkpTableBottomPastWinnerCache.clear();
+  _tkpTableBottomPastWinnerCache.set(key,out);return out;
+}
+function tkpLegSurpriseEvidence(r){
+  const proof=tkpTableBottomConditionStats(r).surpriseRaces||{starts:0,wins:0,excluded:0};
+  const n=proof.starts,w=proof.wins,rate=n?w/n:null,z=1.96;
+  const lower=n?(rate+z*z/(2*n)-z*Math.sqrt(rate*(1-rate)/n+z*z/(4*n*n)))/(1+z*z/n):0;
+  return {...proof,rate,lower,high:n>=20&&rate>=.30&&lower>=.15};
+}
+function tkpLegSurpriseBadgeHTML(r){
+  const p=tkpLegSurpriseEvidence(r),escape=value=>typeof esc==='function'?esc(String(value)):String(value);
+  const label=p.rate==null?'<span class="tkpSurpriseNoData">Sürpriz · veri yok</span>':
+    '<span class="tkpSurpriseRate">Geçmiş sürpriz %'+escape((100*p.rate).toFixed(1).replace('.',','))+'</span> · '+
+    '<span class="tkpSurpriseSample">'+escape(p.wins)+'/'+escape(p.starts)+'</span>'+
+    (p.starts<20?' · <span class="tkpSurpriseLowSample">az örnek</span>':p.high?' · <span class="tkpSurprisePriority">ÖNCELİKLİ</span>':'');
+  return '<span class="tkpLegSurpriseBadge'+(p.high?' tkpLegSurpriseHigh':'')+'" title="Benzer koşullarda AGF 6 ve sonrası kazanan yarışların oranı; bugünkü kesin olasılık değildir.">'+label+'</span>';
+}
+function tkpTableBottomFourPositions(r,ordered){
+  const live=(ordered||[]).filter(h=>h&&!isNonRunner(h)),history=tkpTableBottomConditionStats(r),out=new Map();
+  for(let i=Math.max(0,live.length-4);i<live.length;i++){
+    const rank=live.length-i,proof=history.ranks.find(x=>x.rank===rank);
+    if(proof?.wins>0)out.set(String(live[i].horse_no),{...proof,total:live.length,level:history.level,label:history.label});
+  }
+  return out;
+}
+function tkpTableBottomWinnerCandidates(r,ordered){
+  if((r?.horses||[]).some(h=>Number(h?.finish_position)>0||Number(h?.winner)===1))return [];
+  const positions=tkpTableBottomFourPositions(r,ordered);
+  return (ordered||[]).filter(h=>positions.has(String(h.horse_no)));
+}
+function tkpConditionRescueRows(r,ordered){
+  const history=tkpTableBottomConditionStats(r),bottom=tkpTableBottomFourPositions(r,ordered),out=[];
+  const bh=typeof tkpBombHunterSupportContext==='function'?tkpBombHunterSupportContext(r):null;
+  for(const horse of (ordered||[]).filter(h=>h&&!isNonRunner(h))){
+    const signals=[],position=bottom.get(String(horse.horse_no));
+    if(position)signals.push({...position,label:'ALT '+position.rank});
+    if(Number(horse.bmb)===1&&horse.bmb_source!=='ŞABLON KURALI'&&history.signals.BMB.wins>0)signals.push({label:'BMB',...history.signals.BMB});
+    const odb=Number(horse.odb)===1||horse.bmb_source==='ŞABLON KURALI'||(typeof isOdbCandidate==='function'&&isOdbCandidate(horse,r));
+    if(odb&&history.signals.ODB.wins>0)signals.push({label:'ODB',...history.signals.ODB});
+    const bhTags=(bh?.byHorse?.get(String(horse.horse_no))||[]).map(b=>String(b.text||'')).filter(t=>/^BH[123]$/.test(t));
+    const warnings=[...new Set([...bhTags,...signals.map(s=>s.label),...(Number(horse.bmb)===1&&horse.bmb_source!=='ŞABLON KURALI'?['BMB']:[]),...(odb?['ODB']:[])])];
+    if(signals.length)out.push({horse,signals,warnings});
+  }
+  return out.map((row,index)=>({...row,index})).sort((a,b)=>b.warnings.length-a.warnings.length||Math.max(...b.signals.map(s=>s.wins/(s.starts+6)))-Math.max(...a.signals.map(s=>s.wins/(s.starts+6)))||a.index-b.index);
+}
+function tkpRankedSurpriseRows(r,ordered){
+  const history=tkpTableBottomConditionStats(r),support=typeof tkpBombHunterSupportContext==='function'?tkpBombHunterSupportContext(r):null;
+  const byNo=new Map();
+  for(const row of tkpConditionRescueRows(r,ordered)){
+    if(!row.warnings.some(tag=>/^BH[123]$/.test(tag)||/^ALT [1-4]$/.test(tag)||tag==='ODB'||tag==='BMB'))continue;
+    byNo.set(String(row.horse.horse_no),{...row,signals:row.signals.slice(),warnings:row.warnings.slice()});
+  }
+  for(const horse of (ordered||[]).filter(h=>h&&!isNonRunner(h))){
+    const tags=(support?.byHorse?.get(String(horse.horse_no))||[]).map(b=>String(b.text||'')).filter(t=>/^BH[123]$/.test(t));
+    if(!tags.length)continue;
+    let row=byNo.get(String(horse.horse_no));
+    if(!row){row={horse,signals:[],warnings:[]};byNo.set(String(horse.horse_no),row);}
+    for(const tag of tags){if(!row.warnings.includes(tag))row.warnings.unshift(tag);const proof=history.signals[tag];if(proof?.starts>0&&!row.signals.some(s=>s.label===tag))row.signals.push({label:tag,...proof});}
+  }
+  const primaryRanks=new Map((ordered||[]).filter(h=>h&&!isNonRunner(h)).map((h,i)=>[String(h.horse_no),i+1]));
+  const ranked=[...byNo.values()].filter(row=>{const rank=Number(row.horse.agf_rank);
+    // AGF first five does not erase a proven tail signal outside TKP top five.
+    // This exception uses only earlier condition evidence, never today's finish.
+    const provenTail=primaryRanks.get(String(row.horse.horse_no))>5&&row.signals.some(s=>s.wins>0&&s.starts>0&&(/^(ALT [1-4]|BMB|ODB)$/.test(s.label)));
+    // A small field / tied AGF share can place a genuine low-share BMB at AGF 4–5.
+    // Match the existing <=10% surprise band, requiring earlier BMB/ODB wins.
+    const share=Number(row.horse.agf);
+    const provenLowShare=rank>=4&&rank<=5&&share>0&&share<=10&&row.signals.some(s=>s.wins>0&&s.starts>0&&/^(BMB|ODB)$/.test(s.label));
+    return rank>=6||provenTail||provenLowShare||(!(rank>=1)&&row.warnings.some(tag=>/^BH[123]$/.test(tag)));}).map((row,index)=>{
+    const evidence=row.signals.filter(s=>s.starts>0&&s.wins>=0&&s.wins<=s.starts).sort((a,b)=>b.wins/b.starts-a.wins/a.starts||b.starts-a.starts);
+    const best=evidence[0];return {...row,index,winRate:best?best.wins/best.starts:null,winRateProof:best||null};
+  }).sort((a,b)=>(b.winRate??-1)-(a.winRate??-1)||(b.winRateProof?.starts||0)-(a.winRateProof?.starts||0)||a.index-b.index);
+  const selected=new Set(ranked.filter(row=>row.warnings.includes('ALT 1')||row.warnings.includes('ODB')).slice(0,5));
+  for(const row of ranked){if(selected.size>=5)break;selected.add(row);}
+  const result=ranked.filter(row=>selected.has(row));
+  const numbers=new Set(result.map(row=>String(row.horse.horse_no)));
+  for(const horse of ordered||[]){
+    if(result.length>=6)break;
+    if(!horse||isNonRunner(horse)||!(Number(horse.agf_rank)>=6)||numbers.has(String(horse.horse_no)))continue;
+    result.push({horse,signals:[],warnings:['BH ADAY'],winRate:null,winRateProof:null,index:result.length});
+    numbers.add(String(horse.horse_no));
+  }
+  // BH/sürpriz tablosu üst sınırı: zorunlu sinyaller dahil toplam en fazla 6 farklı at.
+  // Önceki adayların sırası korunur, kupon seçimleri veya geçmiş kayıtlar değiştirilmez.
+  return result.slice(0,6);
+}
+function tkpSurpriseCouponRule(r,row){
+  if((r?.horses||[]).some(h=>Number(h.winner)===1||Number(h.finish_position)>0))return {eligible:false,reason:'Arşiv · kayıtlı kupon korunur'};
+  const proof=row?.winRateProof;
+  if(!proof||proof.starts<5)return {eligible:false,reason:'İzle · en az 5 örnek gerekli'};
+  if(!(proof.wins>0))return {eligible:false,reason:'İzle · geçmiş galibiyet yok'};
+  return {eligible:true,reason:'5+ atlı ayakta · yüzde sırası · bütçe korunur'};
+}
+// END TABLE BOTTOM FOUR
+

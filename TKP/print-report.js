@@ -95,6 +95,16 @@
     }).join('');
     return `<div class="coupon"><h3>${E(title)}</h3><table><tbody>${rows}</tbody></table><div class="couponFoot">Maliyet: ${f2(c.cost)} TL</div></div>`;
   }
+  // Görseldeki BH kayıtlarını yarışın doğrulanmış at verisine eşleştir; TR uydurma.
+  function bhTrForPrint(r,c){
+    const clean=v=>String(v??'').trim().toLocaleUpperCase('tr-TR').replace(/\s+/g,' ');
+    const no=clean(c?.horse_no),name=clean(c?.horse_name);
+    const horses=Array.isArray(r?.horses)?r.horses:[];
+    const horse=horses.find(h=>clean(h?.horse_no)===no)
+      ||(name?horses.find(h=>clean(h?.horse_name)===name):null);
+    const value=typeof tkpTrustedGcTrValue==='function'?tkpTrustedGcTrValue(horse):null;
+    return value!==null&&value!==undefined&&Number.isFinite(Number(value))&&Number(value)>0?'TR '+f2(value):'TR —';
+  }
   function bombHunterPrintSection(results){
     const cards=(results||[]).map(x=>{
       const r=x?.r||x; if(!r)return '';
@@ -109,8 +119,10 @@
           if(!resultKnown && typeof tkpBombHunterCandidates==='function') candidates=tkpBombHunterCandidates(r).map((z,i)=>({rank:i+1,horse_no:String(z.h?.horse_no||''),horse_name:z.h?.horse_name||'',score:Number(z.score)||0,reasons:z.reasons||[]}));
         }
       }catch(_e){}
-      if(!candidates.length)return '';
-      const rows=candidates.map((c,index)=>{const kind=String(c?.kind||'').toUpperCase()==='ODB'?'ODB1':`BH${Math.max(1,Number(c?.category_rank)||index+1)}`;return `<span class="bhPrintChip"><b>${E(kind)} · ${E(c.horse_no)} ${E(c.horse_name)}</b><em>BH ${f2((Number(c.score)||0)*100)}</em></span>`;}).join('');
+      const rescue=typeof tkpConditionRescueShareRows==='function'?tkpConditionRescueShareRows(x):[];
+      if(!candidates.length&&!rescue.length)return '';
+      const numberLabel=no=>typeof tkpShareHorseIdentity==='function'?tkpShareHorseIdentity(no,r).label:String(no);
+      const rows=rescue.map(c=>`<span class="bhPrintChip bhPrintRescueChip"><b class="bhPrintNo">${E(numberLabel(c.horse_no))}</b><span class="bhPrintMeta"><b>${E(c.horse_name)} <span class="bhPrintTr">${E(bhTrForPrint(r,c))}</span></b><span class="bhPrintShort">${E(c.label)} <em>${E(c.percentage)}</em></span></span></span>`).join('');
       return `<div class="bhPrintLeg"><h3>${E(r.leg)}. AYAK</h3><div class="bhPrintPicks">${rows}</div></div>`;
     }).filter(Boolean).join('');
     return cards?`<section class="bhPrint"><h2>Bomba Avcısı</h2><div class="bhPrintGrid">${cards}</div></section>`:'';
@@ -245,10 +257,8 @@
     _tkpSideBetSummaryPromise=sideBetSummaryAsyncUnshared(results).finally(()=>{_tkpSideBetSummaryPromise=null;});
     return _tkpSideBetSummaryPromise;
   }
-  // R18.6.1 — A4 salt-okunur snapshot yolu. PDF düğmesi yan bahis/model
-  // hesabını ASLA başlatmaz; ekranda/RAM'de veya kalıcı UI cache'inde hazır olan
-  // paneli kullanır. Hazır snapshot yoksa bunu açıkça yazar ve kullanıcı arayüzünü
-  // 20+ saniyelik sideBet hesap zincirine sokmaz.
+  // A4 reuses ready cards first. Saved meetings use the read-only renderer;
+  // a new bulletin uses the bounded async card builder without model training.
   async function sideBetSummarySnapshotOnlyAsync(results){
     const cacheKey=tkpA4SectionKey('sidebets',results);
     const sectionCached=tkpA4SectionGet(cacheKey);if(sectionCached!==undefined)return sectionCached;
@@ -263,9 +273,21 @@
         const key=tkpSideBetPanelCacheKey(results||[]);
         html=await tkpReadPersistentSideBet(key)||'';
       }
+      // The saved meeting can restore its read-only cards even when the user
+      // has not opened Statistics yet. This never invokes the live model builder.
+      const archivedRows=(results||[]).filter(x=>x?.r);
+      if(!html && archivedRows.length && typeof tkpIsArchivedReadOnly==='function'
+        && archivedRows.every(x=>tkpIsArchivedReadOnly(x))
+        && typeof tkpArchivedSideBetPanelHTMLAsync==='function'){
+        html=await tkpArchivedSideBetPanelHTMLAsync(results||[]);
+      }
+      if(!html && archivedRows.length && typeof tkpGetSideBetPanelHTMLAsync==='function'){
+        html=await tkpGetSideBetPanelHTMLAsync(results||[],{allowTraining:false});
+      }
     }catch(_e){html='';}
     if(!String(html||'').trim()){
-      return tkpA4SectionSet(cacheKey,'<div class="muted">Yan bahis/Oyun Portföyü snapshotı henüz hazır değil. A4 bu ekranda yeniden hesaplama yapmaz.</div>');
+      // A missing snapshot is temporary; do not cache it as a completed section.
+      return '<div class="muted">Yan bahis/Oyun Portföyü snapshotı henüz hazır değil. A4 bu ekranda yeniden hesaplama yapmaz.</div>';
     }
     return tkpA4SectionSet(cacheKey,sideBetSummary(results,html));
   }
@@ -336,7 +358,7 @@
     const resultPdfCss='.legCard .rankBadge,.legCard .rank-1,.legCard .rank-2,.legCard .rank-3,.legCard .rank-4,.legCard .rank-other{display:inline!important;width:auto!important;height:auto!important;background:transparent!important;border:0!important;border-radius:0!important;color:#111827!important;box-shadow:none!important}.legCard .predictionHorseNo.actualPlace{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;border-radius:50%;font-weight:900}.legCard .predictionHorseNo.actualPlace-p1{background:#86efac;border:1px solid #15803d;color:#14532d}.legCard .predictionHorseNo.actualPlace-p2{background:#7dd3fc;border:1px solid #0369a1;color:#0c4a6e}.legCard .predictionHorseNo.actualPlace-p3{background:#fde047;border:1px solid #a16207;color:#713f12}.legCard .predictionHorseNo.actualPlace-p4{background:#d8b4fe;border:1px solid #7e22ce;color:#581c87}.legCard .predictionHorseNo.actualPlace-p5{background:#9ca3af;border:1px solid #4b5563;color:#111827}.legCard .badge.result-rank-1{background:#86efac;color:#14532d}.legCard .badge.result-rank-2{background:#7dd3fc;color:#0c4a6e}.legCard .badge.result-rank-3{background:#fde047;color:#713f12}.legCard .badge.result-rank-4{background:#d8b4fe;color:#581c87}.legCard .badge.result-rank-5{background:#9ca3af;color:#111827}';
     // Padding cannot collapse with the preceding table margin. Keep the TKP
     // section heading with its title when the report flows across A4 pages.
-    const sectionSpacingCss='.legsPage{padding-top:10mm}.legSectionStart{break-inside:avoid;page-break-inside:avoid}';
+    const sectionSpacingCss='.legCard col:nth-child(2){width:24%!important}.legCard col:nth-child(13){width:28.7%!important}.legCard .horseSignalLabel{display:inline-block;margin-left:.6mm;padding:.15mm .4mm;border:1px solid #cbd5e1;border-radius:.5mm;background:#f8fafc;color:#334155;font-size:5.2pt;font-weight:700;line-height:1.1;white-space:nowrap;vertical-align:baseline}.bhPrintRescueChip{display:grid;width:100%;grid-template-columns:9mm minmax(0,1fr);gap:1mm;border-radius:1mm;white-space:normal;font-size:5.5pt;align-items:center;break-inside:avoid}.bhPrintRescueChip b{display:block;overflow:visible;white-space:normal}.bhPrintRescueChip .bhPrintNo{font-size:8pt;white-space:nowrap;text-align:center}.bhPrintMeta{min-width:0;overflow-wrap:anywhere}.bhPrintTr{display:inline-block;white-space:nowrap;font-size:5pt;color:#1e3a8a;font-weight:900;margin-left:.7mm}.bhPrintShort{display:block;font-size:4.8pt;font-weight:400;line-height:1.2}.bhPrintRescueChip em{display:inline;white-space:nowrap;font-size:4.8pt;margin-left:.6mm}.bhPrint{break-inside:auto!important;page-break-inside:auto!important}.legsPage{padding-top:10mm}.legSectionStart{break-inside:avoid;page-break-inside:avoid}';
     const previewGrips=typeof globalThis.tkpInstallFixedScrollGrips==='function'?'<script>('+globalThis.tkpInstallFixedScrollGrips.toString()+')();<'+ '/script>':'';
     let filename='',html='';
     let pdfTimeout=0;

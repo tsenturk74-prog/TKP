@@ -15,7 +15,14 @@
   const VERSION='V1.1.333-WEEKLY-PAIRED-PORTFOLIO-GATE';
   const TIME_ZONE='Europe/Istanbul';
   const DEFAULT_START='2026-08-23';
-  const ACTIVE_MODEL='PRODUCTION_CHAMPION_W1';
+  const BASELINE_MODEL='PRODUCTION_CHAMPION_W1';
+  let _adoptGuard=false;
+  function activeModelId(){
+    const d=database();
+    // AGF resmî Champion kararı henüz uygulanmadıysa (taze/geri yüklenmiş veri) ilk kullanımda hemen uygula.
+    if(!_adoptGuard&&d&&!d?.settings?.weekly_model_tracker?.agfAdoptedAt){_adoptGuard=true;try{ensure();}catch(_){ }finally{_adoptGuard=false;}}
+    return String(d?.settings?.weekly_model_tracker?.activeModelId||BASELINE_MODEL);
+  }
   const PROMOTION_POLICY=Object.freeze({
     minCompletedWeeks:8,
     minResolvedRaces:300,
@@ -31,10 +38,12 @@
     maxP1Loss:0.02,
     maxAverageCostRatio:1.15,
     maxPortfolioCostRatio:1.05,
-    minSideBetRoi:0,
+    minSideBetRoi:0.05,
     maxSinglePayoutShare:0.50,
     maxTop3PayoutShare:0.75,
-    automaticPromotion:false
+    automaticPromotion:true,
+    promotionCooldownDays:14,
+    requireUniqueWinner:true
   });
   const RETROSPECTIVE_CHALLENGER_AUDIT=Object.freeze({
     version:'V1.1.333-RANK-CDF-SHADOW-AUDIT',runtimeResultFields:false,
@@ -61,7 +70,7 @@
   const EXACT_SIDE_BET_MIN_EVENTS=PROMOTION_POLICY.minSideBetEvents;
   let _exactSideBetCache={rows:null,length:-1,locks:null,metrics:null,dirty:true};
   const MODEL_CATALOG=Object.freeze([
-    {id:ACTIVE_MODEL,label:'Champion · Canlı Üretim',kind:'production',active:true},
+    {id:BASELINE_MODEL,label:'Champion · Canlı Üretim',kind:'production',active:true},
     {id:'AGF_MARKET_W1',label:'AGF · Temiz Piyasa Referansı',kind:'agf'},
     {id:'TOMMY_VISIBLE_W1',label:'Tommy · İlk Bakış',kind:'tommy'},
     {id:'VALIDATED30_W1',label:'Challenger · Validated %30',kind:'validated30'},
@@ -70,6 +79,10 @@
     {id:'V53_FUSION_W1',label:'V53 · Çoklu Model Füzyonu',kind:'v53'},
     {id:'SURPRISE_CORE_ONLINE_V53_ODS_W1',label:'Sürpriz · Core+Online+V53+ODS',kind:'surprise'},
     {id:'EXPERT_CONSENSUS_W1',label:'Uzman/Kulis Konsensüsü',kind:'expert'},
+    {id:'WINNER_RECOVERY_W1',label:'Challenger · Winner Recovery + Belirsizlik',kind:'winner_recovery'},
+    {id:'EXPERT_OPTIMIZER_W1',label:'Challenger · Expert Ayrı Optimizer',kind:'expert_optimizer'},
+    {id:'CATBOOST_RESCUE_W1',label:'Champion + CatBoost Rescue',kind:'catboost_rescue'},
+    {id:'CATBOOST_TOP1_SHADOW_W1',label:'CatBoost Top-1 Override · Shadow',kind:'catboost_top1_shadow',autoPromote:false},
     {id:'TABLE_LEARNED_ENSEMBLE_W1',label:'Tablo Öğrenimli Ensemble',kind:'table'}
   ]);
   // V55'in ilk ve karşılaştırılabilir dört çekirdek sırası. Bu liste yeni bir
@@ -80,7 +93,7 @@
   const LEGACY_CORE_COMPARISON_GROUP=Object.freeze({
     id:'V55_LEGACY_CORE_COMPARISON_V1',
     label:'V55 eski çekirdek karşılaştırma',
-    modelIds:Object.freeze([ACTIVE_MODEL,'AGF_MARKET_W1','TOMMY_VISIBLE_W1','VALIDATED30_W1']),
+    modelIds:Object.freeze([BASELINE_MODEL,'AGF_MARKET_W1','TOMMY_VISIBLE_W1','VALIDATED30_W1']),
     capturePolicy:Object.freeze({preResultOnly:true,timeLockRequired:true}),
     automaticPromotion:false
   });
@@ -89,7 +102,20 @@
   function num(v,fallback=null){ if(v===null||v===undefined||v==='')return fallback;const n=Number(v);return Number.isFinite(n)?n:fallback; }
   function clamp(v,lo=0,hi=1){ return Math.max(lo,Math.min(hi,Number(v)||0)); }
   function horseNo(h){ return String(h?.horse_no??'').trim(); }
-  function upperTr(v){ return String(v??'').trim().toLocaleUpperCase('tr-TR'); }
+  // toLocaleUpperCase('tr-TR') yerel ayar araması nedeniyle yavaştır ve izleyici
+  // senkronizasyonu aynı kısa metinleri (at no, hipodrom) binlerce kez çevirir.
+  const _upperTrMemo=new Map();
+  function upperTr(v){
+    const raw=String(v??'');
+    if(raw.length>64)return raw.trim().toLocaleUpperCase('tr-TR');
+    let hit=_upperTrMemo.get(raw);
+    if(hit===undefined){
+      hit=raw.trim().toLocaleUpperCase('tr-TR');
+      if(_upperTrMemo.size>20000)_upperTrMemo.clear();
+      _upperTrMemo.set(raw,hit);
+    }
+    return hit;
+  }
   function trackKey(v){
     let s=upperTr(v);
     try{if(typeof global.canonicalHippodrome==='function')s=upperTr(global.canonicalHippodrome(s));}catch(_){ }
@@ -135,11 +161,18 @@
     const day=d.getUTCDay(),back=day===0?6:day-1;d.setUTCDate(d.getUTCDate()-back);
     const start=isoDate(d),end=addDays(start,6);return {start,end,key:start+'|'+end};
   }
+  let _todayFmt=null,_todayCache={at:0,value:''};
   function todayIstanbul(){
+    // Formatter pahalı: her satır filtresinde yeniden kurulması 2 sn'lik CPU yiyordu. Formatter
+    // tek sefer kurulur, sonuç 30 sn önbelleklenir (tarih sınırı için fazlasıyla yeterli).
+    const now=Date.now();
+    if(_todayCache.value&&now-_todayCache.at<30000)return _todayCache.value;
     try{
-      const parts=new Intl.DateTimeFormat('en-CA',{timeZone:TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
-      const p=Object.fromEntries(parts.map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}`;
-    }catch(_){return new Date().toISOString().slice(0,10);}
+      if(!_todayFmt)_todayFmt=new Intl.DateTimeFormat('en-CA',{timeZone:TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'});
+      const parts=_todayFmt.formatToParts(new Date(now));
+      const p=Object.fromEntries(parts.map(x=>[x.type,x.value]));
+      _todayCache={at:now,value:`${p.year}-${p.month}-${p.day}`};return _todayCache.value;
+    }catch(_){return new Date(now).toISOString().slice(0,10);}
   }
   function trackerStart(){const d=database();return String(d?.settings?.weekly_model_tracker?.startsAt||d?.settings?.live_final_backtest?.startsAt||DEFAULT_START).slice(0,10);}
   function withinTracking(r){const date=String(r?.race_date||'').slice(0,10),start=trackerStart();return !date||!start||date>=start;}
@@ -151,11 +184,29 @@
     const old=d.settings.weekly_model_tracker&&typeof d.settings.weekly_model_tracker==='object'?d.settings.weekly_model_tracker:{};
     d.settings.weekly_model_tracker={
       version:VERSION,startsAt:String(old.startsAt||d.settings?.live_final_backtest?.startsAt||DEFAULT_START).slice(0,10),
-      cadence:'WEEKLY_MON_SUN',timeZone:TIME_ZONE,activeModelId:String(old.activeModelId||ACTIVE_MODEL),
-      automaticPromotion:false,promotionPolicy:{...PROMOTION_POLICY,...(old.promotionPolicy||{}),automaticPromotion:false},
+      cadence:'WEEKLY_MON_SUN',timeZone:TIME_ZONE,activeModelId:String(old.activeModelId||BASELINE_MODEL),
+      automaticPromotion:old.automaticPromotion!==false,promotionPolicy:{...PROMOTION_POLICY,...(old.promotionPolicy||{}),automaticPromotion:old.automaticPromotion!==false},
+      promotionHistory:Array.isArray(old.promotionHistory)?old.promotionHistory.slice(-100):[],
+      lastPromotionAt:String(old.lastPromotionAt||''),lastDecisionAt:String(old.lastDecisionAt||''),agfAdoptedAt:String(old.agfAdoptedAt||''),
       historicalReference:{...(old.historicalReference||{}),meetings:509,completeMeetings:499,strictOfficialMeetings:499,excludedMissingOfficialResult:10,mode:'DIAGNOSTIC_DEVELOPMENT_REFERENCE_ONLY',agfTimestampProvenanceRequired:true,championEligible:false,source:'TKP_CORE_YEDEK_2026-08-23_509_R14_REAL509_SNAPSHOTS.tkbz'}
     };
+    adoptAgfChampionOnce(d);
     return d.weekly_model_log;
+  }
+  // Tommy kararı (2026-10-18): AGF · Temiz Piyasa Referansı resmî Champion olur. Tek seferlik; terfi geçmişine 'manuel' kaydedilir,
+  // böylece mevcut otomatik geri alma (>=40 eş toplantı, p<=0.05, 14 gün bekleme) ve başka modelin terfi kapısı AGF'ye karşı işler.
+  function adoptAgfChampionOnce(d){
+    const st=d?.settings?.weekly_model_tracker;if(!st||st.agfAdoptedAt)return false;
+    st.agfAdoptedAt=new Date().toISOString();
+    if(String(st.activeModelId||BASELINE_MODEL)!==BASELINE_MODEL)return false; // başka model zaten terfi etmişse dokunma
+    const at=st.agfAdoptedAt;
+    st.activeModelId='AGF_MARKET_W1';st.lastPromotionAt=at;
+    st.promotionHistory=(Array.isArray(st.promotionHistory)?st.promotionHistory:[]).concat([{at,from:BASELINE_MODEL,to:'AGF_MARKET_W1',reason:'MANUAL_USER_DECISION_AGF_CHAMPION',manual:true}]).slice(-100);
+    try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }
+    for(const fn of ['invalidateActiveRacesCache','tkpInvalidateSideBetPlanCache','tkpInvalidateSideBetTicketHtmlCache','tkpInvalidateFastBacktestCache'])try{if(typeof global[fn]==='function')global[fn]();}catch(_){ }
+    try{if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['settings'],{label:'agf-champion-adopted'});else if(typeof saveDB==='function')saveDB(false);}catch(_){ }
+    try{setTimeout(()=>{try{if(typeof global.saveDB==='function')global.saveDB(false,true);}catch(_){ }},4000);}catch(_){ }
+    return true;
   }
 
   function rankMap(rows){const m=new Map();(rows||[]).forEach((h,i)=>m.set(bettingInterestKey(horseNo(h)),i));return m;}
@@ -232,18 +283,52 @@
       return rankBlend(pool,[{rows:prod,weight:.45},{rows:online,weight:.20},{rows:v53,weight:.20},{rows:odsOrder(x,pool),weight:.15}]);
     }
     if(model.kind==='expert')return expertOrder(x,pool);
+    if(model.kind==='winner_recovery'){
+      // P1'i Champion'dan koparmadan P2-P5 kuyruğunu bağımsız sinyallerle yeniden
+      // sıralar. Amaç Top-1'i zorla değiştirmek değil, kazanan P2-P5'te kaldığında
+      // kupon kapsamından düşmesini azaltmaktır.
+      const table=tableOrder(x,pool),expert=expertOrder(x,pool),ods=odsOrder(x,pool);
+      return rankBlend(pool,[{rows:prod,weight:.55},{rows:table,weight:.20},{rows:expert,weight:.15},{rows:ods,weight:.10}]);
+    }
+    if(model.kind==='catboost_rescue'){
+      try{if(typeof global.tkpR17CatBoostRescueOrderForRace==='function')return uniqueOrder(global.tkpR17CatBoostRescueOrderForRace(x.r,prod),x.r);}catch(_){ }
+      return prod;
+    }
+    if(model.kind==='catboost_top1_shadow'){
+      try{
+        if(typeof global.tkpR17CatBoostPWinForHorse==='function'){
+          const has=pool.some(h=>Number.isFinite(Number(global.tkpR17CatBoostPWinForHorse(x.r,h))));
+          if(has)return pool.slice().sort((a,b)=>{const ap=Number(global.tkpR17CatBoostPWinForHorse(x.r,a)),bp=Number(global.tkpR17CatBoostPWinForHorse(x.r,b)),av=Number.isFinite(ap),bv=Number.isFinite(bp);if(av!==bv)return av?-1:1;if(av&&Math.abs(ap-bp)>1e-12)return bp-ap;return prod.indexOf(a)-prod.indexOf(b);});
+        }
+      }catch(_){ }
+      return prod;
+    }
+    if(model.kind==='expert_optimizer'){
+      // Uzman/Kulis kuponu ayrı challenger olarak öğrenir; Normal/Sürpriz üretim
+      // yapısını değiştirmez. Yeterli ileri kanıt yoksa otomatik kapı reddeder.
+      const ods=odsOrder(x,pool),table=tableOrder(x,pool);
+      return rankBlend(pool,[{rows:expertOrder(x,pool),weight:.55},{rows:prod,weight:.25},{rows:ods,weight:.10},{rows:table,weight:.10}]);
+    }
     if(model.kind==='table')return tableOrder(x,pool);
     return prod;
   }
-  function coverageCounts(x){
+  function coverageCounts(x,model=null){
     const out={normal:4,surprise:5,expert:5};
     for(const [key,mode] of [['normal','main'],['surprise','alt'],['expert','surprise']]){
       try{const p=typeof global.legCoveragePlan==='function'?global.legCoveragePlan(x,mode):null;if(p?.picks?.length)out[key]=Math.max(1,p.picks.length);}catch(_){ }
     }
+    // Winner-recovery challenger yalnız belirsiz ayaklarda +1 kapsam adayı dener.
+    // Bu genişleme üretime ancak Champion kapısını geçerse taşınır.
+    if(model?.kind==='winner_recovery'){
+      let uncertainty=0;
+      try{uncertainty=Number(global.tkpLegDistributionProfile?.(x,x?.scored||[])?.uncertainty)||Number(global.raceDifficultyIndex?.(x))||0;}catch(_){ }
+      if(uncertainty>=60){out.normal=Math.min(10,out.normal+1);out.surprise=Math.min(10,out.surprise+1);out.expert=Math.min(10,out.expert+1);}
+    }
+    if(model?.kind==='expert_optimizer')out.expert=Math.min(10,Math.max(out.expert,6));
     return out;
   }
   function modelSnapshot(model,x){
-    const order=orderForModel(model,x),counts=coverageCounts(x),top=order.slice(0,12).map(h=>horseNo(h)).filter(Boolean);
+    const order=orderForModel(model,x),counts=coverageCounts(x,model),top=order.slice(0,12).map(h=>horseNo(h)).filter(Boolean);
     if(!top.length)return null;
     const names={};order.slice(0,12).forEach(h=>names[horseNo(h)]=String(h?.horse_name||''));
     return {
@@ -266,10 +351,23 @@
     return {eligible:Number.isFinite(cutoff)&&Date.now()<cutoff?1:0,source:'TJK_PROGRAM_TIME',raceStartAt};
   }
 
+  // officialAltiliInfo her ayak için tüm db.races'i süzüyordu (O(n²)); tarih|pist|altılı dizini bir kez kurulur.
+  let _altiliIdx=null;
+  function altiliRaceIndex(d){
+    const list=d.races||[];
+    if(_altiliIdx&&_altiliIdx.list===list&&_altiliIdx.len===list.length)return _altiliIdx.map;
+    const map=new Map();
+    for(const z of list){
+      const k=String(z?.race_date||'').slice(0,10)+'|'+trackKey(z?.hippodrome)+'|'+Number(z?.altili_no||1);
+      const arr=map.get(k);if(arr)arr.push(z);else map.set(k,[z]);
+    }
+    _altiliIdx={list,len:list.length,map};return map;
+  }
+  if(typeof window!=='undefined'&&window.addEventListener)window.addEventListener('tkp:db-changed',()=>{_altiliIdx=null;});
   function officialAltiliInfo(r){
     const d=database();if(!d)return null;
     const date=String(r?.race_date||'').slice(0,10),track=trackKey(r?.hippodrome),session=Number(r?.altili_no)||1;
-    let races=(d.races||[]).filter(z=>String(z?.race_date||'').slice(0,10)===date&&trackKey(z?.hippodrome)===track&&Number(z?.altili_no||1)===session);
+    let races=altiliRaceIndex(d).get(date+'|'+track+'|'+session)||[];
     const sameFile=r?.file_id==null?[]:races.filter(z=>String(z?.file_id)===String(r.file_id));if(sameFile.length)races=sameFile;
     const entries=[];for(const z of races)for(const p of z?.payouts||[])if(String(p?.key||'').toLowerCase()==='altili')entries.push(p);
     if(!entries.length)return null;
@@ -462,12 +560,28 @@
     }
     return added.length;
   }
-  function exactRaceRows(raceResults){
-    const d=database(),map=new Map(),rows=[];
-    for(const item of (d?.races||[]))rows.push(item?.r||item);
-    for(const item of (raceResults||[]))rows.push(item?.r||item);
-    for(const r of rows){if(!r||typeof r!=='object')continue;const ref=exactRaceReference(r,{});for(const key of exactReferenceLookupKeys(ref))map.set(key,r);}
+  // Arşivin tamamı için referans->yarış haritası her çağrıda yeniden kuruluyordu
+  // (3 bin+ yarış x birçok anahtar). Entegrasyon onarımı bu fonksiyonu 4'lü partilerle
+  // yüzlerce kez çağırıyor. Taban harita dizi kimliği/uzunluğu/son eleman/DB revizyonu
+  // değişmedikçe yeniden kullanılır; verilen raceResults üstte küçük bir katman olarak
+  // önceliklidir (eski davranıştaki "sonraki kayıt öncekini ezer" korunur).
+  let _exactBaseMap={races:null,length:-1,last:null,revision:null,map:null};
+  function exactBaseRaceMap(d){
+    const races=Array.isArray(d?.races)?d.races:[];
+    let revision=null;try{revision=typeof _tkpDbRevision!=='undefined'?_tkpDbRevision:null;}catch(_){ }
+    const last=races.length?races[races.length-1]:null;
+    const c=_exactBaseMap;
+    if(c.map&&c.races===races&&c.length===races.length&&c.last===last&&c.revision===revision)return c.map;
+    const map=new Map();
+    for(const item of races){const r=item?.r||item;if(!r||typeof r!=='object')continue;const ref=exactRaceReference(r,{});for(const key of exactReferenceLookupKeys(ref))map.set(key,r);}
+    _exactBaseMap={races,length:races.length,last,revision,map};
     return map;
+  }
+  function exactRaceRows(raceResults){
+    const d=database(),base=exactBaseRaceMap(d),overlay=new Map();
+    for(const item of (raceResults||[])){const r=item?.r||item;if(!r||typeof r!=='object')continue;const ref=exactRaceReference(r,{});for(const key of exactReferenceLookupKeys(ref))overlay.set(key,r);}
+    if(!overlay.size)return base;
+    return {has:key=>overlay.has(key)||base.has(key),get:key=>overlay.has(key)?overlay.get(key):base.get(key)};
   }
   function exactFindRace(ref,map){for(const key of exactReferenceKeys(ref))if(map.has(key))return map.get(key);return null;}
   function exactPoolHas(pool,no,useEkuri=false){return (pool||[]).some(value=>useEkuri?sameBetInterest(value,no):sameExact(value,no));}
@@ -510,7 +624,7 @@
       row.evaluation={known:1,hit:payout.matched.length?1:(outcome.hit?1:0),cost:Number(row?.cost)||0,return:payout.return,payout_known:payout.known,matchedPayouts:payout.matched.length,rollover:payout.entries.some(entry=>entry?.rollover)?1:0,unordered_hit:outcome.unorderedHit||0};
       row.evaluated_at=new Date().toISOString();row.integrity='RESOLVED';exactCacheRemovePending(cache,row);changed=true;
     }
-    if(changed){cache.metrics=null;cache.dirty=true;try{if(typeof global.tkpInvalidateSideBetTicketHtmlCache==='function')global.tkpInvalidateSideBetTicketHtmlCache();}catch(_){ }try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }try{if(global.__tkpBulkPipelineActive!==true){if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['weekly_model_log','sidebet_ticket_log'],{label:'exact-sidebet-resolve'});else if(typeof saveDB==='function')saveDB(false);}}catch(_){ }}
+    if(changed){cache.metrics=null;cache.dirty=true;try{if(typeof global.tkpInvalidateSideBetTicketHtmlCache==='function')global.tkpInvalidateSideBetTicketHtmlCache();}catch(_){ }try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }try{if(global.__tkpBulkPipelineActive!==true){if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['weekly_model_log','sidebet_ticket_log','deep_surprise_tracking_log'],{label:'exact-sidebet-resolve'});else if(typeof saveDB==='function')saveDB(false);}}catch(_){ }}
     return changed;
   }
   function exactSideBetMetrics(log){
@@ -540,13 +654,13 @@
     if(!profitable)reasons.push('canlı ROI pozitif değil');
     if(!diversified)reasons.push('ödeme yoğunlaşması güvenli sınırı geçiyor');
     return {events,financialEvents,hits,hitRate:events?hits/events:0,cost,return:ret,roi,largestPayoutShare:largestShare,top3PayoutShare:top3Share,
-      enough,profitable,diversified,state:review?'REVIEW':'SHADOW',canActivate:false,automaticPromotion:false,
-      reason:review?'Canlı örnek, pozitif ROI ve ödeme yoğunlaşması kapıları geçti; yalnız elle inceleme yapılabilir.':reasons.join(' · ')};
+      enough,profitable,diversified,state:review&&PROMOTION_POLICY.automaticPromotion?'ACTIVE':(review?'REVIEW':'SHADOW'),canActivate:review&&PROMOTION_POLICY.automaticPromotion,automaticPromotion:PROMOTION_POLICY.automaticPromotion,
+      reason:review?(PROMOTION_POLICY.automaticPromotion?'Canlı örnek, ≥%5 ROI ve ödeme yoğunlaşması kapıları geçti; EV kapısı da uygunsa otomatik ACTIVE olabilir.':'Canlı örnek, ROI ve ödeme yoğunlaşması kapıları geçti; inceleme adayıdır.'):reasons.join(' · ')};
   }
   function exactSideBetGate(product){
     const key=exactSideBetProduct(product),item=exactSideBetMetrics(exactTicketLog(database())).get(key)||{events:0,financialEvents:0,hits:0,cost:0,return:0,returns:[]},decision=sideBetEvidenceDecision(item);
-    return {product:key,...decision,mode:decision.state,label:decision.state==='REVIEW'?'İNCELEME':'SHADOW',minimum:EXACT_SIDE_BET_MIN_EVENTS,remaining:Math.max(0,EXACT_SIDE_BET_MIN_EVENTS-decision.events),
-      exact:true,livePreRaceOnly:true,automaticPromotion:false,canActivate:false};
+    return {product:key,...decision,mode:decision.state,label:decision.state==='ACTIVE'?'AKTİF':(decision.state==='REVIEW'?'İNCELEME':'SHADOW'),minimum:EXACT_SIDE_BET_MIN_EVENTS,remaining:Math.max(0,EXACT_SIDE_BET_MIN_EVENTS-decision.events),
+      exact:true,livePreRaceOnly:true,automaticPromotion:decision.automaticPromotion,canActivate:decision.canActivate};
   }
   function evaluateRecord(rec,r){
     if(!rec||!r||!hasResult(r))return false;
@@ -567,6 +681,7 @@
     // Exact yan bahis biletleri model-sırası proxy'sinden bağımsız çözülür. Bu çağrı
     // yalnız daha önce kilitlenmiş kayıtları günceller; sonuçtan sonra yeni bilet yazmaz.
     if(resolveExactSideBetTickets(raceResults))changed=true;
+    try{for(const item of raceResults){const x=item?.r?item:{r:item,scored:item?.horses||[]};if(!hasResult(x?.r))changed=global.tkpDeepSurpriseTrackerCaptureRace?.(x)||changed;else changed=global.tkpDeepSurpriseTrackerEvaluateRace?.(x.r)||changed;}}catch(_){ }
     for(const item of raceResults){
       const x=item?.r?item:{r:item,scored:item?.horses||[]},r=x?.r;if(!r||!withinTracking(r))continue;
       const resultKnown=hasResult(r),wk=weekInfo(r.race_date),timeProof=preStartProof(r);
@@ -593,11 +708,15 @@
     // yalnız son haftaları gösterebilir; kaynak kayıtlar sessizce son-N diye silinmez.
     if(changed){
       try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }
+      // Sonuç geldikçe Champion/Challenger kapısını otomatik değerlendir. Yalnız
+      // saat-kilitli ileri kayıtlar promotionRows() içine girebildiği için geçmiş
+      // sonuçtan geriye dönük terfi üretilemez.
+      try{const agg=aggregate(),rows=promotionRows(agg);applyAutomaticPromotion(agg,rows);}catch(_){ }
       // A central pre-race/result pipeline may synchronize many legs at once. In
       // that mode the caller owns one targeted persist; do not start a whole-DB
       // save for every leg/model update.
       if(global.__tkpBulkPipelineActive!==true)try{
-        if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['weekly_model_log','sidebet_ticket_log'],{label:'weekly-model-tracker'});
+        if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['weekly_model_log','sidebet_ticket_log','deep_surprise_tracking_log'],{label:'weekly-model-tracker'});
         else if(typeof saveDB==='function')saveDB(false);
       }catch(_){ }
     }
@@ -610,7 +729,7 @@
     for(const [type,coupon] of Object.entries(snapshot?.coupons||{})){
       const format=mapping[type];if(!format)continue;
       for(const leg of coupon?.legs||[]){
-        const key=[String(snapshot.race_date||'').slice(0,10),trackKey(snapshot.hippodrome),Number(snapshot.altili_no)||1,Number(leg?.leg)||0].join('|')+'|'+ACTIVE_MODEL;
+        const key=[String(snapshot.race_date||'').slice(0,10),trackKey(snapshot.hippodrome),Number(snapshot.altili_no)||1,Number(leg?.leg)||0].join('|')+'|'+activeModelId();
         const rec=log.find(z=>z?.event_model_key===key);if(!rec||rec.evaluation||rec.production_coupon_exact?.[format]===1)continue;
         const next=(leg?.picks||[]).map(String).filter(Boolean),prev=rec.coupon_picks?.[format]||[];
         if(next.length){
@@ -620,6 +739,7 @@
         }
       }
     }
+    try{if(global.tkpDeepSurpriseTrackerAttachCouponSnapshot?.(snapshot))changed=true;}catch(_){ }
     if(changed){try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }try{if(options.persist!==false&&typeof saveDB==='function')saveDB(false);}catch(_){ }}
     return changed;
   }
@@ -671,7 +791,7 @@
     let pmf=Math.pow(.5,n),tail=0;for(let i=0;i<=n;i++){if(i>=w)tail+=pmf;if(i<n)pmf*=((n-i)/(i+1));}
     return Math.max(0,Math.min(1,tail));
   }
-  function pairedPortfolioEvidence(meetings,candidateId,championId=ACTIVE_MODEL){
+  function pairedPortfolioEvidence(meetings,candidateId,championId=activeModelId()){
     const eligible=(meetings||[]).filter(row=>row?.portfolio?.complete===1&&row?.week_end&&String(row.week_end)<todayIstanbul()&&String(row.week_start)>=String(trackerStart()));
     const base=new Map(eligible.filter(row=>row.model_id===championId).map(row=>[row.meeting_key,row])),candidate=new Map(eligible.filter(row=>row.model_id===candidateId).map(row=>[row.meeting_key,row]));
     let both=0,challengerOnly=0,championOnly=0,neither=0,challengerHits=0,championHits=0,challengerCost=0,championCost=0;
@@ -682,17 +802,76 @@
   }
   function promotionRows(agg){
     const complete=agg.weeks.filter(w=>w.completed&&!w.partial),byModel=new Map();for(const model of MODEL_CATALOG)byModel.set(model.id,combineMetrics(complete.filter(w=>w.model_id===model.id),model));
-    const base=byModel.get(ACTIVE_MODEL)||combineMetrics([],MODEL_CATALOG[0]);
-    for(const model of MODEL_CATALOG){const z=byModel.get(model.id),weekly=complete.filter(w=>w.model_id===model.id),baseWeeks=new Map(complete.filter(w=>w.model_id===ACTIVE_MODEL).map(w=>[w.week_key,w]));z.positiveWeeks=weekly.reduce((n,w)=>{const b=baseWeeks.get(w.week_key);if(!b)return n;const wa=w.portfolio.meetings?w.portfolio.hits/w.portfolio.meetings:0,ba=b.portfolio.meetings?b.portfolio.hits/b.portfolio.meetings:0;return n+(wa>ba?1:0);},0);
-      const c6=z.formats.normal.meetings?z.formats.normal.hits/z.formats.normal.meetings:0,bp1=base.races?base.p1/base.races:0,cp1=z.races?z.p1/z.races:0,cCost=z.formats.normal.meetings?z.formats.normal.cost/z.formats.normal.meetings:Infinity,paired=pairedPortfolioEvidence(agg.meetings,model.id);
+    const championId=activeModelId(),base=byModel.get(championId)||byModel.get(BASELINE_MODEL)||combineMetrics([],MODEL_CATALOG[0]);
+    for(const model of MODEL_CATALOG){const z=byModel.get(model.id),weekly=complete.filter(w=>w.model_id===model.id),baseWeeks=new Map(complete.filter(w=>w.model_id===championId).map(w=>[w.week_key,w]));z.positiveWeeks=weekly.reduce((n,w)=>{const b=baseWeeks.get(w.week_key);if(!b)return n;const wa=w.portfolio.meetings?w.portfolio.hits/w.portfolio.meetings:0,ba=b.portfolio.meetings?b.portfolio.hits/b.portfolio.meetings:0;return n+(wa>ba?1:0);},0);
+      const c6=z.formats.normal.meetings?z.formats.normal.hits/z.formats.normal.meetings:0,bp1=base.races?base.p1/base.races:0,cp1=z.races?z.p1/z.races:0,cCost=z.formats.normal.meetings?z.formats.normal.cost/z.formats.normal.meetings:Infinity,paired=pairedPortfolioEvidence(agg.meetings,model.id,championId);
       const common=weekly.filter(w=>baseWeeks.has(w.week_key)).sort((a,b)=>String(a.week_start).localeCompare(String(b.week_start))).slice(-8);
       const blockWins=common.length===8?[common.slice(0,4),common.slice(4,8)].filter(block=>{let ch=0,cm=0,bh=0,bm=0;for(const w of block){const b=baseWeeks.get(w.week_key);ch+=w.portfolio.hits;cm+=w.portfolio.meetings;bh+=b.portfolio.hits;bm+=b.portfolio.meetings;}return cm>0&&bm>0&&ch/cm>bh/bm;}).length:0;
       const enough=z.completedWeekCount>=PROMOTION_POLICY.minCompletedWeeks&&z.races>=PROMOTION_POLICY.minResolvedRaces&&z.formats.normal.meetings>=PROMOTION_POLICY.minCompleteMeetings&&z.formats.normal.hits>=PROMOTION_POLICY.minSixfoldHits&&paired.meetings>=PROMOTION_POLICY.minPairedPortfolioMeetings&&paired.challengerHits>=PROMOTION_POLICY.minPortfolioHits;
-      const superior=enough&&model.id!==ACTIVE_MODEL&&paired.gain>=PROMOTION_POLICY.minPortfolioGain&&paired.challengerOnly>paired.championOnly&&paired.signP<=PROMOTION_POLICY.maxPairedSignP&&cp1>=bp1-PROMOTION_POLICY.maxP1Loss&&(paired.costRatio==null||paired.costRatio<=PROMOTION_POLICY.maxPortfolioCostRatio)&&blockWins>=PROMOTION_POLICY.consecutiveFourWeekWins;
-      z.status=model.id===ACTIVE_MODEL?'AKTİF CHAMPION':superior?'TERFİ İNCELEMESİ':enough?'İZLE':'İZLE';z.sixfoldRate=c6;z.portfolioRate=z.portfolio.meetings?z.portfolio.hits/z.portfolio.meetings:0;z.p1Rate=cp1;z.avgCost=Number.isFinite(cCost)?cCost:null;z.pairedPortfolio=paired;z.autoPromoted=false;
+      const superior=enough&&model.autoPromote!==false&&model.id!==championId&&paired.gain>=PROMOTION_POLICY.minPortfolioGain&&paired.challengerOnly>paired.championOnly&&paired.signP<=PROMOTION_POLICY.maxPairedSignP&&cp1>=bp1-PROMOTION_POLICY.maxP1Loss&&(paired.costRatio==null||paired.costRatio<=PROMOTION_POLICY.maxPortfolioCostRatio)&&blockWins>=PROMOTION_POLICY.consecutiveFourWeekWins;
+      z.status=model.id===championId?'AKTİF CHAMPION':superior?'TERFİ ADAYI':enough?'İZLE':'İZLE';z.sixfoldRate=c6;z.portfolioRate=z.portfolio.meetings?z.portfolio.hits/z.portfolio.meetings:0;z.p1Rate=cp1;z.avgCost=Number.isFinite(cCost)?cCost:null;z.pairedPortfolio=paired;z.autoPromoted=false;
       z.consecutiveBlockWins=blockWins;
     }
     return [...byModel.values()];
+  }
+  function promotionCooldownPassed(settings){
+    const raw=String(settings?.lastPromotionAt||'');if(!raw)return true;
+    const t=Date.parse(raw);if(!Number.isFinite(t))return true;
+    return (Date.now()-t)>=(Number(PROMOTION_POLICY.promotionCooldownDays)||14)*86400000;
+  }
+
+  function evaluateAutomaticRollback(agg){
+    const d=database(),st=d?.settings?.weekly_model_tracker;if(!st)return {changed:false,reason:'NO_SETTINGS'};
+    const history=Array.isArray(st.promotionHistory)?st.promotionHistory:[];
+    const last=[...history].reverse().find(x=>x&&x.to===activeModelId()&&x.from&&x.at&&!x.rollback_of);
+    if(!last)return {changed:false,reason:'NO_RECENT_PROMOTION'};
+    const promotedAt=Date.parse(String(last.at||''));if(!Number.isFinite(promotedAt))return {changed:false,reason:'BAD_PROMOTION_DATE'};
+    // Terfi sonrası en az cooldown kadar canlı veri görmeden geri alma yok.
+    if(Date.now()-promotedAt<(Number(PROMOTION_POLICY.promotionCooldownDays)||14)*86400000)return {changed:false,reason:'ROLLBACK_COOLDOWN'};
+    const from=String(last.from),to=String(last.to),startDate=new Date(promotedAt).toISOString().slice(0,10);
+    const eligible=(agg?.meetings||[]).filter(r=>r?.portfolio?.complete===1&&String(r?.race_date||'')>=startDate);
+    const a=new Map(eligible.filter(r=>r.model_id===to).map(r=>[r.meeting_key,r]));
+    const b=new Map(eligible.filter(r=>r.model_id===from).map(r=>[r.meeting_key,r]));
+    let paired=0,currentOnly=0,previousOnly=0,currentHits=0,previousHits=0,currentCost=0,previousCost=0;
+    for(const [key,cur] of a){const prev=b.get(key);if(!prev)continue;paired++;const ch=Number(cur?.portfolio?.hit)===1,ph=Number(prev?.portfolio?.hit)===1;currentHits+=ch?1:0;previousHits+=ph?1:0;currentCost+=Math.max(0,Number(cur?.portfolio?.cost)||0);previousCost+=Math.max(0,Number(prev?.portfolio?.cost)||0);if(ch&&!ph)currentOnly++;else if(ph&&!ch)previousOnly++;}
+    if(paired<40)return {changed:false,reason:'ROLLBACK_SAMPLE_LOW',paired};
+    const loss=(previousHits-currentHits)/paired,signP=binomialTailHalf(previousOnly,currentOnly),costRatio=currentCost>0?previousCost/currentCost:null;
+    // Yalnız güçlü ve istatistiksel olarak anlamlı gerilemede eski Champion'a dön.
+    if(loss<0.05||previousOnly<=currentOnly||signP>0.05||(costRatio!=null&&costRatio>1.05))return {changed:false,reason:'NO_ROLLBACK_EVIDENCE',paired,loss,signP,costRatio};
+    const at=new Date().toISOString();st.activeModelId=from;st.lastPromotionAt=at;
+    st.promotionHistory.push({at,from:to,to:from,pairedMeetings:paired,gain:loss,signP,costRatio,reason:'AUTO_ROLLBACK_FORWARD_DEGRADATION',rollback_of:String(last.at||'')});
+    st.promotionHistory=st.promotionHistory.slice(-100);
+    try{if(global.__tkpBulkPipelineActive!==true){if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['settings'],{label:'auto-model-rollback'});else if(typeof saveDB==='function')saveDB(false);}}catch(_){ }
+    return {changed:true,from:to,to:from,paired,loss,signP,costRatio};
+  }
+  function applyAutomaticPromotion(agg,rows){
+    const d=database();if(!d?.settings?.weekly_model_tracker)return {changed:false,reason:'NO_SETTINGS'};
+    const st=d.settings.weekly_model_tracker,policy={...PROMOTION_POLICY,...(st.promotionPolicy||{})};
+    if(st.automaticPromotion===false||policy.automaticPromotion===false)return {changed:false,reason:'AUTO_OFF'};
+    const rollback=evaluateAutomaticRollback(agg);if(rollback.changed)return rollback;
+    const current=activeModelId();
+    const candidates=(rows||[]).filter(z=>z?.model_id!==current&&z?.status==='TERFİ ADAYI');
+    st.lastDecisionAt=new Date().toISOString();
+    if(!candidates.length)return {changed:false,reason:'NO_SUPERIOR_CHALLENGER'};
+    candidates.sort((a,b)=>(Number(b?.pairedPortfolio?.gain)||0)-(Number(a?.pairedPortfolio?.gain)||0)||(Number(b?.p1Rate)||0)-(Number(a?.p1Rate)||0));
+    if(policy.requireUniqueWinner!==false&&candidates.length>1){
+      const g0=Number(candidates[0]?.pairedPortfolio?.gain)||0,g1=Number(candidates[1]?.pairedPortfolio?.gain)||0;
+      if(Math.abs(g0-g1)<0.005)return {changed:false,reason:'AMBIGUOUS_CHALLENGERS',candidates:candidates.slice(0,2).map(x=>x.model_id)};
+    }
+    if(!promotionCooldownPassed(st))return {changed:false,reason:'COOLDOWN'};
+    const win=candidates[0];
+    const previous=current,at=new Date().toISOString();
+    st.activeModelId=win.model_id;st.lastPromotionAt=at;
+    st.promotionHistory=Array.isArray(st.promotionHistory)?st.promotionHistory:[];
+    st.promotionHistory.push({at,from:previous,to:win.model_id,pairedMeetings:Number(win?.pairedPortfolio?.meetings)||0,gain:Number(win?.pairedPortfolio?.gain)||0,signP:Number(win?.pairedPortfolio?.signP),costRatio:Number(win?.pairedPortfolio?.costRatio),p1Rate:Number(win?.p1Rate)||0,reason:'AUTO_PROMOTE_ALL_GATES_PASSED'});
+    st.promotionHistory=st.promotionHistory.slice(-100);
+    try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }
+    try{if(global.__tkpBulkPipelineActive!==true){if(typeof global.tkpPersistCollections==='function')global.tkpPersistCollections(['settings'],{label:'auto-model-promotion'});else if(typeof saveDB==='function')saveDB(false);}}catch(_){ }
+    return {changed:true,from:previous,to:win.model_id};
+  }
+  function activeOrderForRace(x){
+    const id=activeModelId(),model=MODEL_CATALOG.find(m=>m.id===id)||MODEL_CATALOG.find(m=>m.id===BASELINE_MODEL)||MODEL_CATALOG[0];
+    try{return orderForModel(model,x);}catch(_){return uniqueOrder(x?.scored||x?.r?.horses||[],x?.r);}
   }
   function pct(n,d){return d?('%'+(100*n/d).toFixed(2).replace('.',',')):'-';}
   function analysisDashIfNoSample(value,sample){return Number(sample)>0?String(Number(value)||0):'—';}
@@ -713,7 +892,7 @@
     }).join('');
     return `<div class="tableWrap compactBacktest"><table style="min-width:800px"><thead><tr><th>Dönem</th><th>Tam Altılı</th><th>Normal 6/6</th><th>Sürpriz 6/6</th><th>Uzman 6/6</th><th>3 kupon portföyü</th><th>Ort. Normal maliyet</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
-  function challengerAuditHTML(){const a=RETROSPECTIVE_CHALLENGER_AUDIT,m=FIVE_MILLION_PORTFOLIO_AUDIT;return `<div class="tableWrap compactBacktest" style="margin-top:7px"><table><thead><tr><th>Deney</th><th>Doğrulama</th><th>Kör holdout</th><th>Üretim kararı</th></tr></thead><tbody><tr><td>Rank-CDF genişlik challenger</td><td class="num">${a.candidate.validationPortfolioHits}/77 · %${String(a.candidate.validationPortfolioPct).replace('.',',')} <small>(Champion ${a.baseline.validationPortfolioHits}/77)</small></td><td class="num">${a.candidate.holdoutPortfolioHits}/78 · %${String(a.candidate.holdoutPortfolioPct).replace('.',',')} <small>(Champion ${a.baseline.holdoutPortfolioHits}/78)</small></td><td><b>RED · CHAMPION KORUNDU</b><small>${escHtml(a.warning)}</small></td></tr><tr><td>5.000.000 portföy kombinasyonu</td><td class="num">${m.challenger.validationPortfolioHits}/75</td><td class="num">${m.challenger.holdoutPortfolioHits}/75 <small>(Champion ${m.champion.holdout.portfolio}/75)</small></td><td><b>RED · EN İYİ MODEL KORUNDU</b><small>${escHtml(m.warning)}</small></td></tr></tbody></table></div>`;}
+  function challengerAuditHTML(){const a=RETROSPECTIVE_CHALLENGER_AUDIT,m=FIVE_MILLION_PORTFOLIO_AUDIT;return `<div class="tableWrap compactBacktest" style="margin-top:7px"><table><thead><tr><th>Deney</th><th>Doğrulama</th><th>Kör holdout</th><th>Üretim kararı</th></tr></thead><tbody><tr><td>Rank-CDF genişlik challenger</td><td class="num">${a.candidate.validationPortfolioHits}/77 · %${String(a.candidate.validationPortfolioPct).replace('.',',')} <small>(Champion ${a.baseline.validationPortfolioHits}/77)</small></td><td class="num">${a.candidate.holdoutPortfolioHits}/78 · %${String(a.candidate.holdoutPortfolioPct).replace('.',',')} <small>(Champion ${a.baseline.holdoutPortfolioHits}/78)</small></td><td><b>RED · CHAMPION KORUNDU</b> <small>${escHtml(a.warning)}</small></td></tr><tr><td>5.000.000 portföy kombinasyonu</td><td class="num">${m.challenger.validationPortfolioHits}/75</td><td class="num">${m.challenger.holdoutPortfolioHits}/75 <small>(Champion ${m.champion.holdout.portfolio}/75)</small></td><td><b>RED · EN İYİ MODEL KORUNDU</b> <small>${escHtml(m.warning)}</small></td></tr></tbody></table></div>`;}
   function postRaceLearningTrend(){
     const d=database(),start=trackerStart(),byDate=new Map();if(!d)return [];
     const rows=Array.isArray(d.races)?d.races:[];
@@ -734,18 +913,62 @@
     const body=rows.map(z=>`<tr><td><b>${escHtml(z.date)}</b></td><td class="num">${z.meetings}</td><td class="num">${z.races}</td><td class="num">${formatHitIfSample(z.bmbWin,z.bmb)}</td><td class="num">${formatHitIfSample(z.odbWin,z.odb)}</td><td>POST-RACE · öğrenme</td></tr>`).join('');
     return `<div class="tableWrap compactBacktest"><table style="min-width:700px"><thead><tr><th>Tarih</th><th>Toplantı</th><th>Koşu</th><th>BMB kazanma</th><th>ODB kazanma</th><th>Şerit</th></tr></thead><tbody>${body}</tbody></table></div>`;
   }
+  function coverage(records,knownMeetings=[]){
+    const groups=new Map(),legs=[1,2,3,4,5,6];
+    for(const row of knownMeetings){
+      if(row?.model_id&&row?.meeting_key)groups.set(row.model_id+'|'+row.meeting_key,{meta:row,byLeg:new Map()});
+    }
+    for(const row of records||[]){
+      if(!row?.meeting_key||!row?.model_id)continue;
+      const key=row.model_id+'|'+row.meeting_key;
+      if(!groups.has(key))groups.set(key,{meta:row,byLeg:new Map()});
+      groups.get(key).byLeg.set(Number(row.leg),row);
+    }
+    return [...groups.values()].map(({meta:first,byLeg})=>{
+      const missingLegs=legs.filter(n=>!byLeg.has(n));
+      const pendingLegs=legs.filter(n=>byLeg.has(n)&&!byLeg.get(n).evaluation);
+      const unlockedLegs=legs.filter(n=>byLeg.has(n)&&Number(byLeg.get(n).time_lock_eligible)!==1);
+      const missingPicks=legs.filter(n=>byLeg.has(n)&&['normal','surprise','expert'].some(f=>!byLeg.get(n)?.coupon_picks?.[f]?.length));
+      return {modelId:first.model_id,meetingKey:first.meeting_key,date:first.race_date||'',
+        missingLegs,pendingLegs,unlockedLegs,missingPicks,
+        complete:!missingLegs.length&&!pendingLegs.length&&!unlockedLegs.length&&!missingPicks.length};
+    });
+  }
+  function coverageHTML(){
+    const active=MODEL_CATALOG.find(m=>m.active)?.id;
+    const d=database(),known=new Map();
+    for(const r of d?.races||[]){
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(String(r?.race_date||'').slice(0,10))||!r?.hippodrome||!withinTracking(r))continue;
+      const key=meetingKey(r);known.set(key,{model_id:active,meeting_key:key,race_date:r.race_date});
+    }
+    const rows=coverage(d?.weekly_model_log||[],[...known.values()]).filter(r=>r.modelId===active);
+    const incomplete=rows.filter(r=>!r.complete).sort((a,b)=>b.date.localeCompare(a.date));
+    const body=incomplete.map(r=>`<tr><td>${escHtml(r.meetingKey)}</td><td>${r.missingLegs.join(', ')||'—'}</td><td>${r.pendingLegs.join(', ')||'—'}</td><td>${r.unlockedLegs.join(', ')||'—'}</td><td>${r.missingPicks.join(', ')||'—'}</td></tr>`).join('');
+    return `<details class="tkpWeeklyCoverage"><summary>Champion kanıt kapsamı: ${rows.filter(r=>r.complete).length}/${rows.length} tam Altılı</summary><p class="muted">Takip başlangıcından itibaren kayıtlı programlar. 6/6 ve maliyet için aynı toplantının altı ayağında seçim, sonuç ve yarış öncesi kayıt gerekir. Eksik ayak sonradan tahminle doldurulmaz. Terfi tablosu ayrıca yalnız tamamlanan tam haftaları kullanır.</p><div class="tableWrap"><table><thead><tr><th>Toplantı</th><th>Kaydı eksik ayak</th><th>Sonuç bekleyen ayak</th><th>Saat kanıtı eksik ayak</th><th>Kupon seçimi eksik ayak</th></tr></thead><tbody>${body||`<tr><td colspan="5">${rows.length?'Eksik kayıt yok.':'Kapsamda kayıtlı program yok.'}</td></tr>`}</tbody></table></div></details>`;
+  }
   function tableHTML(){
-    const agg=aggregate(),promo=promotionRows(agg),reference=historicalReference(),weekRows=agg.weeks.slice(0,120).map(z=>{
+    const agg=aggregate(),promo=promotionRows(agg),autoDecision=applyAutomaticPromotion(agg,promo),reference=historicalReference(),weekRows=agg.weeks.slice(0,120).map(z=>{
       const f=z.formats.normal,s=z.formats.surprise,e=z.formats.expert,status=z.partial?'KISMİ İLK HAFTA':z.completed?'TAMAMLANDI':'DEVAM EDİYOR';
       return `<tr><td>${escHtml(z.week_start)}–${escHtml(z.week_end)}</td><td style="text-align:left!important"><b>${escHtml(z.model_label)}</b></td><td>${status}</td><td class="num">${z.races}</td><td class="num">${pct(z.p1,z.races)}</td><td class="num">${pct(z.top3,z.races)}</td><td class="num">${pct(z.top5,z.races)}</td><td class="num">${formatHitIfSample(f.hits,f.meetings)}</td><td class="num">${formatHitIfSample(s.hits,s.meetings)}</td><td class="num">${formatHitIfSample(e.hits,e.meetings)}</td><td class="num"><b>${formatHitIfSample(z.portfolio.hits,z.portfolio.meetings)}</b></td><td class="num">${f.meetings?money(f.cost/f.meetings):'—'}</td></tr>`;
     }).join('');
     const freshness=database()?.settings?.r19_2_integrity||{};
-    const latestResult=String(freshness?.latest_result_date||'').slice(0,10);
-    const latestWeekly=String(freshness?.latest_weekly_date||agg?.weeks?.[0]?.week_end||'').slice(0,10);
-    const freshnessLine=`<p class="muted tkpFreshnessEvidence" style="margin:0 0 7px;font-size:10.5px;"><b>Son resmî sonuç:</b> ${escHtml(latestResult||'—')} · <b>Son haftalık kanıt:</b> ${escHtml(latestWeekly||'—')}. Haftalık başarı yalnız yarış öncesi kilitli kanıttan hesaplanır; sonuç sonrası satırlar ayrı öğrenme trendinde tutulur.</p>`;
+    const latestResult=typeof global.tkpLatestConfirmedResultDate==='function'?global.tkpLatestConfirmedResultDate(database()):'';
+    const latestWeekly=String(freshness?.latest_weekly_date||'').slice(0,10);
+    const freshnessLine=`<p class="muted tkpFreshnessEvidence" style="margin:0 0 7px;font-size:10.5px;"><b>Son resmî sonuç:</b> ${escHtml(latestResult||'—')} · <b>Son bütünlük kontrolündeki haftalık kayıt:</b> ${escHtml(latestWeekly||'—')}. Haftalık başarı yalnız yarış öncesi kilitli kanıttan hesaplanır; sonuç sonrası satırlar ayrı öğrenme trendinde tutulur.</p>${coverageHTML()}`;
+    const agfNote=(()=>{try{const pol=typeof global.tkpAgfOrderPolicy==='function'?global.tkpAgfOrderPolicy():null;if(!pol)return '';const nm={main:'Normal',surprise:'Sürpriz',alt:'Alt'};const on=pol.enabled?(pol.roles||[]).map(r=>nm[r]).filter(Boolean):[];
+      return `<p class="muted" style="margin:0 0 7px;font-size:10.5px;border-left:3px solid #0369a1;padding-left:6px;"><b>Not:</b> Bu tablodaki "AKTİF CHAMPION" resmî model sırasıdır (TEK ayaklar, yan bahisler). Altılı kuponlarda ayrıca <b>AGF sırası</b> ayrı katman olarak ${on.length?'AÇIK: '+on.join(' · '):'kapalı'}; TEK ayak: ${pol.tek?'AGF':'Champion'}, yan bahis: ${pol.side?'AGF':'Champion'}. Geçişleri Back Test sekmesindeki otomatik self-test yönetir.</p>`;}catch(_){return '';}})();
     const historicalRaces=Number(reference?.dataset?.usable_v46_races)||0,historicalMeetings=Number(reference?.dataset?.complete_v46_sixleg_meetings)||0,historicalNormal=reference?.summary?.all?.Normal||{};
-    const promoRows=promo.map(z=>{const ref=z.active&&reference?`<small>V46 arşiv: ${historicalRaces}/${PROMOTION_POLICY.minResolvedRaces} koşu · ${historicalMeetings}/${PROMOTION_POLICY.minCompleteMeetings} Altılı · Normal ${historicalNormal.hits||0}/${historicalNormal.meetings||0}</small>`:'',paired=z.pairedPortfolio||{};const histHit=z.active?(historicalNormal.hits||0):null,histMeet=z.active?(historicalNormal.meetings||0):null;const archRace=z.active?historicalRaces:'—',archMeet=z.active?historicalMeetings:'—',archNormal=z.active?`${histHit}/${histMeet}`:'—';return `<tr><td style="text-align:left!important"><b>${escHtml(z.model_label)}</b>${ref}</td><td>${escHtml(z.status)}</td><td class="num">${z.completedWeekCount||0}/${PROMOTION_POLICY.minCompletedWeeks}</td><td class="num">${z.races} canlı / ${archRace} arşiv</td><td class="num">${paired.meetings?paired.meetings:'—'} canlı / ${archMeet} arşiv</td><td class="num">${analysisDashIfNoSample(paired.challengerHits,paired.meetings)}/${paired.meetings||'—'}<small>arşiv Normal ${archNormal}</small></td><td class="num">${paired.meetings?`+${paired.challengerOnly||0} / −${paired.championOnly||0}`:'—'}<small>${paired.meetings?'p='+Number(paired.signP??1).toFixed(3):'eş örnek yok'}</small></td><td class="num">${pct(z.p1,z.races)}</td><td>Elle onay${z.autoPromoted?' · HATA':''}</td></tr>`;}).join('');
-    return `<div class="card tkpWeeklyModelTracker" style="border-left:5px solid #7c3aed;margin:10px 0;"><h2 style="margin:0 0 5px;">🗓️ Haftalık Algoritma Takibi</h2>${freshnessLine}<p class="muted" style="margin:0 0 8px;">Eski arşiv yalnız araştırma referansıdır. Canlı Champion/challenger karşılaştırması aynı yarışlarda, TJK program saatinden önce kilitlenen değişmez snapshotlarla yapılır; otomatik terfi yoktur.</p><div class="row" style="gap:8px;margin-bottom:8px;"><span class="badge">Arşiv ${Number(reference?.dataset?.archive_meetings)||0} dosya/toplantı</span><span class="badge">Arşiv koşu ${Number(reference?.dataset?.archive_races)||0}</span><span class="badge">Güvenli tam Altılı ${historicalMeetings}</span><span class="badge">Canlı sonuçlanan ${agg.resolved}</span><span class="badge">Saat kilitli ${agg.eligibleResolved}</span><span class="badge">Otomatik terfi KAPALI</span></div><h3 style="margin:8px 0 5px;">Doğrulanmış tarihsel arşiv · V46 gölge referansı</h3>${historicalReferenceHTML(reference)}${challengerAuditHTML()}<h3 style="margin:10px 0 5px;">Canlı haftalık karşılaştırma</h3><div class="tableWrap compactBacktest"><table style="min-width:1180px"><thead><tr><th>Hafta</th><th>Algoritma</th><th>Durum</th><th>Koşu</th><th>P1</th><th>İlk3</th><th>İlk5</th><th>Normal 6/6</th><th>Sürpriz 6/6</th><th>Uzman 6/6</th><th>3 kupon 6/6</th><th>Ort. Normal maliyet</th></tr></thead><tbody>${weekRows||'<tr><td colspan="12" class="empty">Canlı saat kilitli örnek henüz yok; yukarıdaki tarihsel arşiv hazırdır.</td></tr>'}</tbody></table></div><h3 style="margin:10px 0 5px;">Sonuç sonrası öğrenme trendi</h3><p class="muted" style="margin:0 0 6px;">Yarış bittikten sonra yüklenen doğrulanmış sonuçlar burada tarih sırasıyla görünür. Bu satırlar algoritmanın yeni veriyi öğrenme kapsamını gösterir; canlı/saat-kilitli başarı oranına karıştırılmaz.</p>${postRaceLearningTrendHTML()}<h3 style="margin:10px 0 5px;">Champion terfi kapısı · canlı kanıt · eş yarış</h3><div class="tableWrap compactBacktest"><table style="min-width:1040px"><thead><tr><th>Algoritma</th><th>Karar</th><th>Tam hafta</th><th>Koşu (canlı / arşiv)</th><th>Eş Altılı (canlı / arşiv)</th><th>3 kupon 6/6 / arşiv ref.</th><th>Aday+/Champion−</th><th>P1</th><th>Uygulama</th></tr></thead><tbody>${promoRows}</tbody></table></div><p class="muted" style="margin:7px 0 0;font-size:10.5px;">Terfi incelemesi için en az ${PROMOTION_POLICY.minCompletedWeeks} tam hafta, ${PROMOTION_POLICY.minResolvedRaces} koşu, aynı ${PROMOTION_POLICY.minPairedPortfolioMeetings} Altılı üzerinde ≥%${Math.round(PROMOTION_POLICY.minPortfolioGain*100)} net portföy farkı, eşlenik p≤${PROMOTION_POLICY.maxPairedSignP} ve maliyet/P1 koruması birlikte gerekir. Terfi kararı canlı kanıtla verilir; kullanılabilir geçmiş snapshot/arşiv kanıtı aynı tabloda ayrıca referans olarak gösterilir ve sıfır veri gibi saklanmaz.</p></div>`;
+    // Görünüm sırası: 3 kupon 6/6 isabeti (canlı eş altılı) yüksek olan üstte; eşitlikte P1, sonra şampiyondan net fark.
+    // Yalnız ekran sırasıdır; promo dizisi ve terfi kararı değişmez.
+    const promoView=promo.slice().sort((a,b)=>{
+      const pa=a.pairedPortfolio||{},pb=b.pairedPortfolio||{};
+      return (num(pb.challengerHits,0)-num(pa.challengerHits,0))
+        ||(num(b.p1Rate,0)-num(a.p1Rate,0))
+        ||((num(pb.challengerOnly,0)-num(pb.championOnly,0))-(num(pa.challengerOnly,0)-num(pa.championOnly,0)))
+        ||(a.active===b.active?0:(a.active?-1:1));
+    });
+    const promoRows=promoView.map(z=>{const ref=z.active&&reference?`<small>V46 arşiv: ${historicalRaces}/${PROMOTION_POLICY.minResolvedRaces} koşu · ${historicalMeetings}/${PROMOTION_POLICY.minCompleteMeetings} Altılı · Normal ${historicalNormal.hits||0}/${historicalNormal.meetings||0}</small>`:'',paired=z.pairedPortfolio||{};const histHit=z.active?(historicalNormal.hits||0):null,histMeet=z.active?(historicalNormal.meetings||0):null;const archRace=z.active?historicalRaces:'—',archMeet=z.active?historicalMeetings:'—',archNormal=z.active?`${histHit}/${histMeet}`:'—';return `<tr><td style="text-align:left!important"><b>${escHtml(z.model_label)}</b>${ref}</td><td>${escHtml(z.status)}</td><td class="num">${z.completedWeekCount||0}/${PROMOTION_POLICY.minCompletedWeeks}</td><td class="num">${z.races} canlı / ${archRace} arşiv</td><td class="num">${paired.meetings?paired.meetings:'—'} canlı / ${archMeet} arşiv</td><td class="num">${analysisDashIfNoSample(paired.challengerHits,paired.meetings)}/${paired.meetings||'—'}<small>arşiv Normal ${archNormal}</small></td><td class="num">${paired.meetings?`+${paired.challengerOnly||0} / −${paired.championOnly||0}`:'—'}<small>${paired.meetings?'p='+Number(paired.signP??1).toFixed(3):'eş örnek yok'}</small></td><td class="num">${pct(z.p1,z.races)}</td><td>${z.status==='AKTİF CHAMPION'?'Canlı':(z.status==='TERFİ ADAYI'?'Otomatik kapı':'İzleme')}</td></tr>`;}).join('');
+    return `<div class="card tkpWeeklyModelTracker" style="border-left:5px solid #7c3aed;margin:10px 0;"><h2 style="margin:0 0 5px;">🗓️ Haftalık Algoritma Takibi</h2>${freshnessLine}${agfNote}<p class="muted" style="margin:0 0 8px;">Eski arşiv yalnız araştırma referansıdır. Canlı Champion/challenger karşılaştırması aynı yarışlarda, TJK program saatinden önce kilitlenen değişmez snapshotlarla yapılır; kalite kapılarının tamamı geçilirse otomatik terfi vardır; geçilmezse mevcut Champion korunur.</p><div class="row" style="gap:8px;margin-bottom:8px;"><span class="badge">Arşiv ${Number(reference?.dataset?.archive_meetings)||0} dosya/toplantı</span><span class="badge">Arşiv koşu ${Number(reference?.dataset?.archive_races)||0}</span><span class="badge">Güvenli tam Altılı ${historicalMeetings}</span><span class="badge">Canlı sonuçlanan ${agg.resolved}</span><span class="badge">Saat kilitli ${agg.eligibleResolved}</span><span class="badge">Otomatik terfi AÇIK · korumalı</span></div><h3 style="margin:8px 0 5px;">Doğrulanmış tarihsel arşiv · V46 gölge referansı</h3>${historicalReferenceHTML(reference)}${challengerAuditHTML()}<h3 style="margin:10px 0 5px;">Canlı haftalık karşılaştırma</h3><div class="tableWrap compactBacktest"><table style="min-width:1180px"><thead><tr><th>Hafta</th><th>Algoritma</th><th>Durum</th><th>Koşu</th><th>P1</th><th>İlk3</th><th>İlk5</th><th>Normal 6/6</th><th>Sürpriz 6/6</th><th>Uzman 6/6</th><th>3 kupon 6/6</th><th>Ort. Normal maliyet</th></tr></thead><tbody>${weekRows||'<tr><td colspan="12" class="empty">Canlı saat kilitli örnek henüz yok; yukarıdaki tarihsel arşiv hazırdır.</td></tr>'}</tbody></table></div><h3 style="margin:10px 0 5px;">Sonuç sonrası öğrenme trendi</h3><p class="muted" style="margin:0 0 6px;">Yarış bittikten sonra yüklenen doğrulanmış sonuçlar burada tarih sırasıyla görünür. Bu satırlar algoritmanın yeni veriyi öğrenme kapsamını gösterir; canlı/saat-kilitli başarı oranına karıştırılmaz.</p>${postRaceLearningTrendHTML()}<h3 style="margin:10px 0 5px;">Champion terfi kapısı · canlı kanıt · eş yarış</h3><div class="tableWrap compactBacktest"><table style="min-width:1040px"><thead><tr><th>Algoritma</th><th>Karar</th><th>Tam hafta</th><th>Koşu (canlı / arşiv)</th><th>Eş Altılı (canlı / arşiv)</th><th>3 kupon 6/6 / arşiv ref.</th><th>Aday+/Champion−</th><th>P1</th><th>Uygulama</th></tr></thead><tbody>${promoRows}</tbody></table></div><p class="muted" style="margin:7px 0 0;font-size:10.5px;">Terfi incelemesi için en az ${PROMOTION_POLICY.minCompletedWeeks} tam hafta, ${PROMOTION_POLICY.minResolvedRaces} koşu, aynı ${PROMOTION_POLICY.minPairedPortfolioMeetings} Altılı üzerinde ≥%${Math.round(PROMOTION_POLICY.minPortfolioGain*100)} net portföy farkı, eşlenik p≤${PROMOTION_POLICY.maxPairedSignP} ve maliyet/P1 koruması birlikte gerekir. Terfi kararı canlı kanıtla verilir; kullanılabilir geçmiş snapshot/arşiv kanıtı aynı tabloda ayrıca referans olarak gösterilir ve sıfır veri gibi saklanmaz.</p></div>`;
   }
 
   global.TKP_WEEKLY_MODEL_TRACKER_VERSION=VERSION;
@@ -756,6 +979,7 @@
   global.TKP_V333_FIVE_MILLION_PORTFOLIO_AUDIT=FIVE_MILLION_PORTFOLIO_AUDIT;
   global.tkpWeeklyModelWeekInfo=weekInfo;
   global.tkpWeeklyModelTrackerEnsure=ensure;
+  try{if(typeof global.addEventListener==='function')global.addEventListener('load',()=>setTimeout(()=>{try{ensure();}catch(_){ }},8000));}catch(_){ }
   global.tkpWeeklyModelTrackerSync=sync;
   global.tkpWeeklyModelTrackerAttachCouponSnapshot=attachCouponSnapshot;
   global.tkpWeeklyModelTrackerAppendExactSideBetTickets=appendExactSideBetTickets;
@@ -767,6 +991,11 @@
   global.tkpWeeklyModelTrackerExactSideBetLog=()=>exactTicketLog(database());
   global.tkpWeeklyModelPostRaceLearningTrend=postRaceLearningTrend;
   global.tkpWeeklyModelTrackerAggregate=aggregate;
+  global.tkpWeeklyModelCoverage=coverage;
   global.tkpWeeklyModelTrackerPromotionRows=promotionRows;
+  global.tkpWeeklyModelTrackerApplyAutomaticPromotion=applyAutomaticPromotion;
+  global.tkpWeeklyModelTrackerEvaluateAutomaticRollback=evaluateAutomaticRollback;
+  global.tkpWeeklyModelTrackerActiveModelId=activeModelId;
+  global.tkpWeeklyModelTrackerActiveOrderForRace=activeOrderForRace;
   global.tkpWeeklyModelTrackerHTML=tableHTML;
 })(typeof globalThis!=='undefined'?globalThis:window);

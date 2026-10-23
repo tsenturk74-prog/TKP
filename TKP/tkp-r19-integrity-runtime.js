@@ -3,7 +3,7 @@
    evidence and coordinates the existing learning/resolution engines cooperatively. */
 (function(global){
 'use strict';
-const VERSION='R19.2-INTEGRITY-20260916';
+const VERSION='R19.38-INTEGRITY-20260921';
 const STATE_KEY='r19_2_integrity';
 let running=false,scheduled=false,lastAudit=null;
 
@@ -33,9 +33,11 @@ function tkpIntegrityPreferResolved(a,b){
   const score=x=>((String(x?.integrity||'').toUpperCase()==='RESOLVED'||x?.evaluated_at)?1000000:0)+(String(x?.winner_no||'').trim()?100000:0)+(Date.parse(stamp(x))||0)/1e8;
   return score(b)>score(a)?b:a;
 }
-function tkpIntegrityDedupeByKey(rows,keyFn,preferFn=tkpIntegrityPreferResolved){
+function* tkpIntegrityDedupeSteps(rows,keyFn,preferFn=tkpIntegrityPreferResolved){
   const out=[],idx=new Map();let removed=0,merged=0;
+  let processed=0,lastYield=Date.now();
   for(const raw of Array.isArray(rows)?rows:[]){
+    if(++processed%16===0&&(processed===16||Date.now()-lastYield>=8)){yield;lastYield=Date.now();}
     if(!raw||typeof raw!=='object'){out.push(raw);continue;}
     const key=String(keyFn(raw)||'');
     if(!key){out.push(raw);continue;}
@@ -45,6 +47,12 @@ function tkpIntegrityDedupeByKey(rows,keyFn,preferFn=tkpIntegrityPreferResolved)
     out[pos]=next;removed++;merged++;
   }
   return {rows:out,removed,merged};
+}
+function tkpIntegrityDedupeByKey(rows,keyFn,preferFn=tkpIntegrityPreferResolved){
+  const steps=tkpIntegrityDedupeSteps(rows,keyFn,preferFn);let step;do{step=steps.next();}while(!step.done);return step.value;
+}
+async function tkpIntegrityDedupeByKeyAsync(rows,keyFn,preferFn=tkpIntegrityPreferResolved){
+  const steps=tkpIntegrityDedupeSteps(rows,keyFn,preferFn);let step;do{step=steps.next();if(!step.done)await yieldUi();}while(!step.done);return step.value;
 }
 function tkpIntegrityMergeForwardRows(rows){
   return tkpIntegrityDedupeByKey(rows,r=>String(r?.race_key||'')||tkpIntegrityRaceKey(r),tkpIntegrityPreferResolved);
@@ -88,62 +96,98 @@ async function repairForwardExisting(source,full){
   for(let i=start;i<log.length;i++){
     const rec=log[i],race=raceMap.get(String(rec?.race_key||'')||tkpIntegrityRaceKey(rec));
     if(race){try{if(global.tkpForwardTrackingEvaluateRecord(rec,race))changed++;}catch(_e){}}
-    if((i&63)===63)await yieldUi();
+    if((i&7)===7)await yieldUi();
   }
   return {changed};
 }
 async function syncTrackers(source,full){
   if(!Array.isArray(source?.races))return {weekly:false,sidebet:false};
   const latest=latestResultDate(source),cutoff=latest&&latest.length===10?new Date(Date.parse(latest+'T00:00:00Z')-(full?366:21)*86400000).toISOString().slice(0,10):'';
-  const rows=source.races.filter(r=>!cutoff||String(r?.race_date||'').slice(0,10)>=cutoff);
-  let weekly=false,sidebet=false;
+  // Integrity maintenance resolves saved evidence only. Visiting future races
+  // here invoked every model's full prediction snapshot at each app opening.
+  const rows=source.races.filter(r=>{
+    if(cutoff&&String(r?.race_date||'').slice(0,10)<cutoff)return false;
+    try{return typeof global.raceHasConfirmedResult==='function'?global.raceHasConfirmedResult(r?.horses||[]):(r?.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);}catch(_e){return false;}
+  });
+  let weekly=false,sidebet=false,cohort=false;
   const prevBulk=global.__tkpBulkPipelineActive===true;global.__tkpBulkPipelineActive=true;
   try{
     if(typeof global.tkpWeeklyModelTrackerSync==='function'){
-      for(let i=0;i<rows.length;i+=24){try{if(global.tkpWeeklyModelTrackerSync(rows.slice(i,i+24).map(r=>({r}))))weekly=true;}catch(_e){}await yieldUi();}
+      for(let i=0;i<rows.length;i++){try{if(global.tkpWeeklyModelTrackerSync([{r:rows[i]}]))weekly=true;}catch(_e){}await yieldUi();}
     }
     if(typeof global.tkpWeeklyModelTrackerResolveExactSideBetTickets==='function'){
-      for(let i=0;i<rows.length;i+=48){try{if(global.tkpWeeklyModelTrackerResolveExactSideBetTickets(rows.slice(i,i+48)))sidebet=true;}catch(_e){}await yieldUi();}
+      // Weekly sync already resolves exact tickets; do not repeat the same pass.
+      if(typeof global.tkpWeeklyModelTrackerSync!=='function')for(let i=0;i<rows.length;i++){try{if(global.tkpWeeklyModelTrackerResolveExactSideBetTickets([rows[i]]))sidebet=true;}catch(_e){}await yieldUi();}
+      else sidebet=weekly;
     }
     if(typeof global.tkpSurpriseCohortSync==='function'){
-      for(let i=0;i<rows.length;i+=24){try{global.tkpSurpriseCohortSync(rows.slice(i,i+24).map(r=>({r})));}catch(_e){}await yieldUi();}
+      for(let i=0;i<rows.length;i++){try{if(global.tkpSurpriseCohortSync([{r:rows[i]}]))cohort=true;}catch(_e){}await yieldUi();}
     }
   }finally{global.__tkpBulkPipelineActive=prevBulk;}
-  return {weekly,sidebet};
+  return {weekly,sidebet,cohort};
 }
-function dedupeCollections(source){
+async function dedupeCollections(source){
   const changed=[];const stats={};
-  const f=tkpIntegrityMergeForwardRows(source.forward_tracking_log||[]);if(f.removed){source.forward_tracking_log=f.rows;changed.push('forward_tracking_log');}stats.forward=f.removed;
-  const s=tkpIntegrityDedupeByKey(source.sidebet_ticket_log||[],r=>r?.lock_key||r?.ticket_id||'',tkpIntegrityPreferResolved);if(s.removed){source.sidebet_ticket_log=s.rows;changed.push('sidebet_ticket_log');}stats.sidebet=s.removed;
+  const forward=source.forward_tracking_log||[];
+  const f=await tkpIntegrityDedupeByKeyAsync(forward,r=>String(r?.race_key||'')||tkpIntegrityRaceKey(r));if(f.removed&&source.forward_tracking_log===forward){source.forward_tracking_log=f.rows;changed.push('forward_tracking_log');}stats.forward=f.removed;
+  const sidebet=source.sidebet_ticket_log||[];
+  const s=await tkpIntegrityDedupeByKeyAsync(sidebet,r=>r?.lock_key||r?.ticket_id||'',tkpIntegrityPreferResolved);if(s.removed&&source.sidebet_ticket_log===sidebet){source.sidebet_ticket_log=s.rows;changed.push('sidebet_ticket_log');}stats.sidebet=s.removed;
   for(const name of ['auto_coupon_log','weekly_model_log','v55_diagnostic_log','surprise_cohort_tracking_log']){
-    const d=tkpIntegrityDedupeByKey(source[name]||[],r=>exactKey(r),(a)=>a);if(d.removed){source[name]=d.rows;changed.push(name);}stats[name]=d.removed;
+    const input=source[name]||[];
+    const d=await tkpIntegrityDedupeByKeyAsync(input,r=>exactKey(r),(a)=>a);if(d.removed&&source[name]===input){source[name]=d.rows;changed.push(name);}stats[name]=d.removed;
   }
   return {changed:[...new Set(changed)],stats};
 }
 function cheapSignature(source){const a=tkpIntegrityAudit(source);return [a.counts.races,a.counts.prediction_log,a.counts.auto_coupon_log,a.counts.forward_tracking_log,a.counts.weekly_model_log,a.counts.sidebet_ticket_log,a.latest_result_date,a.latest_forward_date].join('|');}
 async function persistChanged(source,names,meta){
-  names=[...new Set(names)].filter(Boolean);if(!names.length)return true;
+  names=[...new Set(names)].filter(Boolean);
+  if(!names.length&&typeof global.TKPSegmentedIDB?.updateMetaPatch==='function'){
+    const generation=String(source?.__segmented_storage?.baseGeneration||global.persistenceStatus?.()?.generation||'');
+    const result=await global.TKPSegmentedIDB.updateMetaPatch({settings:{[STATE_KEY]:meta}},{expectedGeneration:generation,timeoutMs:30000});
+    return result?.ok===true;
+  }
+  if(!names.length)return true;
   try{if(typeof global.tkpPersistCollections==='function')return await global.tkpPersistCollections(names,{metaPatch:{settings:source.settings,learning_state:source.learning_state},label:'r19-integrity-repair'});}catch(_e){}
   try{if(typeof global.saveDB==='function')return await global.saveDB(false,false);}catch(_e){}
   return false;
+}
+function tkpIntegrityInputSignature(source=global.db){
+  const ls=source?.learning_state||{};
+  return [source?.files?.length||0,source?.races?.length||0,source?.prediction_log?.length||0,source?.auto_coupon_log?.length||0,source?.forward_tracking_log?.length||0,source?.weekly_model_log?.length||0,source?.sidebet_ticket_log?.length||0,String(ls.dataset_signature||''),String(ls.outcome_signature||''),latestResultDate(source)].join('|');
+}
+function tkpIntegrityNeedsRun(source=global.db,options={}){
+  if(options.force===true)return true;
+  if(!source)return false;
+  const state=source?.settings?.[STATE_KEY];
+  if(!state||state.version!==VERSION||state.cooperative_dedupe_version!==1)return true;
+  return String(state.input_signature||'')!==tkpIntegrityInputSignature(source);
 }
 async function tkpRunIntegrityRepair(options={}){
   const source=global.db;if(!source||running)return false;running=true;
   const full=options.full===true;const started=Date.now();const changed=[];let error='';
   try{
+    // Fresh installs have no active IndexedDB generation until the first real
+    // save/import. Do not patch a nonexistent manifest or mark repair complete.
+    const repairCollections=['files','races','prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','sidebet_ticket_log','v55_diagnostic_log','surprise_cohort_tracking_log'];
+    if(!repairCollections.some(name=>Array.isArray(source[name])&&source[name].length)&&typeof global.TKPSegmentedIDB?.hasSnapshot==='function'&&!await global.TKPSegmentedIDB.hasSnapshot())return {ok:true,skipped:true,reason:'empty-uninitialized-database'};
     source.settings=source.settings&&typeof source.settings==='object'?source.settings:{};
-    const before=cheapSignature(source),dedupe=dedupeCollections(source);changed.push(...dedupe.changed);
+    const before=cheapSignature(source),dedupe=await dedupeCollections(source);changed.push(...dedupe.changed);
+    const stages={dedupe_ms:Date.now()-started};let stageStarted=Date.now();
     const tkp=await normalizeFrozenVisibleTkp(source,full);if(tkp.changed)changed.push('races');
+    stages.normalize_ms=Date.now()-stageStarted;stageStarted=Date.now();
     const fwd=await repairForwardExisting(source,full);if(fwd.changed)changed.push('forward_tracking_log');
-    const trackers=await syncTrackers(source,full);if(trackers.weekly)changed.push('weekly_model_log');if(trackers.sidebet)changed.push('sidebet_ticket_log');
-    const afterAudit=tkpIntegrityAudit(source);source.settings[STATE_KEY]={version:VERSION,completed_at:new Date().toISOString(),duration_ms:Date.now()-started,signature:cheapSignature(source),latest_result_date:afterAudit.latest_result_date,latest_forward_date:afterAudit.latest_forward_date,latest_weekly_date:afterAudit.latest_weekly_date,deduped:dedupe.stats,tkp_normalized:tkp.changed,forward_repaired:fwd.changed,full};
-    await persistChanged(source,[...changed],source.settings[STATE_KEY]);
+    stages.forward_ms=Date.now()-stageStarted;stageStarted=Date.now();
+    const trackers=await syncTrackers(source,full);if(trackers.weekly)changed.push('weekly_model_log');if(trackers.sidebet)changed.push('sidebet_ticket_log');if(trackers.cohort)changed.push('surprise_cohort_tracking_log');
+    stages.trackers_ms=Date.now()-stageStarted;
+    const afterAudit=tkpIntegrityAudit(source);source.settings[STATE_KEY]={version:VERSION,cooperative_dedupe_version:1,stages,completed_at:new Date().toISOString(),duration_ms:Date.now()-started,signature:cheapSignature(source),input_signature:tkpIntegrityInputSignature(source),latest_result_date:afterAudit.latest_result_date,latest_forward_date:afterAudit.latest_forward_date,latest_weekly_date:afterAudit.latest_weekly_date,deduped:dedupe.stats,tkp_normalized:tkp.changed,forward_repaired:fwd.changed,full};
+    if(!await persistChanged(source,[...changed],source.settings[STATE_KEY]))throw new Error('Integrity completion could not be persisted.');
     try{global.dispatchEvent?.(new CustomEvent('tkp:integrity-updated',{detail:source.settings[STATE_KEY]}));}catch(_e){}
     return {ok:true,before,after:source.settings[STATE_KEY],changed:[...new Set(changed)]};
   }catch(e){error=String(e?.message||e);console.warn('R19.2 integrity repair:',e);return {ok:false,error};}
   finally{running=false;}
 }
 function tkpScheduleIntegrityRepair(options={}){
+  if(!tkpIntegrityNeedsRun(global.db,options))return false;
   if(scheduled||running)return false;scheduled=true;
   const run=async()=>{scheduled=false;return tkpRunIntegrityRepair(options);};
   if(typeof global.tkpQueueTask==='function')global.tkpQueueTask(options.full?'r19-integrity-full':'r19-integrity-incremental',run,{priority:'background',replace:true,minIdleMs:options.full?3000:1500});
@@ -155,12 +199,18 @@ function tkpIntegrityStatus(){return lastAudit||tkpIntegrityAudit(global.db);}
 global.TKP_R19_INTEGRITY_VERSION=VERSION;
 global.tkpIntegrityRaceKey=tkpIntegrityRaceKey;
 global.tkpIntegrityDedupeByKey=tkpIntegrityDedupeByKey;
+global.tkpIntegrityDedupeByKeyAsync=tkpIntegrityDedupeByKeyAsync;
 global.tkpIntegrityPreferResolved=tkpIntegrityPreferResolved;
 global.tkpIntegrityMergeForwardRows=tkpIntegrityMergeForwardRows;
 global.tkpIntegrityAudit=tkpIntegrityAudit;
+// Display freshness is read from current results, independent of an old
+// imported repair marker or a background repair awaiting persistence.
+global.tkpLatestConfirmedResultDate=latestResultDate;
 global.tkpRunIntegrityRepair=tkpRunIntegrityRepair;
 global.tkpScheduleIntegrityRepair=tkpScheduleIntegrityRepair;
 global.tkpIntegrityStatus=tkpIntegrityStatus;
+global.tkpIntegrityInputSignature=tkpIntegrityInputSignature;
+global.tkpIntegrityNeedsRun=tkpIntegrityNeedsRun;
 
 if(typeof global.addEventListener==='function'){
   global.addEventListener('tkp:db-changed',ev=>{
@@ -168,6 +218,6 @@ if(typeof global.addEventListener==='function'){
     const cols=Array.isArray(d.collections)?d.collections:[];
     if(d.outcomeChanged||d.resultsChanged||cols.includes('races')||cols.includes('auto_coupon_log'))tkpScheduleIntegrityRepair({full:false,reason:'db-change'});
   });
-  global.addEventListener('load',()=>setTimeout(()=>tkpScheduleIntegrityRepair({full:true,reason:'startup'}),2200),{once:true});
+  global.addEventListener('load',()=>setTimeout(()=>{const source=global.db;if(!tkpIntegrityNeedsRun(source,{reason:'startup'}))return;const state=source?.settings?.[STATE_KEY];tkpScheduleIntegrityRepair({full:!state||state.version!==VERSION,reason:'startup'});},2200),{once:true});
 }
 })(typeof globalThis!=='undefined'?globalThis:window);

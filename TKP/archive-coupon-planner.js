@@ -1,6 +1,6 @@
 (function(g){
 'use strict';
-const VERSION='R16.79-ARCHIVE-REPLAN-1';
+const VERSION='R16.80-ARCHIVE-3000-BH-COVERAGE';
 const modes=['main','alt','surprise'];
   function finishSteps(steps){let next;do{next=steps.next();}while(!next.done);return next.value;}
   async function finishStepsAsync(steps,pause){
@@ -28,7 +28,16 @@ function* fieldSteps(x,role){
     const p=values[i]/total,agf=Math.max(.005,(Number(h.agf)||0)/100);
     const commentator=(Math.max(0,Number(h.ypuan)||0)+Math.max(0,Number(h.kulis_score)||0))/maxComment;
     const priority=g.TKP_COUPON_POLICY?.commentPriority(x.r,h)?.score||0;
-    const preference=(role==='alt'?p*(1+.20*Math.max(-1,Math.min(1,p/agf-1))+.12*commentator):role==='surprise'?p*(1+.35*commentator):p*(1+.10*commentator))*(1+priority*(role==='surprise'?.75:role==='alt'?.35:.25));
+    // BH sinyali yalnız yarış öncesi kayıtta mevcutsa değerlenir. Sonuç bilgisi kullanılmaz.
+    // AGF ilk 5 adayları zorla çıkarılmaz; BH ilk 3, özellikle AGF 6+ ise
+    // aynı ayaktaki marjinal kapsam hesabında ölçülü ek ağırlık alır.
+    const bhRank=Number(h.bh_rank??h.bhRank??h.bh_order??h.bhOrder);
+    const agfRank=Number(h.agf_rank??h.agfRank??h.agf_order);
+    const isBhTop3=Number.isInteger(bhRank)&&bhRank>=1&&bhRank<=3;
+    const beyondAgf5=Number.isInteger(agfRank)&&agfRank>=6;
+    const bmb=Boolean(h.bmb||h.is_bmb||h.bmb_badge||h.bomba_avcisi);
+    const bhBonus=isBhTop3?(beyondAgf5?(bmb?.28:.20):.055):0;
+    const preference=(role==='alt'?p*(1+.20*Math.max(-1,Math.min(1,p/agf-1))+.12*commentator):role==='surprise'?p*(1+.35*commentator):p*(1+.10*commentator))*(1+priority*(role==='surprise'?.75:role==='alt'?.35:.25))*(1+bhBonus);
     const k=key(h),old=groups.get(k);
     if(old){old.p+=p;old.preference+=preference;}else groups.set(k,{h,p,preference,k,rank:i});
   }
@@ -46,7 +55,7 @@ function* solveSteps(fields,singleIndices,unit,cap){
   // iki atlı ayak en fazla bir kez, diğer çoklu ayaklar en az üç at.
   let states=new Map([['1|0',{product:1,twoLegs:0,score:0,widths:[]}]]);
   for(const f of ordered){
-    const next=new Map();let mass=0;const sums=f.pool.map(r=>(mass+=r.p));
+    const next=new Map();let mass=0;const prefTotal=f.pool.reduce((sum,r)=>sum+Math.max(0,r.preference),0)||1;const sums=f.pool.map(r=>(mass+=Math.max(0,r.preference)/prefTotal));
     for(const state of states.values()){
       const minMulti=f.pool.length<3?2:3;
       for(let count=minMulti;count<=f.pool.length;count++){
@@ -72,11 +81,11 @@ function* solveSteps(fields,singleIndices,unit,cap){
   const counts=fields.map(()=>1);ordered.forEach((f,i)=>counts[f.index]=best.widths[i]);
   return {...best,counts};
 }
-function* buildSteps(raceResults,budget=1400,options={}){
+function* buildSteps(raceResults,budget=3000,options={}){
   const rows=(raceResults||[]).slice().sort((a,b)=>Number(a.r?.leg)-Number(b.r?.leg));
   if(rows.length!==6||new Set(rows.map(x=>Number(x.r?.leg))).size!==6)return Object.fromEntries(modes.map(k=>[k,{error:'Altı farklı gerçek ayak gerekli.'}]));
   const unit=typeof g.ganyanUnitPrice==='function'?Number(g.ganyanUnitPrice(rows[0].r?.hippodrome,6))||1:1;
-  const cap=Math.max(1000,Math.min(1400,Number(budget)||1400));
+  const cap=Math.max(1000,Math.min(3000,Number(budget)||3000));
   const usedSingles=new Set(),previous=[],out={};
   for(const role of modes){
     const fields=[];for(const x of rows)fields.push(yield* fieldSteps(x,role));
@@ -96,7 +105,7 @@ function* buildSteps(raceResults,budget=1400,options={}){
       const objective=plan.score-(role==='main'?0:.30*repeated);
       if(!best||objective>best.objective)best={...plan,objective,singleIndices};
     }
-    if(!best){out[role]={error:'Gerçek at sayıları ve 1–2 tek ile 1.000–1.400 TL planı bulunamadı.',archive_snapshot:1};continue;}
+    if(!best){out[role]={error:'Gerçek at sayıları ve 1–2 tek ile 1.000–3.000 TL planı bulunamadı.',archive_snapshot:1};continue;}
     const legs=fields.map((f,i)=>({r:f.x.r,x:f.x,leg:Number(f.x.r.leg),allHorses:f.pool.map(r=>r.h),ordered:f.pool.map(r=>r.h),picks:f.pool.slice(0,best.counts[i]).map(r=>r.h),distributionPlan:{difficulty:Math.round(f.difficulty*100),count:best.counts[i],reason:best.counts[i]===1?'Arşiv puanlarına göre göreli TEK adayı':'Ayak belirsizliği ve ortak bütçeyle kapsama'}}));
     const c={typeKey:role,legs,legCount:6,unit,combos:best.product,cost:best.product*unit,budgetTL:cap,validatedPrediction:false};
     if(options.current===true){
@@ -119,7 +128,7 @@ function* buildSteps(raceResults,budget=1400,options={}){
   }
   out.main2={disabled:true,removed:true,legs:[],cost:0};return out;
 }
-function build(raceResults,budget=1400,options={}){return finishSteps(buildSteps(raceResults,budget,options));}
-function buildAsync(raceResults,budget=1400,options={}){return finishStepsAsync(buildSteps(raceResults,budget,options),options.pause);}
+function build(raceResults,budget=3000,options={}){return finishSteps(buildSteps(raceResults,budget,options));}
+function buildAsync(raceResults,budget=3000,options={}){return finishStepsAsync(buildSteps(raceResults,budget,options),options.pause);}
 g.TKP_ARCHIVE_COUPON_PLANNER={version:VERSION,build,buildAsync,signature};
 })(globalThis);

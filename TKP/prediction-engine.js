@@ -174,6 +174,48 @@ if(typeof window!=='undefined')window.tkpAgfTrapAssessment=tkpAgfTrapAssessment;
 // V4.2 TEK KALİBRASYONU: TEK kararında yalnız lider güveni değil,
 // lider-rakip ayrışması + yarış riski + bağımsız kanıt blokları birlikte kullanılır.
 // Bu yardımcılar yalnız yarış-öncesi alanları okur; sonuç/winner/finish kullanmaz.
+// TEK için geçmiş doğrudan karşılaşmalar: aynı hipodrom + yüzey + TAM mesafe.
+// Yalnız bugünkü koşudan ESKİ, sonucu belli ve iki atın da bitirdiği koşular.
+// At numarası her koşuda değişir; adla eşleştir. Belirsiz meta / sonuçta nötr kal.
+function tkpSameCourseHeadToHead(r, leader, rivals){
+  const clean=v=>String(v??'').trim().toLocaleUpperCase('tr-TR').replace(/\s+/g,' ');
+  const date=String(r?.race_date||'').slice(0,10);
+  const venue=clean(r?.hippodrome),surface=clean(r?.surface),distance=Number(r?.distance);
+  const leaderName=clean(leader?.horse_name);
+  const neutral={sample:0,losses:0,wins:0,blocked:false,penalty:0,opponents:[]};
+  if(!date||!venue||!surface||!Number.isFinite(distance)||distance<=0||!leaderName)return neutral;
+  const names=new Set((rivals||[]).map(h=>clean(h?.horse_name)).filter(n=>n&&n!==leaderName));
+  if(!names.size)return neutral;
+  const counts=new Map();
+  for(const old of (typeof db!=='undefined'&&Array.isArray(db?.races)?db.races:[])){
+    if(!old||old===r||String(old?.id||'')===String(r?.id||'')||String(old?.race_date||'').slice(0,10)>=date)continue;
+    if(clean(old.hippodrome)!==venue||clean(old.surface)!==surface||Number(old.distance)!==distance)continue;
+    const horses=Array.isArray(old.horses)?old.horses:[];
+    const byName=new Map();
+    for(const h of horses){
+      const n=clean(h?.horse_name),pos=Number(h?.finish_position);
+      if(!n||!Number.isInteger(pos)||pos<=0||byName.has(n)){byName.set(n,null);continue;}
+      byName.set(n,pos);
+    }
+    const leaderPos=byName.get(leaderName);
+    if(!leaderPos)continue;
+    for(const n of names){
+      const rivalPos=byName.get(n);if(!rivalPos||rivalPos===leaderPos)continue;
+      const c=counts.get(n)||{name:n,wins:0,losses:0};
+      if(leaderPos<rivalPos)c.wins++;else c.losses++;
+      counts.set(n,c);
+    }
+  }
+  const opponents=[...counts.values()].sort((a,b)=>b.losses-a.losses||a.wins-b.wins);
+  const wins=opponents.reduce((t,c)=>t+c.wins,0),losses=opponents.reduce((t,c)=>t+c.losses,0);
+  // Rakibe iki veya daha fazla yenilgi ve hiç üstünlük yoksa tek veto; tek geçmiş
+  // yenilgi yalnız hafif güven düzeltir. Bu sinyal ana TKP sırasına dokunmaz.
+  const blocked=opponents.some(c=>c.losses>=2&&c.wins===0);
+  const penalty=blocked?0:opponents.some(c=>c.losses>=1&&c.wins===0)?3:0;
+  return {sample:wins+losses,wins,losses,blocked,penalty,opponents:opponents.slice(0,5)};
+}
+if(typeof window!=='undefined')window.tkpSameCourseHeadToHead=tkpSameCourseHeadToHead;
+
 function tkpSingleRiskAssessment(r, first, second, poolArg=null){
   const pool=(Array.isArray(poolArg)?poolArg:(r?.horses||[])).filter(h=>h&&!isNonRunner(h));
   if(!first) return {score:100,band:'VERİ YOK',gap:0,agreement:0,strongRivals:0};
@@ -450,16 +492,22 @@ function dynamicSingleDecision(x, firstArg=null, secondArg=null, strengthArg=nul
       ?tkpAdaptiveDecisionPolicy(x.r,pool,{mode:'main',product:'altili',position:1,fallback:2})
       :null;
   }catch(_){decisionPolicy=null;}
+  const headToHead=tkpSameCourseHeadToHead(x.r,first,decisionPool.filter(h=>String(h?.horse_no)!==String(first?.horse_no)));
   const policyPenalty=decisionPolicy?.singleBlocked===true?5:0;
-  let effectiveConfidence=Math.max(0,confidence-Number(agfTrap?.penalty||0)-Number(failureRisk?.penalty||0)-policyPenalty);
+  let effectiveConfidence=Math.max(0,confidence-Number(agfTrap?.penalty||0)-Number(failureRisk?.penalty||0)-policyPenalty-Number(headToHead.penalty||0));
   threshold=calibratedThreshold;
 
   // En az iki bağımsız blok (AGF/piyasa, PROF, gerçek TR) lideri desteklemeli.
   const evidenceOk=evidence.count>=2;
   const failureBlocked=Number(failureRisk?.penalty||0)>=7;
-  const isSingle=effectiveConfidence>=calibratedThreshold && marginOk && evidenceOk && weightOk && !rivalProfileBlocked && !xBreakSingle && !agfTrap.block && !failureBlocked && decisionPolicy?.singleBlocked!==true;
+  // BÜYÜK KADRO KAPISI (15.10.2026, 1500 sonuçlu ayak geriye dönük test): 12+ koşan atlı
+  // ayakta TEK 7/26 (%27 = TEK olmayan lider oranı %28), <12 atlıda 59/115 (%51); iki yarıda da aynı.
+  const fieldRunners=(x?.r?.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h))).length;
+  const bigFieldBlock=fieldRunners>=12;
+  const isSingle=!bigFieldBlock && effectiveConfidence>=calibratedThreshold && marginOk && evidenceOk && weightOk && !rivalProfileBlocked && !xBreakSingle && !agfTrap.block && !failureBlocked && !headToHead.blocked && decisionPolicy?.singleBlocked!==true;
 
   const reasons=[];
+  if(bigFieldBlock) reasons.push(`${fieldRunners} atlı ayak · TEK kapalı (12+ kadroda TEK isabeti düşük)`);
   reasons.push(`${broadConditionKey(x.r.condition_family)} tek eşiği %${threshold}`);
   reasons.push(`${level} ${sample} koşu`);
   if(sample) reasons.push(`1. sıra başarı %${Math.round(firstRate*100)}`);
@@ -484,6 +532,7 @@ function dynamicSingleDecision(x, firstArg=null, secondArg=null, strengthArg=nul
     const rno=failureRisk?.horse?.horse_no||'-';
     reasons.push(`kaçırma öğrenmesi: rakip ${rno} · güven -${Number(failureRisk.penalty||0).toFixed(1)} · ${failureRisk.reasons.join('/')||'sinyal'}`);
   }
+  if(headToHead.sample)reasons.push(`aynı hipodrom/pist/mesafe karşılaşma: ${headToHead.wins} üstünlük / ${headToHead.losses} geride · ${headToHead.blocked?'TEK engeli':headToHead.penalty?'güven -'+headToHead.penalty:'nötr'}`);
   if(failureBlocked) reasons.push('tekrarlayan TEK-kayıp profili · TEK kilidi');
   if(decisionPolicy?.status==='ÖĞRENİLDİ'){
     reasons.push(`17-parametre karar · n=${decisionPolicy.sample} · P1 %${Math.round((Number(decisionPolicy.leaderRate)||0)*100)} · ${decisionPolicy.tier}`);
@@ -491,7 +540,7 @@ function dynamicSingleDecision(x, firstArg=null, secondArg=null, strengthArg=nul
   if(decisionPolicy?.singleBlocked===true) reasons.push('17-parametre geçmiş P1 veto · TEK kilidi');
 
   const result={isSingle,threshold,confidence:effectiveConfidence,rawConfidence:confidence,margin,sample,firstRate,level,first,firstProfile,secondProfile,profileGap,
-    strongestRival,strongestRivalProfile,rivalProfileBlocked,xBreakSingle,agfTrap,failureRisk,failureBlocked,risk,evidence,evidenceOk,minWinnerGap,winnerGap,
+    strongestRival,strongestRivalProfile,rivalProfileBlocked,xBreakSingle,agfTrap,failureRisk,failureBlocked,risk,evidence,evidenceOk,headToHead,minWinnerGap,winnerGap,
     scoreOk,profileOk,profileGapOk,marginOk,sampleOk,weightOk,weightKg,decisionPolicy,reason:reasons.join(' · ')};
   if(memoKey){
     const bucket=memoBucket||new Map();bucket.set(memoKey,{...result});

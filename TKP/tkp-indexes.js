@@ -41,9 +41,11 @@
     if(typeof global.tkpFastDbSignature==='function'){
       try{ return INDEX_VERSION+'|'+global.tkpFastDbSignature(sourceDb); }catch(_){ }
     }
-    // learningDatasetSignature detaylı ama pahalı olabilir. Önce hafif imza; sonuç/at
-    // değişikliklerinde kaydetme olayı zaten tkp:db-changed ile cache'i temizler.
-    return [INDEX_VERSION, files.length, races.length, arr(sourceDb?.bets).length, arr(sourceDb?.prediction_log).length, resultRaceCount(races)].join('|');
+    // 10Y PERF FIX: cache anahtarı üretirken races dizisini taramak indeksli lookup'ların
+    // her çağrıda O(N) olmasına yol açıyordu. Yarış/sonuç mutasyonları tkp:db-changed
+    // üzerinden invalidate edilir; burada yalnız O(1) sayaç/revizyon bilgisi kullanılır.
+    const revision=Number(sourceDb?.settings?.data_revision||sourceDb?.settings?.db_revision||sourceDb?._revision||0)||0;
+    return [INDEX_VERSION, files.length, races.length, arr(sourceDb?.bets).length, arr(sourceDb?.prediction_log).length, revision].join('|');
   }
   function meetingKeyForRace(r, file){
     return String(r?.file_id || r?.meeting_id || [r?.race_date||file?.race_date||'', safeFold(r?.hippodrome||file?.hippodrome||''), r?.sequence_no||file?.sequence_no||''].join('|'));
@@ -54,6 +56,10 @@
     const files=arr(sourceDb?.files), races=arr(sourceDb?.races), bets=arr(sourceDb?.bets);
     const filesById = new Map();
     const racesByFileId = new Map();
+    const raceById = new Map();
+    const raceByUid = new Map();
+    const raceByFileLeg = new Map();
+    const raceByNaturalKey = new Map();
     const horsesByRaceId = new Map();
     const activeFileIds = new Set();
     const fileSeqById = new Map();
@@ -85,7 +91,11 @@
       if(!racesByFileId.has(fid)) racesByFileId.set(fid, []);
       racesByFileId.get(fid).push(r);
       if(!racesByFileId.has(r.file_id)) racesByFileId.set(r.file_id, racesByFileId.get(fid));
-      if(r.id!=null) horsesByRaceId.set(String(r.id), arr(r.horses));
+      if(r.id!=null){ raceById.set(String(r.id),r); horsesByRaceId.set(String(r.id), arr(r.horses)); }
+      if(r.race_uid) raceByUid.set(String(r.race_uid),r);
+      if(r.file_id!=null && Number(r.leg)>0) raceByFileLeg.set(String(r.file_id)+'|'+Number(r.leg),r);
+      const naturalKey=[String(r.race_date||''),safeFold(r.hippodrome||''),Number(r.altili_no||1),Number(r.leg||r.race_no||0)].join('|');
+      if(!raceByNaturalKey.has(naturalKey)) raceByNaturalKey.set(naturalKey,r);
       horseCount += arr(r.horses).length;
       if(raceHasWinner(r)) resultRaces++;
       for(const h of arr(r.horses)) if(Number(h?.winner)===1 || Number(h?.finish_position)===1) winnerCount++;
@@ -118,6 +128,10 @@
       version: INDEX_VERSION,
       filesById,
       racesByFileId,
+      raceById,
+      raceByUid,
+      raceByFileLeg,
+      raceByNaturalKey,
       horsesByRaceId,
       activeFileIds,
       fileSeqById,
@@ -145,8 +159,20 @@
     return cached;
   }
   function tkpRowsByFileId(fileId){
-    try { return (tkpGetIndexes().racesByFileId.get(String(fileId)) || tkpGetIndexes().racesByFileId.get(fileId) || []).slice(); }
+    try { const ix=tkpGetIndexes(); return (ix.racesByFileId.get(String(fileId)) || ix.racesByFileId.get(fileId) || []).slice(); }
     catch(_){ return []; }
+  }
+
+  function tkpRaceLookup(race){
+    try{
+      if(!race)return null;
+      const ix=tkpGetIndexes();
+      if(race.id!=null){const hit=ix.raceById.get(String(race.id));if(hit)return hit;}
+      if(race.race_uid){const hit=ix.raceByUid.get(String(race.race_uid));if(hit)return hit;}
+      if(race.file_id!=null&&Number(race.leg)>0){const hit=ix.raceByFileLeg.get(String(race.file_id)+'|'+Number(race.leg));if(hit)return hit;}
+      const key=[String(race.race_date||''),safeFold(race.hippodrome||''),Number(race.altili_no||1),Number(race.leg||race.race_no||0)].join('|');
+      return ix.raceByNaturalKey.get(key)||null;
+    }catch(_){return null;}
   }
   function tkpFileById(fileId){
     try { return tkpGetIndexes().filesById.get(String(fileId)) || tkpGetIndexes().filesById.get(fileId) || null; }
@@ -220,6 +246,7 @@
   global.tkpGetIndexes = tkpGetIndexes;
   global.tkpRowsByFileId = tkpRowsByFileId;
   global.tkpFileById = tkpFileById;
+  global.tkpRaceLookup = tkpRaceLookup;
   global.tkpMeetingGroups = tkpMeetingGroups;
   global.tkpMasterRowsFast = tkpMasterRowsFast;
   global.tkpFilesByDateHip = tkpFilesByDateHip;

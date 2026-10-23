@@ -98,48 +98,64 @@
   function resolveHip(r,filesById){
     return r?.hippodrome||filesById?.get(String(r?.file_id))?.hippodrome||'';
   }
-  async function findForTarget(target,history,options={}){
-    const minScore=Math.max(0,Math.min(100,Number(options.minScore)||80));
-    const limit=Math.max(1,Math.min(50,Number(options.limit)||10));
-    const targetDate=options.targetDate||target?.race_date||'';
-    const filesById=options.filesById||new Map();
-    const currentIds=new Set((options.excludeRaceIds||[]).map(String));
-    const out=[];
-    const seen=new Set();
-    const list=Array.isArray(history)?history:[];
-    // R19 KÖK FIX: 10M kayıt ölçeğinde ana iş parçacığını kilitlememek için
-    // her N kayıtta bir kooperatif yield uygulanır (bkz. performance-runtime.js tkpYieldToUi).
-    const yieldEvery=500;
-    for(let i=0;i<list.length;i++){
-      const raw=list[i];
-      if(!raw||currentIds.has(String(raw.id))) continue;
-      const candidate={...raw,race_date:resolveRaceDate(raw,filesById),hippodrome:resolveHip(raw,filesById)};
-      const key=String(candidate.id??[candidate.file_id,candidate.leg,candidate.race_date].join('|'));
-      if(seen.has(key)) continue;
-      seen.add(key);
-      const similarity=score({...target,race_date:targetDate},candidate,{targetDate});
-      if(similarity<minScore) continue;
-      out.push({race:candidate,score:similarity});
-      if((i%yieldEvery)===yieldEvery-1){
-        if(typeof global.tkpYieldToUi==='function') await global.tkpYieldToUi();
-        else await new Promise(r=>setTimeout(r,0));
+  const compareMatches=(a,b)=>b.score-a.score||dateValue(b.race.race_date)-dateValue(a.race.race_date)||Number(a.race.leg||0)-Number(b.race.leg||0);
+  async function* historyPages(history){
+    if(Array.isArray(history)){
+      for(let i=0;i<history.length;i+=1000)yield history.slice(i,i+1000);
+    }else if(history&&typeof history[Symbol.asyncIterator]==='function'){
+      for await(const page of history){
+        const rows=Array.isArray(page)?page:page?.rows;
+        if(!Array.isArray(rows))throw new Error('Geçersiz arşiv sayfası.');
+        yield rows;
       }
     }
-    out.sort((a,b)=>b.score-a.score||dateValue(b.race.race_date)-dateValue(a.race.race_date)||Number(a.race.leg||0)-Number(b.race.leg||0));
-    return out.slice(0,limit);
+  }
+  async function scanTargets(targets,history,options){
+    const limit=Math.max(1,Math.min(50,Number(options.limit)||10));
+    const minScore=Math.max(0,Math.min(100,Number(options.minScore)||80));
+    const filesById=options.filesById||new Map(),excluded=new Set((options.excludeRaceIds||[]).map(String));
+    const states=targets.map(target=>({target,matches:[]}));
+    let scanned=0,tick=Date.now();
+    for await(const rows of historyPages(history)){
+      for(const raw of rows){
+        // Schedule BEFORE any rejection; a non-matching archive used to never yield.
+        scanned++;
+        if(scanned%256===0||Date.now()-tick>=8){
+          if(options.signal?.aborted)throw new Error('Benzer yarış araması iptal edildi.');
+          if(typeof global.tkpYieldToUi==='function')await global.tkpYieldToUi();
+          else await new Promise(resolve=>setTimeout(resolve,0));
+          tick=Date.now();
+        }
+        if(!raw||excluded.has(String(raw.id))||!hasResult(raw))continue;
+        if(typeof options.acceptRace==='function'&&!options.acceptRace(raw))continue;
+        const candidate={...raw,race_date:resolveRaceDate(raw,filesById),hippodrome:resolveHip(raw,filesById)};
+        const key=String(candidate.id??[candidate.file_id,candidate.leg,candidate.race_date].join('|'));
+        for(const state of states){
+          const similarity=score(state.target,candidate,{targetDate:options.targetDate||state.target.race_date});
+          if(similarity<minScore)continue;
+          const out=state.matches,item={race:candidate,score:similarity,key};
+          const duplicate=out.findIndex(x=>x.key===key);
+          if(duplicate>=0){if(compareMatches(item,out[duplicate])>=0)continue;out.splice(duplicate,1);}
+          if(out.length===limit&&compareMatches(item,out[out.length-1])>=0)continue;
+          let lo=0,hi=out.length;
+          while(lo<hi){const mid=(lo+hi)>>>1;if(compareMatches(item,out[mid])<0)hi=mid;else lo=mid+1;}
+          out.splice(lo,0,item);if(out.length>limit)out.pop();
+        }
+      }
+      if(typeof options.onProgress==='function')options.onProgress({scanned,retained:states.reduce((n,s)=>n+s.matches.length,0)});
+      if(options.signal?.aborted)throw new Error('Benzer yarış araması iptal edildi.');
+    }
+    return states.map(s=>s.matches.map(({race,score})=>({race,score})));
+  }
+  async function findForTarget(target,history,options={}){
+    return (await scanTargets([target],history,options))[0];
   }
   async function findPools(targets,history,options={}){
-    const filesById=options.filesById||new Map();
-    const exclude=(Array.isArray(targets)?targets:[]).map(r=>r?.id).filter(v=>v!=null);
-    const list=Array.isArray(targets)?targets:[];
-    const out=[];
-    for(let index=0;index<list.length;index++){
-      const target=list[index];
-      const enriched={...target,hippodrome:target?.hippodrome||options.hippodrome||'',race_date:target?.race_date||options.targetDate||''};
-      const matches=await findForTarget(enriched,history,{...options,filesById,excludeRaceIds:exclude,targetDate:options.targetDate||enriched.race_date});
-      out.push({target:enriched,targetIndex:index,signature:profileSignature(enriched),matches,ready:matches.length>=(Number(options.required)||10)});
-    }
-    return out;
+    const list=(Array.isArray(targets)?targets:[]).map(target=>({...target,hippodrome:target?.hippodrome||options.hippodrome||'',race_date:target?.race_date||options.targetDate||''}));
+    const exclude=list.map(r=>r?.id).filter(v=>v!=null);
+    // All six targets share one pass; async streams cannot be replayed.
+    const matches=await scanTargets(list,history,{...options,excludeRaceIds:[...exclude,...(options.excludeRaceIds||[])]});
+    return list.map((target,index)=>({target,targetIndex:index,signature:profileSignature(target),matches:matches[index],ready:matches[index].length>=(Number(options.required)||10)}));
   }
 
   global.TkpSimilarRaceEngine={fold,normalizeSurface,broadCondition,normalizeBreed,profileSignature,hasResult,score,findForTarget,findPools};

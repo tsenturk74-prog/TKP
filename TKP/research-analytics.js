@@ -124,7 +124,7 @@
     };
     const defs=[
       ['AGF lideri',r=>n(r.agf_rank,99)===1,r=>marked(r,'agf',x=>finite(x,'agf_rank'))],
-      ['TR PUAN ilk 3',r=>n(r.tr_ganyan_rank,99)<=3,r=>marked(r,'tr_ganyan',x=>finite(x,'tr_ganyan_rank'))],
+      ['TR PUAN ilk 3',r=>n(r.tr_rank??r.tr_ganyan_rank,99)<=3,r=>{const p=r?.feature_presence;if(p&&Object.prototype.hasOwnProperty.call(p,'tr'))return p.tr===true;return marked(r,'tr_ganyan',x=>finite(x,'tr_rank')||finite(x,'tr_ganyan_rank'));}],
       ['J-BYG ilk 3',r=>n(r.jbyg_rank,99)<=3,r=>marked(r,'jbyg',x=>finite(x,'jbyg_rank'))],
       ['BMB',r=>n(r.bmb)===1,r=>marked(r,'bmb',x=>finite(x,'bmb'))],
       ['ODB',r=>n(r.odb)===1,r=>marked(r,'odb',x=>finite(x,'odb'))],
@@ -269,11 +269,8 @@
   function build(db){
     const revision=currentRevision(), files=db?.files, races=db?.races, preds=db?.prediction_log, forward=db?.forward_tracking_log, bets=db?.bets;
     if(_buildCache.db===db&&_buildCache.revision===revision&&_buildCache.files===files&&_buildCache.races===races&&_buildCache.preds===preds&&_buildCache.forward===forward&&_buildCache.bets===bets&&_buildCache.value) return _buildCache.value;
-    // V1.1.324: sayfa yenilenince/oturum kapanınca yukarıdaki _buildCache sıfırlanır --
-    // veri hiç değişmemiş olsa bile analiz baştan hesaplanırdı. tkp-analysis-cache.js
-    // (veri parmak izi + model sürümü + 3 günlük TTL ile) kalıcı katman sağlıyor; burada
-    // önce ona bakılır, yalnız gerçekten gerekliyse (veri/model değişti VEYA 3 gün doldu)
-    // aşağıdaki tam hesap çalışır.
+    // Persistent content/model signatures survive restarts. Age alone does not
+    // expire unchanged diagnostics; corrected results invalidate the signature.
     if(typeof global.tkpAnalysisCacheRead==='function'){
       const persisted=global.tkpAnalysisCacheRead(db,TKP_ANALYSIS_CACHE_KEY);
       if(persisted){ _buildCache={db,revision,files,races,preds,forward,bets,value:persisted}; return persisted; }

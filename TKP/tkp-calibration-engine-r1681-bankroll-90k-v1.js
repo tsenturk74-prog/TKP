@@ -9,7 +9,7 @@
   'use strict';
 
   const VERSION='R15.6-CALIBRATION-WALKFORWARD-CLEAN509-JOINT';
-  const DEFAULT_BANKROLL=Object.freeze({monthlyTargetTL:50000,monthlyHardLimitTL:90000});
+  const DEFAULT_BANKROLL=Object.freeze({monthlyTargetTL:50000,monthlyHardLimitTL:120000});
   const DEFAULT_FOLDS=Object.freeze({warmupMeetings:100,foldCount:5,minLiveEvents:150});
   const number=(v,fallback=0)=>Number.isFinite(Number(v))?Number(v):fallback;
   const list=value=>Array.isArray(value)?value:[];
@@ -17,6 +17,7 @@
   const esc=value=>text(value).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
   const database=source=>source||(typeof db!=='undefined'?db:null);
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
+  const moneyTone=(value,known=true)=>(!known||value==null||!Number.isFinite(Number(value)))?'neutral':(Number(value)>0?'pos':Number(value)<0?'neg':'neutral');
 
   function policy(){
     const source=global.TKP_COUPON_BUDGET_POLICY||{};
@@ -251,7 +252,8 @@
       const prod=products[key],cross=generic[key];if(!prod)return '';
       const cleanRoi=cross?.holdout?.roiPct;
       const cleanText=Number.isFinite(Number(cleanRoi))?`%${Number(cleanRoi).toFixed(2)}`:'—';
-      return `<tr><td><b>${esc(prod.label)}</b></td><td class="num">${esc(prod.holdout?.tests||0)}</td><td class="num">%${esc(Number(prod.holdout?.hitPct||0).toFixed(2))}</td><td class="num">%${esc(Number(prod.holdout?.roiPct||0).toFixed(2))}</td><td class="num">${esc(cleanText)}</td><td>${esc(prod.mode==='SHADOW_CANDIDATE'?'SHADOW ADAY':'PAS')}</td></tr>`;
+      const prodRoi=Number(prod.holdout?.roiPct||0);
+      return `<tr><td><b>${esc(prod.label)}</b></td><td class="num">${esc(prod.holdout?.tests||0)}</td><td class="num">%${esc(Number(prod.holdout?.hitPct||0).toFixed(2))}</td><td class="num tkpMoney ${moneyTone(prodRoi)}">%${esc(prodRoi.toFixed(2))}</td><td class="num tkpMoney ${moneyTone(cleanRoi,Number.isFinite(Number(cleanRoi)))}">${esc(cleanText)}</td><td>${esc(prod.mode==='SHADOW_CANDIDATE'?'SHADOW ADAY':'PAS')}</td></tr>`;
     }).join('');
     return `<div class="card tkpClean509CalibrationCard" style="border-left:5px solid #0f766e;margin:10px 0"><h3 style="margin:0 0 5px">🧪 R15.6 CLEAN509 Ortak Kalibrasyon</h3><p class="muted" style="margin:0 0 7px"><b>${esc(d.verifiedRaces||0)}</b> doğrulanmış yarış · ${esc(d.fitRaces||0)} fit + <b>${esc(d.holdoutRaces||0)}</b> dokunulmamış holdout. P1 challenger holdout %${esc(Number(m.learned?.p1Pct||0).toFixed(2))}; AGF %${esc(Number(m.agf?.p1Pct||0).toFixed(2))}. Bu nedenle <b>Champion P1 kilidi korunur</b>; CLEAN509 yalnız P2–P5/kapsama için %${esc(Math.round(Number(p.finalTailBlend||0)*100))} düşük-etkili prior ve yan bahis düşük-örneklem düzenleyicisi olarak kullanılır.</p><div class="tableWrap compactBacktest"><table><thead><tr><th>Yan bahis</th><th class="num">V46 holdout</th><th class="num">İsabet</th><th class="num">V46 ROI</th><th class="num">Generic CLEAN509 ROI</th><th>Karar</th></tr></thead><tbody>${rows}</tbody></table></div><p class="muted" style="margin:7px 0 0">Generic CLEAN509 yan-bahis refiti ürün-bazlı V46 formüllerini holdout ROI'de geçmedi. Bu yüzden V46 formülleri korunur; geçmiş sonuç yalnız regularizer/kanıt kapısıdır ve hiçbir yan bahsi otomatik OYNA yapmaz.</p></div>`;
   }
@@ -261,7 +263,7 @@
     const sample=report.researchSample||{};
     const sampleNote=sample.source==='KALICI_REAL509_V46'
       ?` ${number(sample.archiveMeetings)} arşiv toplantısından yarış-öncesi snapshotlı ${number(sample.verifiedSixLegMeetings)} tam Altılı araştırmaya alındı; bu veri canlı terfiye yazılmaz.`:'';
-    const rows=list(report.candidates).map(row=>`<tr><td><b>${esc(row.label)}</b></td><td class="num">${esc(row.meetings)}</td><td class="num">${esc(row.hits)}</td><td class="num">%${esc((row.rate*100).toFixed(2))}</td><td class="num">${esc(numberText(row.wilsonLower*100))}</td><td class="num">${esc(row.avgCost.toFixed(2))} TL</td><td class="num">${esc(numberText(row.roi))}</td><td class="num">${esc(numberText(row.roiLower))}</td><td>${esc(row.promotionState)}</td></tr>`).join('');
+    const rows=list(report.candidates).map(row=>`<tr><td><b>${esc(row.label)}</b></td><td class="num">${esc(row.meetings)}</td><td class="num">${esc(row.hits)}</td><td class="num">%${esc((row.rate*100).toFixed(2))}</td><td class="num">${esc(numberText(row.wilsonLower*100))}</td><td class="num">${esc(row.avgCost.toFixed(2))} TL</td><td class="num tkpMoney ${moneyTone(row.roi,Number.isFinite(Number(row.roi)))}">${esc(numberText(row.roi))}</td><td class="num tkpMoney ${moneyTone(row.roiLower,Number.isFinite(Number(row.roiLower)))}">${esc(numberText(row.roiLower))}</td><td>${esc(row.promotionState)}</td></tr>`).join('');
     const base=`<div class="card tkpCalibrationCard" style="border-left:5px solid #7c3aed;margin:10px 0"><h3 style="margin:0 0 5px">🧭 Zaman Sıralı Kalibrasyon · ${esc(report.promotionState)}</h3><p class="muted" style="margin:0 0 7px">${esc(report.warning)}${esc(sampleNote)} 5 fold / ilk 100 toplantı ısınma; karar ROI tek başına değil ROI alt güven sınırı ve maliyetle verilir.</p><div class="tableWrap compactBacktest"><table><thead><tr><th>Politika</th><th class="num">Test</th><th class="num">6/6</th><th class="num">Oran</th><th class="num">Wilson alt</th><th class="num">Ort. maliyet</th><th class="num">ROI</th><th class="num">ROI alt</th><th>Durum</th></tr></thead><tbody>${rows||'<tr><td colspan="9">Kalibrasyon verisi yok.</td></tr>'}</tbody></table></div></div>`;
     return base+tkpR156Clean509CalibrationHTML();
   }

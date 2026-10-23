@@ -149,6 +149,23 @@ function registerTkpFeature(definition){
   });
 }
 
+// Synchronous pass-local normalization; never retained across edits or awaits.
+let _tkpFeatureBatchContext=null;
+function tkpFeatureBatchValues(race,horses,key,live=null){
+  const previous=_tkpFeatureBatchContext;
+  _tkpFeatureBatchContext={race,live:live||(race?.horses||[]).filter(h=>!isNonRunner(h)),fields:new Map()};
+  try{return new Map(horses.map(h=>[h,tkpFeatureValue(race,h,key)]));}
+  finally{_tkpFeatureBatchContext=previous;}
+}
+function tkpFeatureNormalization(race,rows,field){
+  const ctx=_tkpFeatureBatchContext?.race===race?_tkpFeatureBatchContext:null;
+  if(ctx?.fields.has(field))return ctx.fields.get(field);
+  const values=rows.map(h=>tkpNumericScalar(h?.[field])).filter(Number.isFinite);
+  const unique=[...new Set(values.map(v=>Math.round(v*1e9)/1e9))];
+  const result={length:values.length,min:Math.min(...values),max:Math.max(...values),binary:unique.length===2&&unique.every(v=>v===0||v===1)};
+  if(ctx)ctx.fields.set(field,result);
+  return result;
+}
 function tkpFeatureValue(race,horse,key){
   const feature=TKP_FEATURE_REGISTRY.get(key);
   if(!feature) return 0;
@@ -191,7 +208,7 @@ function _tkpRegisterBuiltInFeatures(){
     });
   }
 
-  const liveRows=race=>typeof tkpLiveHorses==='function'?tkpLiveHorses(race):(race?.horses||[]).filter(horse=>!isNonRunner(horse));
+  const liveRows=race=>_tkpFeatureBatchContext?.race===race?_tkpFeatureBatchContext.live:typeof tkpLiveHorses==='function'?tkpLiveHorses(race):(race?.horses||[]).filter(horse=>!isNonRunner(horse));
   const rankValue=(race,horse,rankField,rawField,direction='higher')=>{
     const rows=liveRows(race);
     const rank=tkpNumericScalar(horse?.[rankField]);
@@ -201,10 +218,10 @@ function _tkpRegisterBuiltInFeatures(){
     // Number(null) / Number('') => 0 dönüşümü eksik alanları sahte veri yapıyordu.
     // Yerleşik zenginleştirme sinyallerinde de auto-table ile aynı güvenli scalar
     // kuralını kullan; eksik veri 0 puan değildir, ilgili at için veri yoktur.
-    const values=rows.map(item=>tkpNumericScalar(item?.[rawField])).filter(Number.isFinite);
+    const norm=tkpFeatureNormalization(race,rows,rawField);
     const current=tkpNumericScalar(horse?.[rawField]);
-    if(!Number.isFinite(current)||!values.length) return 0;
-    const min=Math.min(...values),max=Math.max(...values);
+    if(!Number.isFinite(current)||!norm.length) return 0;
+    const {min,max}=norm;
     if(max<=min) return 0.5;
     const normalized=(current-min)/(max-min);
     return direction==='lower'?1-normalized:normalized;
@@ -353,7 +370,8 @@ function tkpAllTableFieldBaseWeight(key,count){
   return Math.max(0.5,Math.min(5,w));
 }
 
-function tkpDiscoverAdditionalFeatures(sourceDb=db){
+function tkpDiscoverAdditionalFeatures(sourceDb=db,observedCounts=null){
+  observedCounts=observedCounts||(sourceDb===db?globalThis.TKPArchiveAnalytics?.peek()?.observed:null);
   if(!sourceDb) return [];
   const settings=sourceDb.settings&&typeof sourceDb.settings==='object'?sourceDb.settings:{};
   const configured=Array.isArray(settings.algorithm_features)?settings.algorithm_features:[];
@@ -373,8 +391,8 @@ function tkpDiscoverAdditionalFeatures(sourceDb=db){
     }
   }
 
-  const races=typeof learningEligibleRaces==='function'?learningEligibleRaces(sourceDb):[];
-  const observed=new Map();
+  const races=observedCounts?[]:(typeof learningEligibleRaces==='function'?learningEligibleRaces(sourceDb):[]);
+  const observed=new Map(Object.entries(observedCounts||{}));
   const fieldReasons=new Map();
   for(const race of races){
     for(const horse of (race.horses||[])){
@@ -421,13 +439,12 @@ function tkpDiscoverAdditionalFeatures(sourceDb=db){
       source:definition.source,
       requiredFields:[definition.key],
       value:(race,horse)=>{
-        const rows=(race?.horses||[]).filter(item=>!(typeof isNonRunner==='function'&&isNonRunner(item)));
-        const values=rows.map(item=>tkpNumericScalar(item?.[definition.key])).filter(Number.isFinite);
+        const rows=_tkpFeatureBatchContext?.race===race?_tkpFeatureBatchContext.live:(race?.horses||[]).filter(item=>!(typeof isNonRunner==='function'&&isNonRunner(item)));
+        const norm=tkpFeatureNormalization(race,rows,definition.key);
         const current=tkpNumericScalar(horse?.[definition.key]);
-        if(!Number.isFinite(current)||!values.length) return 0;
-        const unique=[...new Set(values.map(v=>Math.round(v*1e9)/1e9))];
-        if(unique.length===2 && unique.every(v=>v===0||v===1)) return Math.max(0,Math.min(1,current));
-        const min=Math.min(...values),max=Math.max(...values);
+        if(!Number.isFinite(current)||!norm.length) return 0;
+        if(norm.binary) return Math.max(0,Math.min(1,current));
+        const {min,max}=norm;
         if(max<=min) return 0.5;
         const normalized=(current-min)/(max-min);
         return definition.direction==='lower'?1-normalized:normalized;
@@ -455,6 +472,15 @@ function tkpAutoTableFeatureKeys(){
 // satırında veri yoksa o özellik yalnız o at için paydadan çıkarılır; 0 puan gibi
 // işlenmez. Böylece eksik galop, ST, HNDKP veya TR PUAN başka kaynaklardan gelen
 // gerçek sinyalleri yapay olarak bastırmaz.
+const TKP_FEATURE_HORSE_FIELDS={
+    tkp:['score'],agf:['agf','agf_rank'],ypuan:['ypuan'],kg:['weight_kg','kg','weight'],
+    degree:['best_time','priorAccurateAvgSpeed'],ganyan_tr:['tr_ganyan','tr_puan','tr_ganyan_rank'],
+    accurate:['priorAccurateAvgSpeed'],
+    st:['start_no','st','start','kulvar'],history:['priorStarts','priorWins'],
+    last6:['son6_raw'],profile:['horse_name'],bmb:['bmb'],
+    extra:['result_rank','agf_rank','bmb'],rules:['value_score','result_score','hndkp','s_value','g800'],
+    condition:[]
+  };
 function tkpFeaturePresentForHorse(race,horse,key){
   const present=value=>tkpIsNumericScalar(value);
   const presentText=value=>value!==null&&value!==undefined&&String(value).trim()!==''&&String(value).trim()!=='-';
@@ -472,15 +498,7 @@ function tkpFeaturePresentForHorse(race,horse,key){
     const starts=tkpNumericScalar(horse?.priorAccurateStarts);return Number.isFinite(starts)&&starts>0;
   }
   if(key==='accurate_finish')return tkpIsNumericScalar(horse?.priorAccurateFinishSignal);
-  const horseFields={
-    tkp:['score'],agf:['agf','agf_rank'],ypuan:['ypuan'],kg:['weight_kg','kg','weight'],
-    degree:['best_time','priorAccurateAvgSpeed'],ganyan_tr:['tr_ganyan','tr_puan','tr_ganyan_rank'],
-    accurate:['priorAccurateAvgSpeed'],
-    st:['start_no','st','start','kulvar'],history:['priorStarts','priorWins'],
-    last6:['son6_raw'],profile:['horse_name'],bmb:['bmb'],
-    extra:['result_rank','agf_rank','bmb'],rules:['value_score','result_score','hndkp','s_value','g800'],
-    condition:[]
-  };
+
   if(key==='condition')return ['condition_family','condition_text','condition','race_name','race_type'].some(field=>presentText(race?.[field]));
   if(key==='profile')return presentText(horse?.horse_name);
   if(key==='last6')return presentText(horse?.son6_raw);
@@ -491,7 +509,7 @@ function tkpFeaturePresentForHorse(race,horse,key){
   if(key==='tr')return false; // legacy h.tr/h.tr_rank = AGF compatibility alias; learner'a girmez
   if(key==='value')return ['value_score','value_rank','value'].some(field=>present(horse?.[field]));
   if(key==='sp')return ['sp','sp_rank'].some(field=>present(horse?.[field]));
-  const fields=horseFields[key]||TKP_FEATURE_REGISTRY.get(key)?.requiredFields||[];
+  const fields=TKP_FEATURE_HORSE_FIELDS[key]||TKP_FEATURE_REGISTRY.get(key)?.requiredFields||[];
   return fields.length?fields.some(field=>present(horse?.[field])):true;
 }
 
@@ -546,6 +564,17 @@ function tkpTableFeatureSignatureForHorse(horse){
   if(!keys.length||!horse) return '';
   return keys.map(key=>{const v=tkpNumericScalar(horse?.[key]);return Number.isFinite(v)?`${key}:${Math.round(v*1000)/1000}`:'';}).filter(Boolean).join(',');
 }
+function tkpLearningRuntimeCacheSignature(){
+  const persisted=String(db?.learning_state?.dataset_signature||'');
+  if(persisted)return persisted;
+  // A read-only/no-scan model call must not synchronously hash every archived
+  // horse. The session revision invalidates this provisional cache key after
+  // an in-place data edit until the durable signature is available.
+  const fast=typeof tkpFastDbSignature==='function'
+    ?tkpFastDbSignature(db)
+    :`${(db?.files||[]).length}|${(db?.races||[]).length}`;
+  return `${fast}|REV:${typeof _tkpDbRevision==='number'?_tkpDbRevision:0}`;
+}
 if(typeof globalThis!=='undefined'){
   globalThis.tkpAutoTableFeatureKeys=tkpAutoTableFeatureKeys;
   globalThis.tkpAutoTableCompositeScore=tkpAutoTableCompositeScore;
@@ -555,8 +584,7 @@ if(typeof globalThis!=='undefined'){
 
 function tkpFeatureStatsForRace(targetRace,key,adaptiveStats=null){
   if(adaptiveStats&&adaptiveStats[key]) return adaptiveStats[key];
-  const signature=db?.learning_state?.dataset_signature
-    || (typeof learningDatasetSignature==='function'?learningDatasetSignature(db):String((db?.races||[]).length));
+  const signature=tkpLearningRuntimeCacheSignature();
   const profile=typeof adaptiveCacheKey==='function'?adaptiveCacheKey(targetRace):'ALL';
   const cacheKey=[signature,profile,key].join('|');
   if(_tkpCustomFeatureStatsCache.has(cacheKey)) return _tkpCustomFeatureStatsCache.get(cacheKey);
@@ -590,8 +618,7 @@ function tkpFeatureStatsForRace(targetRace,key,adaptiveStats=null){
       const eligible=live.filter(horse=>tkpFeaturePresentForHorse(race,horse,featureKey));
       if(!eligible.length)continue;
       const eligibleSet=new Set(eligible);
-      const values=new Map();
-      for(const horse of eligible)values.set(horse,tkpFeatureValue(race,horse,featureKey));
+      const values=tkpFeatureBatchValues(race,eligible,featureKey,live);
       const ordered=eligible.slice().sort((left,right)=>(values.get(right)||0)-(values.get(left)||0)
         || (typeof TKP_TR_COLLATOR_NUM!=='undefined'?TKP_TR_COLLATOR_NUM.compare(String(left?.horse_no||''),String(right?.horse_no||'')):String(left?.horse_no||'').localeCompare(String(right?.horse_no||''))));
       for(let position=1;position<=5;position++){
@@ -615,6 +642,7 @@ function tkpFeatureStatsForRace(targetRace,key,adaptiveStats=null){
 }
 
 function tkpLearningResultCount(sourceDb=db){
+  const archive=sourceDb===db&&globalThis.TKPArchiveAnalytics?.peek();if(archive)return archive.stats.races;
   if(!sourceDb || !Array.isArray(sourceDb.races)) return 0;
   let count=0;
   for(const race of sourceDb.races){
@@ -752,7 +780,7 @@ function tkpFailureSameHorse(a,b){
 }
 function tkpFailureFlagsFromSnapshot(s){
   if(!s) return {};
-  const rank=Number(s.rank)||0,agf=Number(s.agf_rank)||0,hnd=Number(s.hndkp_rank)||0,jb=Number(s.jbyg_rank)||0,g8=Number(s.g800)||0,tr=Number(s.tr_ganyan_rank)||0;
+  const rank=Number(s.rank)||0,agf=Number(s.agf_rank)||0,hnd=Number(s.hndkp_rank)||0,jb=Number(s.jbyg_rank)||0,g8=Number(s.g800)||0,tr=Number(s.tr_ganyan_rank??s.tr_rank)||0;
   return {
     agf69:agf>=6&&agf<=9,
     hndkp3:hnd>0&&hnd<=3,
@@ -818,7 +846,7 @@ function tkpFailureTrackingRows(targetRace){
   return rows.filter(rec=>{
     if(!rec?.evaluated_at||!String(rec?.winner_no||'').trim()) return false;
     const d=tkpFailureIsoDate(rec.race_date||'');
-    if(target&&d&&d>=target) return false;
+    if(target&&(!d||d>=target)) return false;
     return tkpFailurePreRaceRows(rec).length>0;
   });
 }
@@ -843,7 +871,9 @@ function tkpFailureLearningModel(targetRace=null){
     const winner=pre.find(z=>tkpFailureSameHorse(z?.horse_no,rec.winner_no));
     if(!winner) continue;
     const wf=tkpFailureFlagsFromSnapshot(winner);
-    let mainOutcome=Number.isFinite(Number(rec.main_hit))?Number(rec.main_hit):null;
+    // Missing/blank is NOT a loss: Number(null) and Number('') both equal zero.
+    const outcome01=value=>value!==null&&value!==undefined&&String(value).trim()!==''&&[0,1].includes(Number(value))?Number(value):null;
+    let mainOutcome=outcome01(rec.main_hit);
     if(mainOutcome==null){
       const picks=Array.isArray(rec?.coupons?.main)?rec.coupons.main:[];
       if(picks.length)mainOutcome=picks.some(no=>tkpFailureSameHorse(no,rec.winner_no))?1:0;
@@ -851,8 +881,9 @@ function tkpFailureLearningModel(targetRace=null){
     if(mainOutcome===0){mainMiss++;for(const k of signals)if(wf[k])agg[k].missWith++;}
     else if(mainOutcome===1){mainHit++;for(const k of signals)if(wf[k])agg[k].hitWith++;}
     if(Number(rec.single_reliable)===1){
-      if(Number(rec.single_hit)===0){singleLoss++;for(const k of signals)if(wf[k])singleAgg[k].lossWith++;}
-      else if(Number(rec.single_hit)===1){singleHit++;for(const k of signals)if(wf[k])singleAgg[k].hitWith++;}
+      const singleOutcome=outcome01(rec.single_hit);
+      if(singleOutcome===0){singleLoss++;for(const k of signals)if(wf[k])singleAgg[k].lossWith++;}
+      else if(singleOutcome===1){singleHit++;for(const k of signals)if(wf[k])singleAgg[k].hitWith++;}
     }
   }
   const ready=rows.length>=TKP_FAILURE_MIN_DONE&&mainMiss>=TKP_FAILURE_MIN_MISSES;
@@ -948,8 +979,7 @@ function tkpApplyModelFamilyWeightPolicy(raw){
 
 
 async function tkpPrepareFeatureStatsForRaceAsync(targetRace,adaptiveStats=null,options={}){
-  const signature=db?.learning_state?.dataset_signature
-    || (typeof learningDatasetSignature==='function'?learningDatasetSignature(db):String((db?.races||[]).length));
+  const signature=tkpLearningRuntimeCacheSignature();
   const profile=typeof adaptiveCacheKey==='function'?adaptiveCacheKey(targetRace):'ALL';
   const pause=typeof options?.pause==='function'?options.pause:()=>new Promise(resolve=>setTimeout(resolve,0));
   let rows=[];
@@ -967,6 +997,8 @@ async function tkpPrepareFeatureStatsForRaceAsync(targetRace,adaptiveStats=null,
   }
   if(!results.size)return true;
   const sameActual=(horse,target)=>String(horse?.horse_no)===String(target?.horse_no)||(typeof sameEkuri==='function'&&sameEkuri(horse?.horse_no,target?.horse_no));
+  const clock=()=>typeof performance!=='undefined'?performance.now():Date.now();
+  let sliceStart=clock();
   for(let raceIndex=0;raceIndex<rows.length;raceIndex++){
     const race=rows[raceIndex];
     const live=typeof tkpLiveHorses==='function'?tkpLiveHorses(race):(race.horses||[]).filter(horse=>!isNonRunner(horse));
@@ -978,8 +1010,7 @@ async function tkpPrepareFeatureStatsForRaceAsync(targetRace,adaptiveStats=null,
         const eligible=live.filter(horse=>tkpFeaturePresentForHorse(race,horse,featureKey));
         if(eligible.length){
           const eligibleSet=new Set(eligible);
-          const values=new Map();
-          for(const horse of eligible)values.set(horse,tkpFeatureValue(race,horse,featureKey));
+          const values=tkpFeatureBatchValues(race,eligible,featureKey,live);
           const ordered=eligible.slice().sort((left,right)=>(values.get(right)||0)-(values.get(left)||0)
             || (typeof TKP_TR_COLLATOR_NUM!=='undefined'?TKP_TR_COLLATOR_NUM.compare(String(left?.horse_no||''),String(right?.horse_no||'')):String(left?.horse_no||'').localeCompare(String(right?.horse_no||''))));
           for(let position=1;position<=5;position++){
@@ -993,12 +1024,12 @@ async function tkpPrepareFeatureStatsForRaceAsync(targetRace,adaptiveStats=null,
           }
         }
         featureIndex++;
-        if((featureIndex&7)===0)await pause();
+        if(clock()-sliceStart>=8){await pause();sliceStart=clock();}
       }
     }
     // Eski Win8.1/Opera'da uzun görev oluşmaması için birkaç yarışta bir ana
     // olay kuyruğuna dön. Hesap değişmez; yalnız çalışma dilimlere ayrılır.
-    if((raceIndex&3)===3)await pause();
+    if(clock()-sliceStart>=8){await pause();sliceStart=clock();}
   }
   for(const [featureKey,out] of results){
     for(const bucketKey of ['p1','p2','p3','p4','p5']){
@@ -1011,7 +1042,7 @@ async function tkpPrepareFeatureStatsForRaceAsync(targetRace,adaptiveStats=null,
 
 async function tkpPrewarmAltiliWinnerOrderAsync(race,horses=null,options={}){
   if(!race)return [];
-  if(typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(race))return altiliWinnerOrderForRace(race,horses);
+  if(!options.forceFull&&typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(race))return altiliWinnerOrderForRace(race,horses);
   const pause=typeof options?.pause==='function'?options.pause:()=>new Promise(resolve=>setTimeout(resolve,0));
   // adaptiveSignalStats ortak istatistikleri hazırlar; kayıt-sistemi feature
   // istatistikleri ise aşağıda aynı matematikle fakat kooperatif dilimlerle oluşur.
@@ -1031,10 +1062,9 @@ if(typeof globalThis!=='undefined')globalThis.tkpPrewarmAltiliWinnerOrderAsync=t
 function tkpPurposeWeightsForRace(targetRace,purpose='prediction',position=4,options=null){
   const safePosition=Math.max(1,Math.min(5,Number(position)||4));
   const noScan=options?.noScan===true;
-  const signature=(db?.learning_state?.dataset_signature)
-    || (typeof learningDatasetSignature==='function'?learningDatasetSignature(db):String((db?.races||[]).length));
+  const signature=tkpLearningRuntimeCacheSignature();
   const profile=typeof adaptiveCacheKey==='function'?adaptiveCacheKey(targetRace):'ALL';
-  const cacheKey=[signature,profile,purpose,safePosition,noScan?'NOSCAN':'FULL'].join('|');
+  const cacheKey=[signature,profile,purpose,safePosition,noScan?'NOSCAN':'FULL',globalThis.TKPArchiveAnalytics?.peek()?.source?.at||''].join('|');
   if(_tkpPurposeWeightCache.has(cacheKey)) return _tkpPurposeWeightCache.get(cacheKey);
 
   // Salt-okunur/arşiv UI yolu hiçbir zaman eksik cache yüzünden tam tarihsel tarama
@@ -1047,7 +1077,7 @@ function tkpPurposeWeightsForRace(targetRace,purpose='prediction',position=4,opt
       stats=persistedKey&&typeof tkpAdaptiveStatsPersistRead==='function'?tkpAdaptiveStatsPersistRead(persistedKey):null;
     }catch(_){ stats=null; }
   }else stats=typeof adaptiveSignalStats==='function'?adaptiveSignalStats(targetRace):null;
-  const sample=Number(stats?._source?.rows?.length)||0;
+  const sample=Number(stats?._source?.count??stats?._source?.rows?.length)||0;
   const trust=Math.max(0,Math.min(1,sample/(typeof ADAPTIVE_FULL_TRUST_RACES==='number'?ADAPTIVE_FULL_TRUST_RACES:25)));
   const keys=[...TKP_FEATURE_REGISTRY.keys()];
   const targetMix=purpose==='sidebet_position'

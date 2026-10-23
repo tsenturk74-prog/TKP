@@ -5,7 +5,8 @@
  */
 (function(global){
   'use strict';
-  const VERSION='R16_68_INDEXED_TDRC';
+  const VERSION='R19_45_INDEXED_TDRC';
+  const diagnostics={historyBuilds:0,profileBuilds:0,bandQueries:0,bandCacheHits:0};
   const memo=new Map();
   const tdrcMemo=new Map();
 
@@ -28,10 +29,10 @@
     if(memo.size>1200){ const first=memo.keys().next().value; memo.delete(first); }
     return val;
   }
-  function clear(){ memo.clear(); tdrcMemo.clear(); similarBandCache.clear(); bandHistoryIndex=null; }
-  global.addEventListener && global.addEventListener('tkp:db-changed', clear);
+  function clear(historyChanged=true){ memo.clear(); tdrcMemo.clear(); if(historyChanged){similarBandCache.clear();bandHistoryIndex=null;bandGeneration++;} }
+  global.addEventListener && global.addEventListener('tkp:db-changed', event=>clear(event?.detail?.learningChanged!==false));
   global.tkpV31ClearRuntimeCache=clear;
-  global.tkpV31RuntimeInfo=function(){ return {version:VERSION,memo:memo.size,tdrc:tdrcMemo.size}; };
+  global.tkpV31RuntimeInfo=function(){ return {version:VERSION,memo:memo.size,tdrc:tdrcMemo.size,...diagnostics,bands:similarBandCache.size}; };
 
   function wrap(name, keyer){
     const original=global[name];
@@ -77,45 +78,74 @@
   }
   const similarBandCache=new Map();
   let bandHistoryIndex=null;
+  let bandGeneration=0,bandSource=null,bandSourceRaces=null,bandSourceCount=-1;
+  function bandSignature(){
+    const d=global.db,rs=d?.races;
+    if(d!==bandSource||rs!==bandSourceRaces||rs?.length!==bandSourceCount){bandGeneration++;bandSource=d;bandSourceRaces=rs;bandSourceCount=rs?.length;similarBandCache.clear();bandHistoryIndex=null;}
+    return String(d?.learning_state?.dataset_signature||'')+'|'+bandGeneration;
+  }
+  function bandRow(r){return {race:r,date:String(r?.race_date||r?.date||''),distance:Number(r?.distance)||0,surface:fkey(r?.surface),breed:fkey(r?.breed),condition:fkey(r?.condition_family||r?.condition_text),times:arr(r?.horses).map(historicalTimeOfHorse).filter(Number.isFinite)};}
+  async function prepareBandHistory({pause=()=>new Promise(r=>setTimeout(r,0))}={}){
+    const signature=bandSignature(),races=arr(global.db?.races);
+    if(bandHistoryIndex?.signature===signature)return;
+    const rows=[],ordered=[];let tick=performance.now();
+    for(const race of races){const row=bandRow(race),index=rows.length;rows.push(row);for(const time of row.times)ordered.push({index,time,distance:row.distance,base:time-row.distance*.065});if(performance.now()-tick>=8){await pause();tick=performance.now();}}
+    // Small sorted runs and cooperative merge avoid one uninterruptible archive sort.
+    const run=2048;let sorted=[];
+    for(let i=0;i<ordered.length;i+=run){sorted.push(...ordered.slice(i,i+run).sort((a,b)=>a.base-b.base));if(performance.now()-tick>=8){await pause();tick=performance.now();}}
+    let temp=new Array(sorted.length);
+    for(let width=run;width<sorted.length;width*=2){for(let start=0;start<sorted.length;start+=2*width){let a=start,b=Math.min(start+width,sorted.length),ae=b,be=Math.min(start+2*width,sorted.length),k=start;while(a<ae||b<be){temp[k++]=b>=be||(a<ae&&sorted[a].base<=sorted[b].base)?sorted[a++]:sorted[b++];if(k%1024===0&&performance.now()-tick>=8){await pause();tick=performance.now();}}}const swap=sorted;sorted=temp;temp=swap;}
+    if(signature!==bandSignature())return;
+    diagnostics.historyBuilds++;bandHistoryIndex={signature,races,count:races.length,rows,ordered:sorted};
+  }
+  global.tkpPrepareHistoricalBandAsync=prepareBandHistory;
   function historyIndex(signature){
     const races=arr(global.db?.races);
     if(bandHistoryIndex&&bandHistoryIndex.signature===signature&&bandHistoryIndex.races===races&&bandHistoryIndex.count===races.length)return bandHistoryIndex.rows;
-    const rows=races.map(r=>({race:r,date:String(r?.race_date||r?.date||''),distance:Number(r?.distance)||0,
-      surface:fkey(r?.surface),breed:fkey(r?.breed),condition:fkey(r?.condition_family||r?.condition_text),
-      times:arr(r?.horses).map(historicalTimeOfHorse).filter(Number.isFinite)}));
-    bandHistoryIndex={signature,races,count:races.length,rows};
+    diagnostics.historyBuilds++;
+    const rows=races.map(bandRow);
+    const ordered=[];rows.forEach((row,index)=>{for(const time of row.times)ordered.push({index,time,distance:row.distance,base:time-row.distance*.065});});
+    ordered.sort((a,b)=>a.base-b.base);
+    bandHistoryIndex={signature,races,count:races.length,rows,ordered};
     return rows;
   }
   function similarRaceBand(r){
+    diagnostics.bandQueries++;
     const dist=Number(r?.distance)||0;
     if(!dist || !global.db) return null;
-    const signature=datasetSig();
+    const signature=bandSignature();
     const targetDate=String(r?.race_date||r?.date||'');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(targetDate))return null;
-    const key=[signature,targetDate,fkey(r?.hippodrome),fkey(r?.surface),fkey(r?.breed),fkey(r?.condition_family||r?.condition_text),dist].join('|');
-    if(similarBandCache.has(key)) return similarBandCache.get(key);
+    const key=[signature,targetDate,fkey(r?.surface),fkey(r?.breed),fkey(r?.condition_family||r?.condition_text),dist].join('|');
+    if(similarBandCache.has(key)){diagnostics.bandCacheHits++;return similarBandCache.get(key);}
     const surf=fkey(r?.surface), breed=fkey(r?.breed), cond=fkey(r?.condition_family||r?.condition_text);
-    const times=[];
-    for(const rr of historyIndex(signature)){
-      const sourceDate=rr.date;
-      if(rr.race===r || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate) || sourceDate>=targetDate) continue;
-      const rd=rr.distance;
-      if(!rd || Math.abs(rd-dist)>300) continue;
-      const sf=rr.surface, br=rr.breed, cd=rr.condition;
+    const indexed=historyIndex(signature),eligible=new Uint8Array(indexed.length);
+    for(let i=0;i<indexed.length;i++){
+      const rr=indexed[i],rd=rr.distance;
+      if(!rd||!/^\d{4}-\d{2}-\d{2}$/.test(rr.date)||rr.date>=targetDate||Math.abs(rd-dist)>300)continue;
       let penalty=Math.abs(rd-dist)/100;
-      if(surf && sf!==surf) penalty+=5;
-      if(breed && br!==breed) penalty+=2;
-      if(cond && cd!==cond) penalty+=1;
-      if(penalty>7) continue;
-      for(const t of rr.times){
-        times.push(t + (dist-rd)*0.065);
-      }
+      if(surf&&rr.surface!==surf)penalty+=5;
+      if(breed&&rr.breed!==breed)penalty+=2;
+      if(cond&&rr.condition!==cond)penalty+=1;
+      if(penalty<=7)eligible[i]=1;
     }
-    const band=bandFromTimes(times);
+    // Distance adjustment changes order after the shared base sort. Collect
+    // matches, then sort once: inserting every value into an ordered array was
+    // quadratic and blocked the prediction menu for seconds on a real archive.
+    const values=[];
+    for(const row of bandHistoryIndex.ordered){
+      if(!eligible[row.index])continue;
+      const sec=row.time+(dist-row.distance)*.065;if(!(sec>20&&sec<260))continue;
+      values.push(sec);
+    }
+    values.sort((a,b)=>a-b);
+    const count=values.length;
+    const band=count<2?null:{min:values[Math.round((count-1)*.08)],median:values[Math.round((count-1)*.50)],max:values[Math.round((count-1)*.92)],n:count};
     similarBandCache.set(key,band);
-    if(similarBandCache.size>800){ const first=similarBandCache.keys().next().value; similarBandCache.delete(first); }
+    if(similarBandCache.size>8192){ const first=similarBandCache.keys().next().value; similarBandCache.delete(first); }
     return band;
   }
+  global.tkpV31HistoricalBand=similarRaceBand;
   function strengthPct(r,h){
     const live=arr(r?.horses).filter(x=>!(typeof isNonRunner==='function'&&isNonRunner(x)));
     if(live.length<2) return 0.50;

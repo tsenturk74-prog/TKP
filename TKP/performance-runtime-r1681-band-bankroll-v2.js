@@ -7,13 +7,17 @@
 
 const TKP_PERFORMANCE_VERSION = 'R16_92_PIPELINE_RESPONSIVE';
 const TKP_PANEL_HTML_CACHE_LIMIT = 36;
+// R19.47.12 SPEED HARDENING: ağır, görünmeyen ön-ısıtmalar ancak kullanıcı uzun süre
+// boşta kaldığında çalışır. İlk Bakış/kupon sonrası 1.6 sn içinde tam arşiv taraması
+// başlatmak eski Windows/Chromium cihazlarda 'sonradan kasma' üretiyordu.
+const TKP_HEAVY_BACKGROUND_IDLE_MS = 8000;
 // Kullanıcı görünümünde kabul edilebilir en uzun tek-parça çalışma süresi.
-// 20 sn tanı eşiğidir; 25 sn SLA ihlalidir; 30 sn kritik ihlaldir. Ağdaki
-// çok kaynaklı toplam iş arka planda devam edebilir, ancak her alt iş burada
-// ayrı ölçülür; "toplam uzun sürdü" gerekçesiyle görünmez bırakılmaz.
+// 20 sn erken uyarı, 35 sn gecikme ihlali, 50 sn kesin kritik sınırdır.
+// 50 saniyeyi aşan her alt işlem darboğaz/hata olarak kayda girer. Uzun ağ işleri
+// arka planda sürebilir ancak kullanıcı arayüzü bu yüzden kilitli bırakılmaz.
 const TKP_LATENCY_WATCH_MS = 20_000;
-const TKP_LATENCY_LIMIT_MS = 25_000;
-const TKP_LATENCY_CRITICAL_MS = 30_000;
+const TKP_LATENCY_LIMIT_MS = 35_000;
+const TKP_LATENCY_CRITICAL_MS = 50_000;
 const _tkpPanelHtmlCache = new Map();
 const _tkpPanelPromiseCache = new Map();
 const _tkpPerformanceMetrics = [];
@@ -130,8 +134,15 @@ async function tkpPumpTaskQueue(){
   if(_tkpTaskPumpRunning)return;_tkpTaskPumpRunning=true;
   try{
     while(_tkpTaskQueue.length){
-      _tkpTaskQueue.sort((a,b)=>a.priority-b.priority||a.id-b.id);
-      const row=_tkpTaskQueue.shift();
+      // R19.47.12: Her görevde bütün kuyruğu sort etmek yerine yalnız en iyi satırı
+      // O(n) seç. Çok sayıda ayak/panel işi biriktiğinde gereksiz O(n log n) kopyalama
+      // ve karşılaştırma dalgasını önler; görev sırası (priority,id) aynen korunur.
+      let bestIndex=0;
+      for(let i=1;i<_tkpTaskQueue.length;i++){
+        const a=_tkpTaskQueue[i],b=_tkpTaskQueue[bestIndex];
+        if(a.priority<b.priority||(a.priority===b.priority&&a.id<b.id))bestIndex=i;
+      }
+      const row=_tkpTaskQueue.splice(bestIndex,1)[0];
       if(!row||row.cancelled||_tkpTaskKeys.get(row.key)!==row)continue;
       if(tkpBackgroundTaskBlockedByBarrier(row)){
         // Bariyer sürerken sadece bu arka plan işini kısa süre sonra yeniden
@@ -516,8 +527,15 @@ function tkpPerformanceSignature(){
 function tkpRaceResultsSignature(raceResults){
   const rows=Array.isArray(raceResults)?raceResults:[];
   const perf=tkpPerformanceSignature();
+  // Official places can arrive before payouts and without a dataset revision.
+  // Inspect only this meeting, so same-array in-place updates also invalidate HTML.
+  const outcome=rows.map(item=>{
+    const r=item?.r||{};
+    return [r.result_integrity_status,r.result_verified_depth,(r.horses||[]).map(h=>
+      [h.horse_no,h.finish_position,h.winner,h.non_runner,h.kosmaz].join(':')).join(',')].join(':');
+  }).join('|');
   const cached=_tkpRaceResultsSignatureCache.get(rows);
-  if(cached&&cached.perf===perf) return cached.value;
+  if(cached&&cached.perf===perf&&cached.outcome===outcome) return cached.value;
   const value=rows.map(item=>{
     const race=item?.r||{};
     const available=(race.available_bets||[]).map(value=>
@@ -537,8 +555,8 @@ function tkpRaceResultsSignature(raceResults){
       payouts,
       (item?.scored||[]).map(horse=>`${horse.horse_no}:${Number(horse.score)||0}`).join(',')
     ].join(':');
-  }).join('|');
-  _tkpRaceResultsSignatureCache.set(rows,{perf,value});
+  }).join('|')+'|official:'+outcome;
+  _tkpRaceResultsSignatureCache.set(rows,{perf,outcome,value});
   return value;
 }
 
@@ -686,10 +704,10 @@ function tkpSideBetPanelCacheKey(raceResults){
     // kalabilir. O(1) revizyon bu durumda arşiv yan-bahis cache'inin doğru satırı
     // yeniden okumasını sağlar; bütün performans cache'ini boşaltmaya gerek yoktur.
     const couponRevision=`${(db?.auto_coupon_log||[]).length}|${(db?.forward_tracking_log||[]).length}|${Number(db?.settings?.backtest_snapshot_revision)||0}`;
-    return tkpPanelCacheKey('sidebet-archive',`${tkpRaceResultsSignature(raceResults)}|${dataset}|${logRevision}|${couponRevision}`);
+    return tkpPanelCacheKey('sidebet-archive-pool-v2',`${tkpRaceResultsSignature(raceResults)}|${dataset}|${logRevision}|${couponRevision}`);
   }
   return tkpPanelCacheKey(
-    'sidebet',
+    'sidebet-pool-v2',
     `${tkpRaceResultsSignature(raceResults)}|${tkpCouponStateSignature()}`
   );
 }
@@ -782,7 +800,7 @@ function tkpBacktestCacheKey(budgets,limit){
     alt:Number(budgets?.alt)||0,
     surprise:Number(budgets?.surprise)||0
   };
-  return [TKP_PERFORMANCE_VERSION,'backtest','TARGETS:140-220,90-150,80-140','HARD_LIMIT:90000',tkpBacktestDataSignature(),limit,safe.main,safe.main2,safe.alt,safe.surprise].join('|');
+  return [TKP_PERFORMANCE_VERSION,'backtest','SCOPE:FULL_ARCHIVE_V1','TARGETS:140-220,90-150,80-140','HARD_LIMIT:120000',tkpBacktestDataSignature(),limit,safe.main,safe.main2,safe.alt,safe.surprise].join('|');
 }
 
 function tkpGetBacktestHTMLCached(budgets,limit){
@@ -820,9 +838,9 @@ function tkpPrewarmPredictionPanels(raceResults){
   // taramasının çakışması event-loop tepesini yükseltip tahmin ekranından sonraki
   // ilk tıklamayı geciktiriyordu. Tek merkezî kuyruk bu işleri seri yürütür; USER
   // işleri önceliklidir ve sonuç/cache içeriği değişmez.
-  if(typeof tkpQueueTask==='function') tkpQueueTask('prediction-sidebet-prewarm',start,{priority:'background',replace:true,minIdleMs:1600});
-  else if(typeof tkpRunWhenUserIdle==='function') tkpRunWhenUserIdle(start,{minIdleMs:1600,retryMs:250});
-  else setTimeout(start,450);
+  if(typeof tkpQueueTask==='function') tkpQueueTask('prediction-sidebet-prewarm',start,{priority:'background',replace:true,minIdleMs:TKP_HEAVY_BACKGROUND_IDLE_MS});
+  else if(typeof tkpRunWhenUserIdle==='function') tkpRunWhenUserIdle(start,{minIdleMs:TKP_HEAVY_BACKGROUND_IDLE_MS,retryMs:350});
+  else setTimeout(start,TKP_HEAVY_BACKGROUND_IDLE_MS);
   return true;
 }
 
@@ -891,9 +909,9 @@ function tkpPrewarmAdaptiveLearningWeights(){
   // prediction-sidebet-prewarm ile aynı anda iki tam geçmiş hesabı çalıştırma.
   // Sıralama yalnız zamanlamayı düzenler; model ağırlıkları ve kalıcı cache anahtarı
   // aynıdır. Kuyruk yoksa geriye dönük idle yolu korunur.
-  if(typeof tkpQueueTask==='function') tkpQueueTask('prediction-adaptive-weights-prewarm',start,{priority:'background',replace:true,minIdleMs:1600});
-  else if(typeof tkpRunWhenUserIdle==='function') tkpRunWhenUserIdle(start,{minIdleMs:1600,retryMs:250});
-  else setTimeout(start,450);
+  if(typeof tkpQueueTask==='function') tkpQueueTask('prediction-adaptive-weights-prewarm',start,{priority:'background',replace:true,minIdleMs:TKP_HEAVY_BACKGROUND_IDLE_MS});
+  else if(typeof tkpRunWhenUserIdle==='function') tkpRunWhenUserIdle(start,{minIdleMs:TKP_HEAVY_BACKGROUND_IDLE_MS,retryMs:350});
+  else setTimeout(start,TKP_HEAVY_BACKGROUND_IDLE_MS);
   return true;
 }
 
@@ -906,13 +924,13 @@ function tkpPrewarmCouponSet(raceResults,budgets){
   const run=async()=>{
     if(generation!==_tkpCouponPrewarmGeneration) return;
     try{
-      if(typeof tkpBuildCouponSetAdaptiveAsync==='function') await tkpBuildCouponSetAdaptiveAsync(raceResults,{...safe,mainMax:2400,surpriseMax:1200});
-      else if(typeof tkpBuildCouponSetAdaptive==='function') tkpBuildCouponSetAdaptive(raceResults,{...safe,mainMax:2400,surpriseMax:1200});
+      if(typeof tkpBuildCouponSetAdaptiveAsync==='function') await tkpBuildCouponSetAdaptiveAsync(raceResults,{...safe,mainMax:3000,surpriseMax:3000});
+      else if(typeof tkpBuildCouponSetAdaptive==='function') tkpBuildCouponSetAdaptive(raceResults,{...safe,mainMax:3000,surpriseMax:3000});
       else buildCouponSetFast(raceResults,safe);
     }catch(_e){}
   };
-  if(typeof tkpRunWhenUserIdle==='function') tkpRunWhenUserIdle(run,{minIdleMs:1600,retryMs:250});
-  else setTimeout(run,450);
+  if(typeof tkpRunWhenUserIdle==='function') tkpRunWhenUserIdle(run,{minIdleMs:TKP_HEAVY_BACKGROUND_IDLE_MS,retryMs:350});
+  else setTimeout(run,TKP_HEAVY_BACKGROUND_IDLE_MS);
   return true;
 }
 

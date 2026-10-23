@@ -1,14 +1,16 @@
 (function(g){
 'use strict';
-const VERSION='R16.80-POLICY-OVERVIEW-SINGLES-2';
+const VERSION='R19.47.14-POLICY-COMMON-DISPLAY-TOP-N';
 const roles=['main','alt','surprise'];
 const names={main:'Normal · ortak kazanma kapsamı',alt:'Sürpriz · destekli alternatif senaryo',surprise:'Uzman + Kulis · doğrulanmış yorumcu desteği'};
 const no=h=>String(h?.horse_no??h??'');
 const key=h=>{const n=no(h),tag=h?.ekuri_group||(typeof g.ekuriGroup==='function'?g.ekuriGroup(n):n.match(/-(E\d+)$/i)?.[1]);return tag?'E:'+tag:'N:'+n;};
 const known=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v));
 const clone=x=>JSON.parse(JSON.stringify(x));
-function poolFor(leg){
- const source=leg.ordered?.length?leg.ordered:leg.allHorses?.length?leg.allHorses:leg.r?.horses||[];
+function poolFor(leg,role){
+ const visible=(role==='main'||role==='alt')&&typeof g.predictionDisplayRows==='function'
+  ?g.predictionDisplayRows(leg.x||{r:leg.r,scored:leg.displayOrder||leg.ordered||leg.allHorses||leg.r?.horses},Infinity,'score-desc').rows:null;
+ const source=visible?.length?visible:leg.ordered?.length?leg.ordered:leg.allHorses?.length?leg.allHorses:leg.r?.horses||[];
  const merged=new Map();for(const h of [...source,...(leg.r?.horses||[])])if(h&&!merged.has(no(h)))merged.set(no(h),h);
  const grouped=new Map();let index=0;
  for(const h of merged.values()){
@@ -54,7 +56,7 @@ function enforce(built){
   const c=built?.[role];if(!c||c.error||c.readOnlySnapshot||c.policyAudit?.version===VERSION)continue;
   const audits=[];
   for(const leg of c.legs||[]){
-   const p=poolFor(leg),original=leg.picks||[],target=original.length,changes=[];
+   const p=poolFor(leg,role),original=leg.picks||[],target=original.length,changes=[];
    let picks=distinct(original);
    for(const row of p.rows){if(picks.length>=target)break;if(!picks.some(h=>key(h)===row.key))picks.push(row.h);}
    if(picks.length!==original.length||new Set(original.map(key)).size!==original.length)changes.push({code:'EKURI_SINGLE_BET',before:original.map(no),after:picks.map(no)});
@@ -65,6 +67,18 @@ function enforce(built){
       .filter(z=>!anchors.some(a=>a.key===key(z.h))&&!z.exception)
       .sort((a,b)=>(a.row?.market||0)-(b.row?.market||0)||(b.row?.rank||0)-(a.row?.rank||0));
     if(replaceable.length){const slot=replaceable[0];changes.push({code:'MARKET_ANCHOR_RESTORED',added:no(anchor.h),removed:no(slot.h),marketRank:anchor.marketRank});picks[slot.i]=anchor.h;}
+   }
+   // Normal and surprise multi-picks share the visible pre-race order.
+   // Ekuri counts once; expert choices, singles and frozen tickets stay intact.
+   if((role==='main'||role==='alt')&&target>1){
+    const displayed=typeof g.predictionDisplayRows==='function'
+     ?g.predictionDisplayRows(leg.x||{r:leg.r,scored:leg.displayOrder||leg.ordered||leg.allHorses},Infinity,'score-desc').rows
+     :p.rows.map(row=>row.h);
+    const top=distinct((displayed||[]).filter(h=>!(typeof g.isNonRunner==='function'&&g.isNonRunner(h)))).slice(0,target);
+    if(top.length===target){
+     if(top.map(no).join('|')!==picks.map(no).join('|'))changes.push({code:'DISPLAY_TOP_N',before:picks.map(no),after:top.map(no)});
+     picks=top;
+    }
    }
    leg.picks=picks;
    const selected=new Set(picks.map(key));
@@ -81,7 +95,7 @@ function enforce(built){
    leg.policyAudit=audit;leg.selectionOrderNos=audit.input.map(h=>h.no);audits.push(audit);
   }
   c.combos=(c.legs||[]).reduce((n,l)=>n*l.picks.length,1);c.cost=Math.round(c.combos*Number(c.unit||1)*100)/100;
-  c.leftover=Number(c.budgetTL||1400)-c.cost;
+  c.leftover=Number(c.budgetTL||2000)-c.cost;
    const singles=(c.legs||[]).filter(l=>l.picks.length===1).length;
   const widths=(c.legs||[]).map(l=>l.picks.length);
   const twoHorseLegs=widths.filter(n=>n===2).length;
@@ -91,7 +105,7 @@ function enforce(built){
    singleCount:singles,cost:c.cost,legs:audits,
    distribution:{valid:distributionValid,widths,twoHorseLegs,maxTwoHorseLegs:1,minimumMultiWidth:3,undersizedMultiLegs}};
   const unsafeSingle=audits.some(a=>a.single?.eligibility?.ok===false);
-  if(c.legs?.length===6&&(unsafeSingle||singles<1||singles>2||c.cost<1000||c.cost>1400||!distributionValid)){
+  if(c.legs?.length===6&&(unsafeSingle||singles<1||singles>2||c.cost<1000||c.cost>2000||!distributionValid)){
    if(unsafeSingle){
     c.error='Genel Bakış lideri ve TEK güven kontrolü uyuşmadı; kupon yayımlanmadı.';
     c.policyAudit.status='UNSAFE_SINGLE';
@@ -99,7 +113,7 @@ function enforce(built){
    }
    c.error=!distributionValid
     ?'2 atlı ayak en fazla bir tane, diğer çoklu ayaklar en az 3 at olmalı; kupon yayımlanmadı.'
-    :'1–2 tek ve 1.000–1.400 TL denetimi geçilemedi; kupon yayımlanmadı.';
+    :'1–2 tek ve 1.000–2.000 TL denetimi geçilemedi; kupon yayımlanmadı.';
    c.policyAudit.status='CONTRACT_FAILED';
   }
  }
@@ -109,10 +123,11 @@ function html(c){
  const a=c?.policyAudit;if(!a)return '';
  const esc=g.esc||((x)=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
  const rows=(a.legs||[]).map(l=>{
-  const changes=l.changes.map(z=>z.code==='MARKET_ANCHOR_RESTORED'?`${z.added} eklendi, ${z.removed} çıkarıldı: güçlü piyasa adayı`:'Eküri tek bahis seçimi olarak düzeltildi');
+  const changes=l.changes.map(z=>z.code==='DISPLAY_TOP_N'?`Tablodaki ilk ${l.width} at seçildi`:z.code==='MARKET_ANCHOR_RESTORED'?`${z.added} eklendi, ${z.removed} çıkarıldı: güçlü piyasa adayı`:'Eküri tek bahis seçimi olarak düzeltildi');
   const omitted=l.excluded.filter(z=>z.marketRank<=3).map(z=>`${z.no}: ${z.reason==='TEK_BUDGET'?'bu ayak tek bırakıldı':z.reason==='VERIFIED_KULIS_OVERRIDE'?'doğrulanmış Kulis desteğiyle başka aday seçildi':'ayak kapsamı dışında'}`);
   const support=(l.kulis||[]).filter(k=>k.priority?.authors?.length).map(k=>`${k.no}: `+k.priority.authors.map(x=>`${x.source} / ${x.author} (${x.events} sonuçlu olay${x.bitalih?', Bi’Talih önceliği':''})`).join(', '));
-  return `<li><b>${l.leg}. ayak · ${l.width===1?'Göreli tek':l.width+' seçim'}</b>${changes.length?' · '+esc(changes.join('; ')):''}${omitted.length?'<br>'+esc(omitted.join('; ')):''}${support.length?'<br>'+esc(support.join('; ')):''}</li>`;
+  const recordedOrder=(l.input||[]).slice().sort((x,y)=>x.modelRank-y.modelRank).map(x=>x.no).join(' → ');
+  return `<li><b>${l.leg}. ayak · ${l.width===1?'Göreli tek':l.width+' seçim'}</b>${recordedOrder?'<br>Kupon oluşturulurken kullanılan sıra: '+esc(recordedOrder):''}${changes.length?' · '+esc(changes.join('; ')):''}${omitted.length?'<br>'+esc(omitted.join('; ')):''}${support.length?'<br>'+esc(support.join('; ')):''}</li>`;
  }).join('');
  return `<details class="couponPolicyAudit"><summary>Neden bu kupon? · seçim denetimi</summary><p>${esc(a.objective)}</p><p>Modelin AGF yöntemine üstünlüğü henüz doğrulanmadı. Tekler göreli adaydır.</p><ul>${rows}</ul></details>`;
 }

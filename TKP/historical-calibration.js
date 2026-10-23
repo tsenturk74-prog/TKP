@@ -133,9 +133,14 @@ const historicalFileIndexes=new WeakMap();
 function historicalFileForRow(row,source){
   const files=arr(source.files);let index=historicalFileIndexes.get(files);
   const id=String(row.file_id);let hit=index?.byId.get(id);
-  if(!index||!hit||index.length!==files.length||(hit&&(files[hit.index]!==hit.file||String(hit.file.id)!==id))){
+  const now=typeof performance!=='undefined'&&performance.now?performance.now():Date.now();
+  // Dosyası olmayan satır (ör. silinmiş toplantının prediction_log kaydı) her çağrıda
+  // bütün dizini yeniden kuruyordu: 36 bin satırda O(n²) ~1 sn kilitlenme. Aynı uzunlukta
+  // yakın zamanda kurulmuş dizinde bulunamayan kimlik için yeniden kurulum atlanır.
+  const freshMiss=!hit&&index&&index.length===files.length&&now-index.builtAt<1000;
+  if(!freshMiss&&(!index||!hit||index.length!==files.length||(hit&&(files[hit.index]!==hit.file||String(hit.file.id)!==id)))){
     const byId=new Map();files.forEach((file,index)=>{const key=String(file.id);if(!byId.has(key))byId.set(key,{file,index});});
-    index={length:files.length,byId};historicalFileIndexes.set(files,index);hit=byId.get(id);
+    index={length:files.length,byId,builtAt:now};historicalFileIndexes.set(files,index);hit=byId.get(id);
   }
   return hit?.file;
 }
@@ -179,7 +184,9 @@ function meetingRaceResults(source,file,rowsOverride=null){
 // kilidi olmayan satırda mevcut skor sıralamasına düş. Sonuç/winner sıralamaya
 // kesinlikle katılmaz. Böylece REAL509 ilk hazırlığı da UI'yi kilitlemez.
 function meetingRaceResultsFromLockedSnapshots(source,file,rowsOverride=null){
-  const rows=(Array.isArray(rowsOverride)?rowsOverride:arr(source.races).filter(r=>String(r.file_id)===String(file.id))).slice().sort((a,b)=>num(a.leg)-num(b.leg));
+  const rawRows=(Array.isArray(rowsOverride)?rowsOverride:arr(source.races).filter(r=>String(r.file_id)===String(file.id)));
+  // Aynı ayak için yinelenen/pasif satırlar (ör. kısmi + tam sonuç) altı ayağı bozmasın.
+  const rows=(typeof global.tkpEffectiveFileRaces==='function'?global.tkpEffectiveFileRaces(rawRows):rawRows).slice().sort((a,b)=>num(a.leg)-num(b.leg));
   return rows.map(r=>{
     const scored=arr(r.horses).filter(h=>h&&!(typeof global.isNonRunner==='function'&&global.isNonRunner(h))).map(h=>({...h})).sort((a,b)=>{
       const ar=num(a?.prediction_order_snapshot)||num(a?.predicted_rank)||9999;
@@ -278,7 +285,7 @@ async function persistHistoricalCoupon(source,file,raceResults,built,options={})
     alt:evaluateHistoricalCouponRows(coupons.alt,raceResults),
     surprise:evaluateHistoricalCouponRows(coupons.surprise,raceResults)
   };
-  const snap={schema_version:6,algorithm_version:ARCHIVE_LAYOUT_VERSION,id,key:[file.race_date,fold(file.hippodrome),num(file.altili_no)||1].join('|'),created_at:createdAt,source:SOURCE,source_label:'Geçmiş yeniden hesaplama',backtest_eligible:1,manual_adjustment:0,historical_calibration:1,archive_snapshot:1,pre_race_only:0,snapshot_time_verified:0,snapshot_locked_at:createdAt,resolution_state:fullyResolved?'RESOLVED_ARCHIVE':'PENDING',race_date:file.race_date||'',hippodrome:fold(file.hippodrome||''),altili_no:num(file.altili_no)||1,meeting_uid:file.meeting_uid||file.id,budgets:{main:built?.main?.budgetTL||1400,surprise:built?.alt?.budgetTL||1400,expert:built?.surprise?.budgetTL||1400},coupons,evaluations};
+  const snap={schema_version:6,algorithm_version:ARCHIVE_LAYOUT_VERSION,id,key:[file.race_date,fold(file.hippodrome),num(file.altili_no)||1].join('|'),created_at:createdAt,source:SOURCE,source_label:'Geçmiş yeniden hesaplama',backtest_eligible:1,manual_adjustment:0,historical_calibration:1,archive_snapshot:1,pre_race_only:0,snapshot_time_verified:0,snapshot_locked_at:createdAt,resolution_state:fullyResolved?'RESOLVED_ARCHIVE':'PENDING',race_date:file.race_date||'',hippodrome:fold(file.hippodrome||''),altili_no:num(file.altili_no)||1,meeting_uid:file.meeting_uid||file.id,budgets:{main:built?.main?.budgetTL||2000,surprise:built?.alt?.budgetTL||2000,expert:built?.surprise?.budgetTL||2000},coupons,evaluations};
   const previous=source.auto_coupon_log.find(x=>String(x?.id)===id&&String(x?.source)===SOURCE);
   snap.archive_coupon_layout_version=ARCHIVE_LAYOUT_VERSION;
   snap.reconstructed_at=new Date().toISOString();
@@ -306,9 +313,9 @@ async function persistHistoricalCoupon(source,file,raceResults,built,options={})
   try{if(options.syncForward!==false&&typeof global.tkpForwardTrackingAttachCouponSnapshot==='function')global.tkpForwardTrackingAttachCouponSnapshot(snap);}catch(_){ }
   return snap;
 }
-function buildHistoricalArchiveCouponSet(raceResults,budget=1400){
+function buildHistoricalArchiveCouponSet(raceResults,budget=2000){
   if(!global.TKP_ARCHIVE_COUPON_PLANNER)throw new Error('Arşiv kupon planlayıcısı yüklenmedi.');
-  const built=global.TKP_ARCHIVE_COUPON_PLANNER.build(raceResults,Math.max(1000,Math.min(1400,budget)));
+  const built=global.TKP_ARCHIVE_COUPON_PLANNER.build(raceResults,Math.max(1000,Math.min(3000,budget)));
   const errors=['main','alt','surprise'].filter(k=>built[k]?.error||!built[k]?.legs?.length);
   if(errors.length)throw new Error(errors.map(k=>k+': '+(built[k]?.error||'kupon eksik')).join(' · '));
   return built;
@@ -339,6 +346,7 @@ function persistHistoricalSideBetSnapshots(snapshot,raceResults){
 }
 
 function historicalPortfolioTrainingSummary(source=global.db){
+  const full=global.TKPArchivePortfolio?.peek(source);if(full)return full;
   const coupons={main:{label:'Normal',events:0,full:0,legHits:0,knownLegs:0,cost:0,financialCost:0,financialEvents:0,ret:0,singles:0,singleHit:0},
     alt:{label:'Sürpriz',events:0,full:0,legHits:0,knownLegs:0,cost:0,financialCost:0,financialEvents:0,ret:0,singles:0,singleHit:0},
     surprise:{label:'Uzman + Kulis',events:0,full:0,legHits:0,knownLegs:0,cost:0,financialCost:0,financialEvents:0,ret:0,singles:0,singleHit:0}};
@@ -354,7 +362,7 @@ function historicalPortfolioTrainingSummary(source=global.db){
   }
   for(const g of Object.values(coupons)){
     g.fullRate=g.events?g.full/g.events:0;g.legRate=g.knownLegs?g.legHits/g.knownLegs:0;g.singleRate=g.singles?g.singleHit/g.singles:0;
-    g.roi=g.financialEvents&&g.cost?(g.ret-g.cost)/g.cost:null;
+    g.roi=g.financialEvents&&g.financialCost?(g.ret-g.financialCost)/g.financialCost:null;
   }
   const sidebets={};const historicalTickets=arr(source?.sidebet_ticket_log).filter(row=>String(row?.source||'')===SOURCE&&Number(row?.primary)===1);
   for(const row of historicalTickets){
@@ -405,7 +413,7 @@ async function ensureHistoricalCouponSnapshots(options={}){
         const raceResults=meetingRaceResultsFromLockedSnapshots(source,file,fileRaces);
         let snapshot=arr(source.auto_coupon_log).find(row=>String(row.id)===snapshotKey(file)&&historicalSnapshotHasAllCoupons(row));
         if(!snapshot){
-          const built=buildHistoricalArchiveCouponSet(raceResults,1400);
+          const built=buildHistoricalArchiveCouponSet(raceResults,3000);
           snapshot=await persistHistoricalCoupon(source,file,raceResults,built,{syncForward:false});
           created++;
         }
@@ -625,4 +633,105 @@ global.tkpHistoricalCalibrationRace=isHistoricalRow;
 global.tkpHistoricalCalibrationPairAllowed=pairAllowed;
 global.tkpRebuildHistoricalCalibration503=rebuild;
 global.tkpScheduleHistoricalCalibration503=schedule;
+})(globalThis);
+
+// CURRENT ARCHIVE POLICY REPLAY
+(function(g){'use strict';
+const VERSION='CURRENT-TABLE-POLICY-20261020-3000-BH-COVERAGE-V2',roles=['main','alt','surprise'];
+const group=no=>{const s=String(no?.horse_no??no),e=typeof g.ekuriGroup==='function'?g.ekuriGroup(s):s.match(/-E\d+$/i)?.[0];return e?'E:'+e:'N:'+s;};
+function reprice(log,at=new Date().toISOString()){
+ let count=0;for(const snapshot of log||[]){const coupons={};for(const role of roles){const c=snapshot?.coupons?.[role];if(!c||c.error||!c.legs?.length)continue;
+  const widths=c.legs.map(l=>new Set((l.picks||[]).map(group)).size),unit=Number(g.ganyanUnitPrice(snapshot.hippodrome||c.legs[0]?.r?.hippodrome,6));if(widths.some(n=>!n)||!(unit>0))continue;
+  const combinations=widths.reduce((a,b)=>a*b,1);coupons[role]={unit,combinations,cost:Math.round(combinations*unit*100)/100,recorded_cost:c.cost??null};}
+  if(Object.keys(coupons).length){snapshot.current_pricing={version:VERSION,at,coupons};count++;}}
+ return count;
+}
+function ticketFinance(c,product,races,file){
+ const unknown={known:false,payout:null};
+ const altili=roles.includes(product),target=races.find(r=>Number(r.leg)===Number(altili?6:c.leg));
+ if(altili&&c.hit===false)return {known:true,payout:0};
+ if(!g.TKP_BET_TEMPLATE_ENGINE?.official(target))return unknown;
+ const keys=altili?['altili']:({sirali_ikili:['sirali_ikili'],sirali_uclu:['sirali_uclu','uclu_bahis'],tabela:['tabela','tabela_sirasiz'],sirali_5li:['sirali_5li']}[product]||[]);
+ const seen=new Map();
+ for(const p of target.payouts||[]){
+  if(!keys.includes(p.key))continue;
+  const number=String(p.label||'').match(/^\s*([12])\.\s*6/);
+  if(altili&&number&&file?.altili_no&&Number(number[1])!==Number(file.altili_no))continue;
+  if(p.rollover||p.amount===null||p.amount===undefined||!Number.isFinite(Number(p.amount))||Number(p.amount)<0)return unknown;
+  const combo=String(p.combo||'').trim(),id=p.key+'|'+combo;
+  if(!combo)return unknown;
+  if(seen.has(id)&&Number(seen.get(id).amount)!==Number(p.amount))return unknown;
+  seen.set(id,p);
+ }
+ const entries=[...seen.values()];if(!entries.length)return unknown;
+ if(altili){
+  if(typeof g.couponWinningPayoutLineCount!=='function')return unknown;
+  const coupon={legs:(c.legs||[]).map(l=>({r:{leg:l.leg},picks:l.picks}))};
+  let payout=0,lines=0;
+  for(const p of entries){const n=g.couponWinningPayoutLineCount(coupon,p);lines+=n;payout+=Number(p.amount)*n;}
+  return lines?{known:true,payout}:unknown;
+ }
+ if(typeof g.sideBetPayoutEntryMatchesPools!=='function')return unknown;
+ // Tabela's ordered and unordered awards are different winning lines. Never
+ // add both prizes to one line, or publish a complete total from one tier only.
+ if(product==='tabela'){
+  const ordered=entries.filter(p=>p.key==='tabela'),unordered=entries.filter(p=>p.key==='tabela_sirasiz');
+  if(ordered.length!==1||unordered.length!==1)return unknown;
+  const nos=String(ordered[0].combo).split('/').map(s=>s.trim());
+  if(nos.length!==4||new Set(nos).size!==4||nos.some(n=>!/^\d+$/.test(n)))return unknown;
+  const other=String(unordered[0].combo).split('/').map(s=>s.trim()).sort();
+  if(JSON.stringify(nos.slice().sort())!==JSON.stringify(other))return unknown;
+  let payout=0;
+  const visit=(chosen,left)=>{if(!left.length){if(g.sideBetPayoutEntryMatchesPools({combo:chosen.join('/')},c.pools||[]))payout+=Number((chosen.every((n,i)=>n===nos[i])?ordered[0]:unordered[0]).amount);return;}
+   for(let i=0;i<left.length;i++)visit([...chosen,left[i]],left.filter((_,j)=>i!==j));};
+  visit([],nos);return {known:true,payout};
+ }
+ const matched=entries.filter(p=>g.sideBetPayoutEntryMatchesPools(p,c.pools||[]));
+ if(c.hit&&!matched.length)return unknown;
+ return {known:true,payout:matched.reduce((sum,p)=>sum+Number(p.amount),0)};
+}
+function summary(records){const out={processed:records.length,pending:0,errors:0},byFile=new Map(),files=new Map((g.db?.files||[]).map(f=>[String(f.id),f]));
+ for(const r of g.db?.races||[]){const k=String(r.file_id);if(!byFile.has(k))byFile.set(k,[]);byFile.get(k).push(r);}
+ const add=(key,c,record)=>{const m=out[key]||(out[key]={total:0,hit:0,cost:0,payout:0,net:0,financialKnown:0,financialCost:0,payoutMissing:0});
+  m.total++;m.hit+=Number(c.hit);m.cost+=Number(c.cost)||0;
+  const f=ticketFinance(c,key,byFile.get(String(record.file_id))||[],files.get(String(record.file_id)));
+  if(f.known){m.financialKnown++;m.financialCost+=Number(c.cost)||0;m.payout+=f.payout;m.net=m.payout-m.financialCost;}else m.payoutMissing++;
+ };
+ for(const r of records){if(r.status==='ERROR'){out.errors++;continue;}let pending=false;
+ for(const [key,c] of Object.entries(r.coupons||{})){if(c.hit==null){pending=true;continue;}add(key,c,r);}
+ for(const c of r.sidebets||[]){if(c.resolved)add(c.product,c,r);}out.pending+=Number(pending);}return out;}
+function html(){const state=g.db?.settings?.current_archive_policy_replay;if(!state)return '';const s=state.summary||{},labels={main:'Normal',alt:'Sürpriz',surprise:'Uzman + Kulis',sirali_ikili:'Sıralı İkili',sirali_uclu:'Üçlü',tabela:'Dörtlü / Tabela',sirali_5li:'Beşli'};
+ const stale=state.version!==VERSION;
+ const records=(g.db?.current_policy_replay_log||[]).filter(r=>r.version===state.version),financial=summary(records),money=n=>Number(n||0).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2})+' TL';
+ const rows=Object.entries(labels).map(([key,label])=>{const m=s[key]||{},f=financial[key]||{},known=Number(f.financialKnown)||0,missing=Math.max(0,Number(m.total||0)-known),partial=missing?'<small style="display:block">Bilinen kayıtlar</small>':'';return `<tr><td>${label}</td><td>${m.total||0}</td><td>${m.hit||0}</td><td>${m.total?(100*m.hit/m.total).toFixed(2):'—'}</td><td>${money(m.cost)}</td><td style="white-space:nowrap">${known?money(f.payout):'—'}${known?partial:''}</td><td style="white-space:nowrap;font-weight:700;color:${Number(f.net)<0?'#b91c1c':'#166534'}">${known?money(f.net):'—'}${known?partial:''}</td><td>${known}/${m.total||0}${missing?`<small style="display:block">${missing} ikramiye doğrulanmadı</small>`:''}</td></tr>`;}).join('');
+ return `<div class="card tkpCurrentArchivePolicy"><h3>${stale?'Son kaydedilen arşiv araştırması':'Güncel seçim kuralları · bütün arşiv'}</h3><p>${state.cursor||0}/${state.total||0} toplantı · ${state.races||0} koşu · ${state.completed?'Tamamlandı':'İşleniyor'} · ${s.pending||0} sonuç bekleyen · ${s.errors||0} hata${state.duplicate_files?` · ${state.duplicate_files} tekrar dosya ayrı sayılmadı`:""}</p>${stale?'<p>Bu araştırma yeni sürpriz aday kuralıyla yeniden hesaplanmadı. Yeni arşiv araştırmasında altılı üst sınırı 3.000 TL; tarihsel orijinal kayıtlar korunur.</p>':''}<p class="muted">Kayıtlı yarış puanlarıyla güncel seçim ve güncel birim maliyeti. Araştırma hesaplarıdır; eski gerçek kuponların başarı ve kâr/zararını değiştirmez.</p><p class="muted">İkramiye: geçmiş resmî 1 misli ödeme. Net sonuç: ikramiyesi doğrulanabilen kayıtların ikramiyesi − aynı kayıtların güncel maliyeti. Eksik ödemeler sıfır sayılmaz.</p><div class="tableWrap"><table><thead><tr><th>Ürün</th><th>Sonuçlu test</th><th>Tuttu</th><th>%</th><th>Güncel toplam maliyet</th><th>Toplam ikramiye</th><th>Net sonuç</th><th>Hesaplanan kayıt</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;}
+async function run(options={}){
+ if(g.__tkpCurrentArchivePolicyRunning)throw new Error('Arşiv güncellemesi zaten çalışıyor.');const d=g.db;if(!d?.files||!d?.races)throw new Error('Arşiv yüklenmedi.');g.__tkpCurrentArchivePolicyRunning=true;
+ const files=[...new Map(d.files.map(f=>[String(f.id),f])).values()].sort((a,b)=>String(a.race_date).localeCompare(String(b.race_date))||Number(a.id)-Number(b.id)),byFile=new Map();for(const r of d.races){const k=String(r.file_id);if(!byFile.has(k))byFile.set(k,[]);byFile.get(k).push(r);}
+ const records=Array.isArray(d.current_policy_replay_log)?d.current_policy_replay_log:(d.current_policy_replay_log=[]),previous=new Map(records.filter(r=>r.version===VERSION).map(r=>[String(r.file_id),r]));
+ const state=d.settings.current_archive_policy_replay={version:VERSION,total:files.length,duplicate_files:d.files.length-files.length,cursor:0,races:0,completed:false,started_at:new Date().toISOString(),errors:[]};
+ let pricingPersisted=false;const checkpoint=async()=>{state.summary=summary(records.filter(r=>r.version===VERSION));state.updated_at=new Date().toISOString();const collections=pricingPersisted?['current_policy_replay_log']:['current_policy_replay_log','auto_coupon_log'];if(await g.tkpPersistCollections(collections,{metaPatch:{settings:d.settings},label:'current-archive-policy'})===false)throw new Error('Güncel arşiv hesapları kaydedilemedi.');pricingPersisted=true;};
+ try{state.repriced_snapshots=reprice(d.auto_coupon_log);
+ for(const file of files){const original=byFile.get(String(file.id))||[],signature=JSON.stringify(original.map(r=>[r.id,r.horses?.length,r.result_integrity_status,(r.horses||[]).map(h=>[h.horse_no,h.prediction_score_snapshot,h.prediction_visible_tkp_snapshot,h.finish_position,h.winner])])),cached=previous.get(String(file.id));
+ if(cached?.input_signature===signature&&cached.status==='DONE'){state.cursor++;state.races+=original.length;continue;}
+ const record={version:VERSION,file_id:file.id,race_date:file.race_date,hippodrome:file.hippodrome,input_signature:signature,source:'CURRENT_SELECTION_RESEARCH',coupons:{},sidebets:[],tables:[]};
+ try{const source=JSON.parse(JSON.stringify(original));for(const r of source){r.__tkpArchivedReadOnly=true;for(const h of r.horses||[]){delete h.winner;delete h.finish_position;}}
+ const rr=g.tkpHistoricalArchiveResultsForFile(d,file,source);if(rr.length!==6||new Set(rr.map(x=>Number(x.r.leg))).size!==6)throw new Error('Altı ayak eksik veya tekrar ediyor.');
+ for(const x of rr){x.__tkpArchivedReadOnly=true;record.tables.push({leg:x.r.leg,nos:g.predictionDisplayRows(x,Infinity,'score-desc').rows.map(h=>String(h.horse_no))});}
+ let lastYield=Date.now();
+ const pause=async()=>{if(Date.now()-lastYield<8)return;if(typeof g.tkpYieldToUi==='function')await g.tkpYieldToUi();else await new Promise(resolve=>setTimeout(resolve,0));lastYield=Date.now();};
+ const built=typeof g.TKP_ARCHIVE_COUPON_PLANNER.buildAsync==='function'?await g.TKP_ARCHIVE_COUPON_PLANNER.buildAsync(rr,3000,{current:true,pause}):g.TKP_ARCHIVE_COUPON_PLANNER.build(rr,3000,{current:true});
+ for(const role of roles)g.tkpEnsureBottomConditionCouponCoverage?.(built[role],role);
+ g.tkpSynchronizeTwoHorseLegs?.(built);
+ g.tkpProtectVisibleMainCoverage(built.main);for(const role of roles)g.tkpAlignFinalCouponOrder(built[role]);
+ for(const role of roles){const c=built[role];if(!c||c.error||c.legs?.length!==6)throw new Error(c?.error||role+' kupon eksik');const legs=c.legs.map(l=>({leg:l.r.leg,picks:l.picks.map(h=>String(h.horse_no))}));let ready=true,hit=true;
+ for(const l of legs){const actual=original.find(r=>Number(r.leg)===Number(l.leg)),winners=(actual?.horses||[]).filter(h=>Number(h.winner)===1||Number(h.finish_position)===1);if(!g.TKP_BET_TEMPLATE_ENGINE.official(actual)||!winners.length){ready=false;continue;}hit=hit&&winners.some(h=>l.picks.some(no=>group(no)===group(h.horse_no)));}
+ record.coupons[role]={legs,unit:c.unit,cost:c.cost,combinations:c.combos,hit:ready?hit:null};}
+ for(const x of rr){const specs=[];g.tkpWithSideBetPanelNoScan(()=>g.sideBetTicketForRace(x,{sirali:{},ikili:{}},null,{exactSpecs:specs,currentPolicyReplay:true}));
+ for(const spec of specs){const actual=original.find(r=>Number(r.leg)===Number(x.r.leg));record.sidebets.push({leg:x.r.leg,product:spec.product,pools:spec.pools,unit:spec.unit,cost:spec.cost,...g.TKP_BET_TEMPLATE_ENGINE.outcome(actual,spec.pools)});}await new Promise(resolve=>setTimeout(resolve,0));}
+ record.status='DONE';}catch(e){record.status='ERROR';record.error=String(e.message||e);state.errors.push({file_id:file.id,error:record.error});}
+ const at=records.findIndex(r=>String(r.file_id)===String(file.id)&&r.version===VERSION);if(at>=0)records[at]=record;else records.push(record);state.cursor++;state.races+=original.length;if(state.cursor%20===0)await checkpoint();options.onProgress?.({...state});await new Promise(resolve=>setTimeout(resolve,0));}
+ state.completed=true;state.completed_at=new Date().toISOString();await checkpoint();g.tkpInvalidateFastBacktestCache?.();return state;
+ }finally{g.__tkpCurrentArchivePolicyRunning=false;}}
+g.tkpRepriceRecordedCoupons=reprice;g.tkpCurrentArchiveSummary=summary;g.tkpCurrentArchivePolicyHTML=html;g.tkpRunCurrentArchivePolicyReplay=run;
 })(globalThis);

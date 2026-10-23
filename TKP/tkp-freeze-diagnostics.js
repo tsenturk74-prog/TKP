@@ -173,7 +173,10 @@
         at:new Date().toISOString(),epochMs:nowMs(),durationMs:Math.max(0,nowMs()-completed.startedEpochMs),error:error?clean(error?.message||error):''});
       safeWrite(trimData(data));return true;
     }
-    active.depth=Math.max(0,(Number(active.depth)||1)-1);if(active.depth>0){beat(token,detail);return true;}
+    active.depth=Math.max(0,(Number(active.depth)||1)-1);if(active.depth>0){
+      // beat() reloads storage, so persist the decremented nesting count first.
+      data.active=active;safeWrite(trimData(data));beat(token,detail);return true;
+    }
     const duration=Math.max(0,nowMs()-(Number(active.startedEpochMs)||nowMs()));
     const event={type:error?'error':'end',stage:active.stage,detail:clean(detail||active.detail),at:new Date().toISOString(),epochMs:nowMs(),perfMs:Math.round(perfNow()*10)/10,token,durationMs:duration,error:error?clean(error?.message||error):''};
     data.events=Array.isArray(data.events)?data.events:[];data.events.push(event);data.events=data.events.slice(-MAX_EVENTS);

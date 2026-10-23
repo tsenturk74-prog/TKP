@@ -4,7 +4,7 @@
   if(root)Object.assign(root,api);
 })(typeof globalThis!=='undefined'?globalThis:this,function(){
   'use strict';
-  const RANGE_COLLECTIONS=['bets','prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','bomb_hunter_shadow_log','changelog'];
+  const RANGE_COLLECTIONS=['bets','prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','bomb_hunter_shadow_log','surprise_condition_shadow_log','current_policy_replay_log','deep_surprise_tracking_log','changelog'];
 
   function isoDate(value){
     if(value==null)return '';
@@ -21,7 +21,7 @@
     return '';
   }
   function inRange(date,start,end){return !!date&&date>=start&&date<=end;}
-  function meetingNaturalKey(x){return [isoDate(x?.race_date||x?.date),String(x?.hippodrome||x?.hip||x?.city||'').trim().toLocaleUpperCase('tr-TR'),Number(x?.altili_no||x?.altili||1)||1,String(x?.filename||'').trim()].join('|');}
+  function meetingNaturalKey(x){return [isoDate(x?.race_date||x?.date),String(x?.hippodrome||x?.hip||x?.city||'').trim().toLocaleUpperCase('tr-TR'),Number(x?.altili_no||x?.altili||1)||1].join('|');}
   function raceNaturalKey(x){return [isoDate(x?.race_date||x?.date),String(x?.hippodrome||x?.hip||'').trim().toLocaleUpperCase('tr-TR'),Number(x?.altili_no||x?.altili||1)||1,Number(x?.leg||x?.race_no||0)||0].join('|');}
   function rowIdentity(row,index){
     if(!row||typeof row!=='object')return `primitive|${String(row)}|${index}`;
@@ -85,23 +85,35 @@
     const db={...(target||{})};
     const currentFiles=(Array.isArray(target?.files)?target.files:[]).map(x=>({...x}));
     const fileByKey=new Map(currentFiles.map((x,i)=>[meetingNaturalKey(x),i]));
+    let nextId=currentFiles.reduce((n,f)=>Math.max(n,Number(f.id)||0),Number(target?.chronology_lock?.max_file_id)||0);
+    let nextSeq=Math.max(Number(target?.chronology_lock?.sequence_max)||0,currentFiles.reduce((n,f)=>Math.max(n,Number(f.sequence_no)||0),0));
+    const usedIds=new Set(currentFiles.map(f=>String(f.id)));
     const idMap=new Map();let addedFiles=0,updatedFiles=0;
     for(const f0 of (Array.isArray(incoming?.files)?incoming.files:[])){
       const f={...f0},k=meetingNaturalKey(f);
       if(fileByKey.has(k)){
         const i=fileByKey.get(k),existing=currentFiles[i],keepId=existing?.id;
-        currentFiles[i]={...existing,...f};if(keepId!=null)currentFiles[i].id=keepId;
+        currentFiles[i]={...existing,...f,id:keepId,sequence_no:existing.sequence_no,filename:existing.filename,raw_sequence_no:existing.raw_sequence_no};
         if(f?.id!=null&&keepId!=null)idMap.set(String(f.id),keepId);updatedFiles++;
-      }else{fileByKey.set(k,currentFiles.length);currentFiles.push(f);if(f?.id!=null)idMap.set(String(f.id),f.id);addedFiles++;}
+      }else{
+        const oldId=f.id;while(usedIds.has(String(++nextId))){}
+        f.id=nextId;usedIds.add(String(f.id));f.sequence_no=++nextSeq;f.raw_sequence_no=f.sequence_no;
+        f.filename=String(f.filename||'').replace(/(TKP[_ -]*(?:AI|AL)[_ -]*)\d+/i,(_m,prefix)=>prefix+String(f.sequence_no).padStart(3,'0'));
+        fileByKey.set(k,currentFiles.length);currentFiles.push(f);if(oldId!=null)idMap.set(String(oldId),f.id);addedFiles++;
+      }
     }
     db.files=currentFiles;
 
     const currentRaces=(Array.isArray(target?.races)?target.races:[]).map(r=>({...r,horses:Array.isArray(r?.horses)?r.horses.map(h=>({...h})):[]}));
     const raceByKey=new Map(currentRaces.map((x,i)=>[raceNaturalKey(x),i]));
+    let nextRaceId=currentRaces.reduce((n,r)=>Math.max(n,Number(r.id)||0),0);
+    const usedRaceIds=new Set(currentRaces.map(r=>String(r.id)));
+    const filesById=new Map(currentFiles.map(f=>[String(f.id),f]));
     let addedRaces=0,updatedRaces=0;
     for(const r0 of (Array.isArray(incoming?.races)?incoming.races:[])){
       const r={...r0,horses:Array.isArray(r0?.horses)?r0.horses.map(h=>({...h})):[]};
       if(r.file_id!=null&&idMap.has(String(r.file_id)))r.file_id=idMap.get(String(r.file_id));
+      const linkedFile=filesById.get(String(r.file_id));if(linkedFile){r.sequence_no=linkedFile.sequence_no;r.filename=linkedFile.filename;}
       const k=raceNaturalKey(r);
       if(raceByKey.has(k)){
         const i=raceByKey.get(k),existing=currentRaces[i],keepId=existing?.id,keepFile=existing?.file_id;
@@ -109,9 +121,12 @@
         if(keepId!=null)currentRaces[i].id=keepId;
         if(keepFile!=null&&!r.file_id)currentRaces[i].file_id=keepFile;
         updatedRaces++;
-      }else{raceByKey.set(k,currentRaces.length);currentRaces.push(r);addedRaces++;}
+      }else{if(r.id==null||usedRaceIds.has(String(r.id)))r.id=++nextRaceId;nextRaceId=Math.max(nextRaceId,Number(r.id)||0);usedRaceIds.add(String(r.id));raceByKey.set(k,currentRaces.length);currentRaces.push(r);addedRaces++;}
     }
     db.races=currentRaces;
+    // Force a metadata check on the combined archive; incoming subset locks
+    // describe a different file count and must never replace its numbering.
+    db.archive_numbering_mode='CONTINUOUS';
 
     const summary={addedFiles,updatedFiles,addedRaces,updatedRaces,collections:{}};
     for(const key of RANGE_COLLECTIONS){

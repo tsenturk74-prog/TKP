@@ -9,7 +9,7 @@
   'use strict';
 
   const VERSION='V1.1.240-SCORE-OUTCOME-CALIBRATION';
-  let cache={signature:'',values:new Map()};
+  let cache={signature:'',values:new Map(),aux:new Map()};
   let sourceCache={signature:'',leaders:null};
 
   function num(v,fallback=0){ const n=Number(v); return Number.isFinite(n)?n:fallback; }
@@ -51,9 +51,13 @@
   }
   function cacheValues(){
     const sig=revision();
-    if(cache.signature!==sig){ cache={signature:sig,values:new Map()}; }
+    if(cache.signature!==sig){ cache={signature:sig,values:new Map(),aux:new Map()}; }
     return cache.values;
   }
+  // Yarış başına değişmeyen ağır ara sonuçlar (kullanılabilir lider logu ve hedef yarış
+  // öncesi satırlar). Her at/skor bandı için 36 bin satırlık prediction_log'u yeniden
+  // süzmek Tahmin ekranını yüzlerce ms kilitliyordu; aynı revizyon boyunca tek kez hesaplanır.
+  function cacheAux(){ cacheValues(); return cache.aux; }
   function rowRaceKey(row){
     const uid=text(row?.race_uid);
     if(uid)return `R:${uid}`;
@@ -167,7 +171,16 @@
     const values=cacheValues();
     const hit=values.get(key);if(hit)return hit;
 
-    const all=scoreEvidenceSourceRows().filter(row=>rowBeforeTarget(row,targetRace));
+    const aux=cacheAux();
+    let sourceRows=aux.get('SRC');
+    if(!sourceRows){ sourceRows=scoreEvidenceSourceRows(); aux.set('SRC',sourceRows); }
+    const beforeKey=['BEFORE',cutoff||'NO_CUTOFF',text(targetRace?.file_id),text(targetRace?.race_uid||targetRace?.id)].join('|');
+    let all=aux.get(beforeKey);
+    if(!all){
+      all=sourceRows.filter(row=>rowBeforeTarget(row,targetRace));
+      aux.set(beforeKey,all);
+      if(aux.size>96) for(const k of aux.keys()){ if(k!=='SRC'){ aux.delete(k); break; } }
+    }
     const inBand=all.filter(row=>String(row?.score_band||bandFor(row?.score).key)===band.key);
     const exactRows=inBand.filter(row=>conditionExact(row)===exact);
     const broadRows=inBand.filter(row=>conditionBroad(row)===broad);

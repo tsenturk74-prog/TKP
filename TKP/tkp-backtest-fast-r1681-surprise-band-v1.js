@@ -9,7 +9,7 @@
 (function(global){
   'use strict';
 
-  const VERSION = 'V55_3_THREE_COUPON_FAST_BACKTEST';
+  const VERSION = 'V55_3_THREE_COUPON_FAST_BACKTEST_FULL_ARCHIVE_1';
   const BACKTEST_COUPON_NAMES={main:'Normal',alt:'Sürpriz',surprise:'Uzman + Kulis'};
   const fastCache = new Map();
   const fastHtmlCache = new Map();
@@ -23,6 +23,12 @@
 
   function arr(v){ return Array.isArray(v) ? v : []; }
   function num(v,d=0){ const n=Number(v); return Number.isFinite(n) ? n : d; }
+  function archiveLimit(requested){
+    const db=global.db||{};
+    const meetingCount=arr(db.files).length||new Set(arr(db.races).map(r=>r.file_id||r.meeting_id||`${r.race_date}|${r.hippodrome}|${r.altili_no||1}`)).size;
+    const cap=Math.max(1,meetingCount||num(requested,1));
+    return Math.max(1,Math.min(cap,Math.floor(num(requested,cap))));
+  }
   function str(v){ return String(v ?? '').trim(); }
   function escLocal(v){
     if(typeof global.esc === 'function') return global.esc(v);
@@ -629,7 +635,7 @@
     const effectiveBudget=typeKey==='alt'&&num(budgetTL)<=0?num(global.db?.settings?.last_coupon_budgets?.alt,defaultBudget):num(budgetTL,defaultBudget);
     const inputCap=typeof global.tkpCouponBudgetFor==='function'
       ?global.tkpCouponBudgetFor(effectiveBudget,typeKey==='surprise'?'expert':'main')
-      :Math.min(1400,Math.max(700,effectiveBudget));
+      :Math.min(2000,Math.max(700,effectiveBudget));
     let budget=inputCap;
     // Canlı bütçe hedefi bütün sıralama/öğrenme zincirini yeniden çağırır. Replay
     // ekranı kullanıcının girdiği sabit tavanı değerlendirir; canlı kupon üretimi
@@ -1039,9 +1045,14 @@
     return {legs,unit,cost:combinations*unit,combinations};
   }
   function* fastCoreGenerator(budgets,limit,precomputedKey=''){
-    // REAL509 arşivinin son altı kaydını sessizce dışarıda bırakma. Görünüm/cache
-    // anahtarları aynı veri imzasıyla çalışır; limit artışı yalnız eksik kapsamı açar.
-    limit=Math.max(1,Math.min(509,num(limit,509)));
+    // R19.30: Back Test kapsamı artık sabit REAL509 tavanına kilitli değildir.
+    // Arşiv 509/529/... toplantıya büyüdüğünde kayıtlı toplantıların tamamı görünür;
+    // performans hesabına yalnız doğrulanmış olanlar girer. Böylece UI'da arşiv toplamı
+    // ile analize giren havuz ayrı ve dürüst biçimde raporlanır.
+    const archiveDb=global.db||{};
+    const archiveRegisteredMeetings=arr(archiveDb.files).length;
+    const archiveRegisteredRaces=arr(archiveDb.races).length;
+    limit=archiveLimit(limit);
     const key=precomputedKey||datasetKey(limit,budgets);
     if(fastCache.has(key)){ const cached=fastCache.get(key); global.__tkpLastFastBacktestResult=cached; return cached; }
 
@@ -1273,7 +1284,7 @@
     for(const item of Object.values(side)){ item.net=item.ret-item.financeCost; item.roi=item.financeCost ? item.net/item.financeCost*100 : null; }
     for(const item of Object.values(out)){ item.net=item.ret-item.financeCost; item.roi=item.financeCost ? item.net/item.financeCost*100 : null; }
     investment.rolling=buildRollingInvestment(investment.records);
-    const result={version:VERSION,limit,groupsTested:groups.length,verifiedOnly:true,excludedUnverified:Math.max(0,allGroups.length-verifiedGroups.length),eligibility,names,out,side,investment,predictionUsage,couponUsage,incompleteAltiliSkipped};
+    const result={version:VERSION,limit,groupsTested:groups.length,archiveTotalMeetings:archiveRegisteredMeetings||allGroups.length,archiveTotalRaces:archiveRegisteredRaces,meetingsWithAnyResult:allGroups.length,verifiedOnly:true,excludedUnverified:Math.max(0,allGroups.length-verifiedGroups.length),eligibility,names,out,side,investment,predictionUsage,couponUsage,incompleteAltiliSkipped};
     fastCache.set(key,result);
     global.__tkpLastFastBacktestResult=result;
     if(fastCache.size>12){ const first=fastCache.keys().next().value; fastCache.delete(first); }
@@ -1325,7 +1336,7 @@
         if(!value.meetings && periodKey!=='total') continue;
         const net=num(value.ret)-num(value.cost);
         const roi=value.cost ? 100*net/value.cost : 0;
-        summaryRows.push(`<tr><td><b>${names[couponKey]}</b></td><td>${periodLabels[periodKey]}</td><td class="num">${value.meetings||0}</td><td class="num">${value.hits||0}</td><td class="num">${fmtTLLocal(value.cost)}</td><td class="num">${fmtTLLocal(value.ret)}</td><td class="num tkpMoney ${net>=0?'pos':'neg'}">${fmt2Local(net)} TL</td><td class="num tkpMoney ${roi>=0?'pos':'neg'}">%${fmt2Local(roi)}</td></tr>`);
+        summaryRows.push(`<tr><td><b>${names[couponKey]}</b></td><td>${periodLabels[periodKey]}</td><td class="num">${value.meetings||0}</td><td class="num">${value.hits||0}</td><td class="num">${fmtTLLocal(value.cost)}</td><td class="num">${fmtTLLocal(value.ret)}</td><td class="num tkpMoney ${moneyTone(net)}">${fmt2Local(net)} TL</td><td class="num tkpMoney ${moneyTone(roi)}">%${fmt2Local(roi)}</td></tr>`);
       }
     }
     function periodDetail(couponKey,granularity,label,limitRows){
@@ -1337,7 +1348,7 @@
         const net=num(value.ret)-num(value.cost);
         const roi=value.cost ? 100*net/value.cost : 0;
         const avg=value.meetings ? value.cost/value.meetings : 0;
-        return `<tr><td>${escLocal(periodKey)}</td><td class="num">${value.meetings}</td><td class="num">${value.hits}</td><td class="num">${fmtTLLocal(value.cost)}</td><td class="num">${fmtTLLocal(value.ret)}</td><td class="num">${fmtTLLocal(avg)}</td><td class="num tkpMoney ${net>=0?'pos':'neg'}">${fmt2Local(net)} TL</td><td class="num tkpMoney ${roi>=0?'pos':'neg'}">%${fmt2Local(roi)}</td></tr>`;
+        return `<tr><td>${escLocal(periodKey)}</td><td class="num">${value.meetings}</td><td class="num">${value.hits}</td><td class="num">${fmtTLLocal(value.cost)}</td><td class="num">${fmtTLLocal(value.ret)}</td><td class="num">${fmtTLLocal(avg)}</td><td class="num tkpMoney ${moneyTone(net)}">${fmt2Local(net)} TL</td><td class="num tkpMoney ${moneyTone(roi)}">%${fmt2Local(roi)}</td></tr>`;
       }).join('');
       return `<details class="tkpInvestDetails"><summary>${names[couponKey]} ${label}</summary><div class="tableWrap compactBacktest tkpFitTable"><table><thead><tr><th>Dönem</th><th class="num">Toplantı</th><th class="num">Tuttu</th><th class="num">Yatırım</th><th class="num">Getiri</th><th class="num">Ort. Yatırım</th><th class="num">Net</th><th class="num">ROI</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
     }
@@ -1399,7 +1410,7 @@
       const net=num(value.ret)-num(value.cost);
       const roi=value.cost ? net/value.cost*100 : 0;
       const money=amount=>hasMoney?fmtTLLocal(amount):unknownMoney();
-      return `<tr class="${isOverall?'tkpMonthlyOverallTotal':''}"><td>${isOverall?'<b>GENEL TOPLAM</b>':escLocal(label)}</td><td class="num">${value.tests}</td><td class="num">${value.official}</td><td class="num">${value.hits}</td><td class="num">${money(value.cost)}</td><td class="num">${money(value.ret)}</td><td class="num tkpMoney ${hasMoney?(net>=0?'pos':'neg'):''}"><b>${money(net)}</b></td><td class="num tkpMoney ${hasMoney?(roi>=0?'pos':'neg'):''}">${hasMoney?'%'+fmt2Local(roi):unknownMoney()}</td></tr>`;
+      return `<tr class="${isOverall?'tkpMonthlyOverallTotal':''}"><td>${isOverall?'<b>GENEL TOPLAM</b>':escLocal(label)}</td><td class="num">${value.tests}</td><td class="num">${value.official}</td><td class="num">${value.hits}</td><td class="num">${money(value.cost)}</td><td class="num">${money(value.ret)}</td><td class="num tkpMoney ${moneyTone(net,hasMoney)}"><b>${money(net)}</b></td><td class="num tkpMoney ${moneyTone(roi,hasMoney)}">${hasMoney?'%'+fmt2Local(roi):unknownMoney()}</td></tr>`;
     };
     const monthKeys=[...byMonth.keys()].sort().reverse();
     const monthRows=monthKeys.map(key=>rowHTML(key,byMonth.get(key))).join('');
@@ -1415,7 +1426,7 @@
       const net=value.ret-value.cost;
       const roi=value.cost?net/value.cost*100:0;
       const money=amount=>hasMoney?fmtTLLocal(amount):unknownMoney();
-      return `<tr><td><b>${escLocal(label)}</b></td><td class="num">${value.tests}</td><td class="num">${value.hits}</td><td class="num">${pctSpan(value.hits,value.tests)}</td><td class="num">${singleSuccessHTML(value)}</td><td class="num">${value.official}</td><td class="num">${money(value.cost)}</td><td class="num">${money(value.ret)}</td><td class="num tkpMoney ${hasMoney?(net>=0?'pos':'neg'):''}">${money(net)}</td><td class="num tkpMoney ${hasMoney?(roi>=0?'pos':'neg'):''}">${hasMoney?'%'+fmt2Local(roi):unknownMoney()}</td></tr>`;
+      return `<tr><td><b>${escLocal(label)}</b></td><td class="num">${value.tests}</td><td class="num">${value.hits}</td><td class="num">${pctSpan(value.hits,value.tests)}</td><td class="num">${singleSuccessHTML(value)}</td><td class="num">${value.official}</td><td class="num">${money(value.cost)}</td><td class="num">${money(value.ret)}</td><td class="num tkpMoney ${moneyTone(net,hasMoney)}">${money(net)}</td><td class="num tkpMoney ${moneyTone(roi,hasMoney)}">${hasMoney?'%'+fmt2Local(roi):unknownMoney()}</td></tr>`;
     };
     const monthDetails=monthKeys.map((month,index)=>{
       const detailMap=byMonthAndBet.get(month)||new Map();
@@ -1425,6 +1436,10 @@
       return `<details class="tkpMonthlyBetDetails" ${index===0?'open':''}><summary><b>${escLocal(month)}</b> — bahis ve kupon türü ayrıntısı <span>${monthTotal.tests} test · ${monthTotal.official} resmi oyun · net ${monthTotal.official?fmtTLLocal(monthNet):'hesaplanamadı'}</span></summary><div class="tableWrap compactBacktest tkpFitTable"><table><thead><tr><th>Bahis</th><th class="num">Test</th><th class="num">Tuttu</th><th class="num">%</th><th class="num" title="Tek başarısı">Tek</th><th class="num">Resmî</th><th class="num">Maliyet</th><th class="num">İkramiye</th><th class="num">Net</th><th class="num">ROI</th><th class="num">Karar</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
     }).join('');
     return `<div class="card tkpMonthlyOverallCard" style="border-left:5px solid #315b7d;"><h2 style="margin:0 0 5px;">📅 Back Test — Aylık Genel Özet</h2><p class="muted tkpMonthlyNarrative" style="margin:0 0 8px;">${latestSentence}</p><div class="tableWrap compactBacktest tkpFitTable"><table><thead><tr><th>Ay</th><th class="num">Oyun/Test</th><th class="num">Resmi oyun</th><th class="num">Tuttu</th><th class="num">Maliyet</th><th class="num">İkramiye</th><th class="num">Net</th><th class="num">ROI</th><th class="num">Karar</th></tr></thead><tbody>${rowHTML('GENEL TOPLAM',overall,true)}${monthRows}</tbody></table></div><p class="muted" style="margin:7px 0;font-size:10.5px;">Her ay Altılı, Beşli, Dörtlü ve Üçlü Ganyan kuponlarıyla programda bulunan bütün yan bahisler birlikte toplanır. Parasal sonuçlar yalnız resmi TJK ikramiyesi bulunan oyunlardan hesaplanır.</p><div class="tkpMonthlyBetDetailList">${monthDetails}</div></div>`;
+  }
+  function moneyTone(value, known=true){
+    if(!known || value==null || !Number.isFinite(Number(value)))return 'neutral';
+    return Number(value)>0?'pos':Number(value)<0?'neg':'neutral';
   }
   function unknownMoney(){ return '<span class="tkpBtUnknown" title="Resmî ikramiye verisi yok" aria-label="Resmî ikramiye verisi yok">—</span>'; }
   function periodMetricFromRecords(records,period,maxMonthIndex){
@@ -1547,11 +1562,23 @@
     const sideRows=Object.entries(side).map(([name,item])=>{
       const a=item?.finalAll||{},h=item?.finalHoldout||{};
       const decision=name==="Sıralı 5'li"?'SHADOW ADAY':'PAS';
-      return `<tr><td><b>${escLocal(name)}</b></td><td class="num">${num(a.hits)}/${num(a.total)}</td><td class="num">%${fmt2Local(num(a.rate)*100)}</td><td class="num">${Number.isFinite(Number(a.roi))?'%'+fmt2Local(num(a.roi)*100):'—'}</td><td class="num">${num(h.hits)}/${num(h.total)}</td><td class="num">${Number.isFinite(Number(h.roi))?'%'+fmt2Local(num(h.roi)*100):'—'}</td><td><span class="tkpBtDecisionBadge ${decision==='PAS'?'pass':'caution'}">${decision}</span></td></tr>`;
+      const aRoiKnown=Number.isFinite(Number(a.roi)),hRoiKnown=Number.isFinite(Number(h.roi));
+      return `<tr><td><b>${escLocal(name)}</b></td><td class="num">${num(a.hits)}/${num(a.total)}</td><td class="num">%${fmt2Local(num(a.rate)*100)}</td><td class="num tkpMoney ${moneyTone(aRoiKnown?num(a.roi)*100:null,aRoiKnown)}">${aRoiKnown?'%'+fmt2Local(num(a.roi)*100):'—'}</td><td class="num">${num(h.hits)}/${num(h.total)}</td><td class="num tkpMoney ${moneyTone(hRoiKnown?num(h.roi)*100:null,hRoiKnown)}">${hRoiKnown?'%'+fmt2Local(num(h.roi)*100):'—'}</td><td><span class="tkpBtDecisionBadge ${decision==='PAS'?'pass':'caution'}">${decision}</span></td></tr>`;
     }).join('');
     return `<div class="card tkpReal509PersistentReference" style="border-left:5px solid #0f766e;"><h2 style="margin:0 0 5px;">⚡ Kalıcı REAL509/V46 arşiv referansı</h2><p class="muted" style="margin:0 0 7px;">${num(dataset.archive_meetings)} toplantı / ${num(dataset.archive_races)} koşu denetlendi; yarış-öncesi V46 satırı bulunan eksiksiz <b>${num(dataset.complete_v46_sixleg_meetings)} toplantı</b> kronolojik analizde kullanıldı. Bu hazır çıktı Ctrl+F5 sonrası yeniden hesaplanmaz ve <b>bugünkü algoritmanın canlı replay'i gibi gösterilmez.</b></p><div class="tableWrap compactBacktest"><table><thead><tr><th>Kupon</th><th class="num">Tüm arşiv 6/6</th><th class="num">Tüm %</th><th class="num">Holdout 6/6</th><th class="num">Holdout %</th><th class="num">Ort. maliyet</th></tr></thead><tbody>${defs.map(([key,label])=>row(key,label)).join('')}</tbody></table></div><details style="margin-top:7px;"><summary>Kalıcı yan bahis kalibrasyonu</summary><div class="tableWrap compactBacktest"><table><thead><tr><th>Ürün</th><th class="num">Tüm isabet</th><th class="num">Tüm %</th><th class="num">Tüm ROI</th><th class="num">Holdout</th><th class="num">Holdout ROI</th><th>Karar</th></tr></thead><tbody>${sideRows}</tbody></table></div><p class="muted">Sıralı 5'li pozitif görünse de getiri birkaç büyük ikramiyeye yoğunlaştığı için otomatik OYNA yapılmaz.</p></details></div>`;
   }
 
+  // FIX (Tommy talebi — "tıkanan/eksik veri gösteren tabloları düzeltelim"):
+  // büyük arşivde tkp-segmented-idb.js belleği korumak için db.races'i kısmi
+  // ("sıcak pencere") yükler. "Yeni algoritma" havuzu bu kısmi pencereden
+  // hesaplanır; soğuk (yüklenmemiş) toplantılar varsa örneklem küçük kalıp
+  // ROI/6-6 sayıları yapay biçimde kötü görünebilir. Bu artık gizlenmez.
+  function racesColdNotice(){
+    const info=global.db?.__segmented_storage?.collections?.races;
+    if(!info||!Number(info.coldCount))return '';
+    const loaded=Number(info.loadedCount||0).toLocaleString('tr-TR'),total=Number(info.total||0).toLocaleString('tr-TR'),cold=Number(info.coldCount||0).toLocaleString('tr-TR');
+    return `<p class="muted" style="color:#b45309;margin:4px 0 7px">⚠️ Koşu arşivi: bellek güvenliği için bu oturumda yalnız <b>${loaded}/${total}</b> koşu yüklü (${cold} koşu soğuk arşivde duruyor, silinmedi). "Yeni algoritma" havuzu bu kısmi pencereden hesaplandı; küçük/aşırı örneklem bundan kaynaklanabilir.</p>`;
+  }
   function algorithmDevelopmentComparisonHTML(result){
     const archive=global.TKP_REAL509_ARCHIVE,baseline=archive?.portfolioSummary?.all;
     if(!baseline||!result)return '';
@@ -1562,35 +1589,38 @@
     const rows=currentDefs.map(([baseKey,label,item])=>{
       const b=baseline?.[baseKey]||{},bn=num(b.meetings),bh=num(b.hits),br=bn?bh/bn:0,cn=num(item?.meetings),ch=num(item?.full),cr=cn?ch/cn:0;
       const delta=(cr-br)*100,relative=br?((cr/br)-1)*100:NaN,same=bn===cn&&bn>0;
-      return `<tr><td><b>${escLocal(label)}</b></td><td class="num">${bh}/${bn} · %${fmt2Local(br*100)}</td><td class="num">${ch}/${cn} · %${fmt2Local(cr*100)}</td><td class="num"><b>${pp(delta)}</b><small>${rel(relative)}${same?' · aynı örneklem':' · örneklem farklı'}</small></td></tr>`;
+      return `<tr><td><b>${escLocal(label)}</b></td><td class="num">${bh}/${bn} · %${fmt2Local(br*100)}</td><td class="num">${ch}/${cn} · %${fmt2Local(cr*100)}</td><td class="num"><b>${pp(delta)}</b> <small>${rel(relative)}${same?' · aynı örneklem':' · örneklem farklı'}</small></td></tr>`;
     }).join('');
+    // REAL509/V46 arşivindeki kanonik ürün adlarıyla eşleştir. Eski tabloda
+    // Sıralı Üçlü / Dörtlü / Tabela farklı adlarla arandığı için var olan baseline
+    // yanlışlıkla '—' görünüyordu. Beşli Ganyan için ayrı REAL509 baseline yoktur.
     const sideMap=[
       ['Çifte','cifte','Çifte'],
       ['Sıralı İkili','sirali_ikili','Sıralı İkili'],
-      ['Sıralı Üçlü','sirali_uclu','Sıralı Üçlü'],
-      ['Dörtlü Ganyan','dortlu_ganyan_main','Dörtlü Ganyan'],
-      ['Beşli Ganyan','besli_main','Beşli Ganyan'],
-      ['Tabela','tabela','Tabela'],
+      ['Sıralı Üçlü','sirali_uclu','Üçlü Bahis'],
+      ['Dörtlü Ganyan','dortlu_ganyan_main','Tabela / Dörtlü'],
+      ['Beşli Ganyan','besli_main',null],
+      ['Tabela','tabela','Tabela / Dörtlü'],
       ["Sıralı 5'li",'sirali5li',"Sıralı 5'li"]
     ];
     const sideRows=sideMap.map(([name,key,baselineName])=>{
-      const baselineItem=archive?.sidebetSummary?.[baselineName]?.finalAll;
+      const baselineItem=baselineName?archive?.sidebetSummary?.[baselineName]?.finalAll:null;
       const baselineAvailable=!!baselineItem&&num(baselineItem.total)>0;
       const b=baselineItem||{},c=result.side?.[key]||{},bn=num(b.total),bh=num(b.hits),br=bn?bh/bn:NaN,cn=num(c.total),ch=num(c.ok),cr=cn?ch/cn:NaN;
       const currentAvailable=cn>0;
       const broi=baselineAvailable&&Number.isFinite(Number(b.roi))?Number(b.roi)*100:null,croi=currentAvailable&&Number.isFinite(Number(c.roi))?Number(c.roi):null;
       const delta=baselineAvailable&&currentAvailable?(cr-br)*100:NaN;
-      const baselineHit=baselineAvailable?`${bh}/${bn} · %${fmt2Local(br*100)}`:'—';
+      const baselineHit=baselineAvailable?`${bh}/${bn} · %${fmt2Local(br*100)}`:'Baseline yok';
       const currentHit=currentAvailable?`${ch}/${cn} · %${fmt2Local(cr*100)}`:'—';
-      return `<tr><td><b>${escLocal(name)}</b></td><td class="num">${baselineHit}</td><td class="num">${currentHit}</td><td class="num">${Number.isFinite(delta)?pp(delta):'—'}</td><td class="num">${broi==null?'—':'%'+fmt2Local(broi)}</td><td class="num">${croi==null?'—':'%'+fmt2Local(croi)}</td></tr>`;
+      return `<tr><td><b>${escLocal(name)}</b></td><td class="num">${baselineHit}</td><td class="num">${currentHit}</td><td class="num">${Number.isFinite(delta)?pp(delta):'—'}</td><td class="num tkpMoney ${moneyTone(broi,broi!=null)}">${broi==null?'Baseline yok':'%'+fmt2Local(broi)}</td><td class="num tkpMoney ${moneyTone(croi,croi!=null)}">${croi==null?'—':'%'+fmt2Local(croi)}</td></tr>`;
     }).join('');
-    return `<div class="card tkpAlgorithmDevelopment" style="border-left:5px solid #7c3aed"><h2 style="margin:0 0 5px">📈 Algoritma Gelişimi · Baseline → Yeni algoritma</h2><p class="muted" style="margin:0 0 7px">6/6 gelişim ve yan bahis gelişimi açıkça gösterilir. Baseline kalıcı REAL509/V46 referansıdır; Yeni algoritma seçilen Back Test havuzudur. Örneklem farklıysa bu özellikle yazılır; sonuçlar yapay olarak eşitlenmez.</p><div class="tableWrap compactBacktest"><table><thead><tr><th>Altılı</th><th>Baseline</th><th>Yeni algoritma</th><th>6/6 gelişim</th></tr></thead><tbody>${rows}</tbody></table></div><h3 style="margin:8px 0 4px">Yan bahis gelişimi</h3><div class="tableWrap compactBacktest"><table><thead><tr><th>Ürün</th><th>Baseline isabet</th><th>Yeni isabet</th><th>İsabet farkı</th><th>Baseline ROI</th><th>Yeni ROI</th></tr></thead><tbody>${sideRows}</tbody></table></div></div>`;
+    return `<div class="card tkpAlgorithmDevelopment" style="border-left:5px solid #7c3aed"><h2 style="margin:0 0 5px">📈 Algoritma Gelişimi · Baseline → Yeni algoritma</h2><p class="muted" style="margin:0 0 7px">6/6 gelişim ve yan bahis gelişimi açıkça gösterilir. Baseline kalıcı REAL509/V46 referansıdır; Yeni algoritma seçilen Back Test havuzudur. Örneklem farklıysa bu özellikle yazılır; sonuçlar yapay olarak eşitlenmez.</p>${racesColdNotice()}<div class="tableWrap compactBacktest"><table><thead><tr><th>Altılı</th><th>Baseline</th><th>Yeni algoritma</th><th>6/6 gelişim</th></tr></thead><tbody>${rows}</tbody></table></div><h3 style="margin:8px 0 4px">Yan bahis gelişimi</h3><div class="tableWrap compactBacktest"><table><thead><tr><th>Ürün</th><th>Baseline isabet</th><th>Yeni isabet</th><th>İsabet farkı</th><th>Baseline ROI</th><th>Yeni ROI</th></tr></thead><tbody>${sideRows}</tbody></table></div></div>`;
   }
 
-  function fastHTML(budgets,limit=50,precomputedKey=''){
-    const safeLimit=Math.max(1,Math.min(509,num(limit,509)));
+  function fastHTML(budgets,limit,precomputedKey=''){
+    const safeLimit=archiveLimit(limit);
     const coreKey=precomputedKey||datasetKey(safeLimit,budgets);
-    const htmlKey=coreKey+'|HTML22';
+    const htmlKey=coreKey+'|HTML23';
     if(fastHtmlCache.has(htmlKey)) return fastHtmlCache.get(htmlKey);
     const started=(global.performance&&performance.now)?performance.now():Date.now();
     const result=fastCore(budgets,safeLimit,coreKey);
@@ -1610,7 +1640,7 @@
     });
     const summaryRow=(label,item)=>{
       const financeKnown=num(item.payoutKnown)>0;
-      return `<tr><td><b>${escLocal(label)}</b></td><td class="num">${num(item.total)}</td><td class="num">${num(item.ok)}</td><td class="num">${pctSpan(item.ok,item.total)}</td><td class="num">${singleSuccessHTML(item)}</td><td class="num">${fmtTLLocal(item.cost)}</td><td class="num">${num(item.payoutKnown)}</td><td class="num">${financeKnown?fmtTLLocal(item.financeCost):unknownMoney()}</td><td class="num">${financeKnown?fmtTLLocal(item.ret):unknownMoney()}</td><td class="num tkpMoney ${financeKnown&&item.net>=0?'pos':'neg'}"><b>${financeKnown?fmtTLLocal(item.net):unknownMoney()}</b></td><td class="num">${financeKnown?'%'+fmt2Local(item.roi):unknownMoney()}</td></tr>`;
+      return `<tr><td><b>${escLocal(label)}</b></td><td class="num">${num(item.total)}</td><td class="num">${num(item.ok)}</td><td class="num">${pctSpan(item.ok,item.total)}</td><td class="num">${singleSuccessHTML(item)}</td><td class="num">${fmtTLLocal(item.cost)}</td><td class="num">${num(item.payoutKnown)}</td><td class="num">${financeKnown?fmtTLLocal(item.financeCost):unknownMoney()}</td><td class="num">${financeKnown?fmtTLLocal(item.ret):unknownMoney()}</td><td class="num tkpMoney ${moneyTone(item.net,financeKnown)}"><b>${financeKnown?fmtTLLocal(item.net):unknownMoney()}</b></td><td class="num">${financeKnown?'%'+fmt2Local(item.roi):unknownMoney()}</td></tr>`;
     };
     const targetDefs=[
       {key:'main',label:'Normal',min:140,max:220},
@@ -1629,8 +1659,10 @@
       }
       const state=full<def.min?'ALTINDA':(full>def.max?'ÜSTÜNDE':'BANTTA');
       const cls=state==='BANTTA'?'play':(state==='ALTINDA'?'caution':'pass');
-      return `<tr><td><b>${escLocal(def.label)}</b><small>${source}</small></td><td class="num">${def.min}–${def.max}</td><td class="num">${full}/${total}</td><td class="num">${pctSpan(full,total)}</td><td class="num">${fmtTLLocal(avg)}</td><td class="num">${roi==null?unknownMoney():'%'+fmt2Local(roi)}</td><td><span class="tkpBtDecisionBadge ${cls}">${state}</span></td></tr>`;
+      return `<tr><td><b>${escLocal(def.label)}</b> <small>${source}</small></td><td class="num">${def.min}–${def.max}</td><td class="num">${full}/${total}</td><td class="num">${pctSpan(full,total)}</td><td class="num">${fmtTLLocal(avg)}</td><td class="num">${roi==null?unknownMoney():'%'+fmt2Local(roi)}</td><td><span class="tkpBtDecisionBadge ${cls}">${state}</span></td></tr>`;
     }).join('');
+    // R19.47.19: Bu hedef tablosu artık ayrı render edilmez; 6/6, maliyet ve ROI aynı
+    // kanonik Replay tablosunda gösterilir. Hesap hedef/karar mantığı için korunur.
     const targetHtml=`<div class="card tkpBacktestTargetCard" style="border-left:5px solid #7c3aed;"><h2 style="margin:0 0 5px;">🎯 Strateji Hedefi · 6/6 / Bütçe / ROI</h2><p class="muted" style="margin:0 0 7px;">Hedef bantları Normal 140–220, Sürpriz 90–150, Uzman + Kulis 80–140 tam 6/6 içindir. Yeni sonuçla Back Test önbelleği yenilenir; oranlar yalnız sonuçlu toplantılardan hesaplanır.</p><div class="tableWrap compactBacktest"><table><thead><tr><th>Strateji</th><th class="num">Hedef</th><th class="num">6/6</th><th class="num">%</th><th class="num">Ort. maliyet</th><th class="num">ROI</th><th>Durum</th></tr></thead><tbody>${targetRows}</tbody></table></div></div>`;
     function altiliUsefulness(label,item){
       const total=Math.max(0,num(item?.total)),full=Math.max(0,num(item?.ok)),near5=Math.max(full,num(item?.near5));
@@ -1686,7 +1718,7 @@
       const decisionTitle=total>=MIN_PERCENT_SAMPLE?`Wilson alt %${Math.round(decision.lower*100)}`:`Örnek n=${total}`;
       const decisionBadge=`<span class="tkpBtDecisionBadge ${decisionClass}" title="${decisionTitle}">${decision.label}</span>`;
       const leaderBadge=leaderLabel&&label.startsWith(leaderLabel)?'<span class="tkpBtLeaderBadge">🏆 ANA</span>':'';
-      return `<tr class="${leaderBadge?'tkpBtLeaderRow':''}"><td><b>${escLocal(label)}</b> ${leaderBadge} ${decisionBadge}</td><td class="num">${total}</td><td class="num">${ok}</td><td class="num">${pctSpan(ok,total)}</td><td class="num">${singleCell}</td><td class="num">${fmtTLLocal(cost)}</td><td class="num">${num(item?.payoutKnown)}</td><td class="num">${financeKnown?fmtTLLocal(financeCost):unknownMoney()}</td><td class="num">${financeKnown?fmtTLLocal(ret):unknownMoney()}</td><td class="num tkpMoney ${financeKnown&&net>=0?'pos':'neg'}"><b>${financeKnown?fmtTLLocal(net):unknownMoney()}</b></td><td class="num">${financeKnown?(total>=MIN_PERCENT_SAMPLE?'%'+fmt2Local(roi):`—`):unknownMoney()}</td></tr>`;
+      return `<tr class="${leaderBadge?'tkpBtLeaderRow':''}"><td><b>${escLocal(label)}</b> ${leaderBadge} ${decisionBadge}</td><td class="num">${total}</td><td class="num">${ok}</td><td class="num">${pctSpan(ok,total)}</td><td class="num">${singleCell}</td><td class="num">${fmtTLLocal(cost)}</td><td class="num">${num(item?.payoutKnown)}</td><td class="num">${financeKnown?fmtTLLocal(financeCost):unknownMoney()}</td><td class="num">${financeKnown?fmtTLLocal(ret):unknownMoney()}</td><td class="num tkpMoney ${moneyTone(net,financeKnown)}"><b>${financeKnown?fmtTLLocal(net):unknownMoney()}</b></td><td class="num">${financeKnown?(total>=MIN_PERCENT_SAMPLE?'%'+fmt2Local(roi):`—`):unknownMoney()}</td></tr>`;
     };
     const maxMonthIndex=backtestMaxMonthIndex(result);
     const periodRows=period=>{
@@ -1710,17 +1742,17 @@
     const couponUsage=result.couponUsage||{archived:0,scenario:0,meetingsWithSnapshot:0};
     const sourceNote=`Kupon politikası: <b>V55.2 dengeli Normal + bağımsız Sürpriz + Uzman/Kulis</b> · sıralama modeli: <b>${escLocal(currentModelVersion()||'TKP')}</b>. Gerçek yarış-öncesi kupon snapshotı varsa yalnız o kupon çözülür; snapshot yoksa yalnız kilitli skorlarla senaryo replay'i yapılır. Gerçek snapshot kuponu: <b>${couponUsage.archived||0}</b> · snapshotlı toplantı: <b>${couponUsage.meetingsWithSnapshot||0}</b> · Açık kilitli ayak: <b>${usage.current}</b> · kronolojik arşiv ayak: <b>${usage.archive}</b> · doğrulanmamış fallback: <b>${usage.fallback}</b>. <br><b>Replay Uygun ${eligibility.replayEligible||0}</b> · Kupon snapshotıyla doğrulanan ${eligibility.snapshotVerified||0} · frozen skorla doğrulanan ${eligibility.frozenScoreVerified||0} · Eksik snapshot ${eligibility.missingSnapshot||0} · Eksik sonuç/6 ayak ${eligibility.missingResult||0} · Ağır eksik ${eligibility.heavyMissing||0}${eligibility.outsideReset?` · Dönem dışı ${eligibility.outsideReset}`:''}.`;
     const refMonth=Number.isFinite(maxMonthIndex)?`${Math.floor(maxMonthIndex/12)}-${String(maxMonthIndex%12+1).padStart(2,'0')}`:'—';
-    const replayHtml=`<div class="card tkpRealBacktestOnly" style="border-left:5px solid #315b7d;"><div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap"><h2 style="margin:0 0 5px;">🧪 Gerçek Back Test — Geçerli Algoritma · Replay</h2><div class="tkpBacktestPeriodSwitch" style="display:flex;gap:4px;flex-wrap:wrap"><button type="button" class="tkpBacktestPeriodBtn active" data-period="month" aria-pressed="true" onclick="tkpBacktestPeriodSwitch('month')">Bu Ay</button><button type="button" class="tkpBacktestPeriodBtn" data-period="last3" aria-pressed="false" onclick="tkpBacktestPeriodSwitch('last3')">Son 3 Ay</button><button type="button" class="tkpBacktestPeriodBtn" data-period="all" aria-pressed="false" onclick="tkpBacktestPeriodSwitch('all')">Tüm Zamanlar</button></div></div><p class="muted" style="margin:0 0 6px;">${result.groupsTested} doğrulanmış toplantı havuzu${skippedNote} · Referans ay: <b>${escLocal(refMonth)}</b>. Dönem değişince hazır replay sonucu gösterilir; veri değişmedikçe yeniden hesaplanmaz.</p><p class="muted" style="margin:0 0 6px;color:#0f766e !important;">${sourceNote}</p><p class="muted" style="margin:0 0 6px;color:#92400e !important;">ROI yalnız resmî ikramiye bulunan testlerden hesaplanır. Sonuç sonrası veri tahmin girdisine katılmaz. Süre: <b>${took} ms</b>.</p><div class="tkpBtLeaderWrap">${bestStrategyBadge('month',maxMonthIndex)}${bestStrategyBadge('last3',maxMonthIndex).replace('class="tkpBtLeaderCard"','class="tkpBtLeaderCard" style="display:none"')}${bestStrategyBadge('all',maxMonthIndex).replace('class="tkpBtLeaderCard"','class="tkpBtLeaderCard" style="display:none"')}</div><div class="tableWrap compactBacktest tkpBacktestSummary tkpBacktestSummaryUnified tkpOneScreenBacktest"><table><thead><tr><th>Bahis</th><th class="num">Test</th><th class="num">Tuttu</th><th class="num">%</th><th class="num" title="Tek başarısı">Tek</th><th class="num">Test maliyeti</th><th class="num">Resmî</th><th class="num">Resmî maliyet</th><th class="num">Kazanç</th><th class="num">Net</th><th class="num">ROI</th></tr></thead><tbody class="tkpBacktestPeriodBody" data-period="month">${rowsMonth}</tbody><tbody class="tkpBacktestPeriodBody" data-period="last3" style="display:none">${rowsLast3}</tbody><tbody class="tkpBacktestPeriodBody" data-period="all" style="display:none">${rowsAll}</tbody></table></div></div>`;
-    const finalHtml=bankrollHtml+recordedCouponHistoryHTML()+real509ArchiveReferenceHTML()+algorithmDevelopmentComparisonHTML(result)+targetHtml+calibrationHtml+replayHtml;
+    const replayHtml=`<div class="card tkpRealBacktestOnly" style="border-left:5px solid #315b7d;"><div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap"><h2 style="margin:0 0 5px;">🧪 Gerçek Back Test — Geçerli Algoritma · Replay</h2><div class="tkpBacktestPeriodSwitch" style="display:flex;gap:4px;flex-wrap:wrap"><button type="button" class="tkpBacktestPeriodBtn active" data-period="month" aria-pressed="true" onclick="tkpBacktestPeriodSwitch('month')">Bu Ay</button><button type="button" class="tkpBacktestPeriodBtn" data-period="last3" aria-pressed="false" onclick="tkpBacktestPeriodSwitch('last3')">Son 3 Ay</button><button type="button" class="tkpBacktestPeriodBtn" data-period="all" aria-pressed="false" onclick="tkpBacktestPeriodSwitch('all')">Tüm Zamanlar</button></div></div><p class="muted" style="margin:0 0 6px;"><b>Arşiv toplamı:</b> ${num(result.archiveTotalMeetings)} toplantı / ${num(result.archiveTotalRaces)} koşu · <b>Sonuç bulunan:</b> ${num(result.meetingsWithAnyResult)} toplantı · <b>Analize giren:</b> ${result.groupsTested} doğrulanmış toplantı${skippedNote} · Referans ay: <b>${escLocal(refMonth)}</b>. Dönem değişince hazır replay sonucu gösterilir; veri değişmedikçe yeniden hesaplanmaz.</p><p class="muted" style="margin:0 0 6px;color:#0f766e !important;">${sourceNote}</p><p class="muted" style="margin:0 0 6px;color:#92400e !important;">ROI yalnız resmî ikramiye bulunan testlerden hesaplanır. Sonuç sonrası veri tahmin girdisine katılmaz. Süre: <b>${took} ms</b>.</p><div class="tkpBtLeaderWrap">${bestStrategyBadge('month',maxMonthIndex)}${bestStrategyBadge('last3',maxMonthIndex).replace('class="tkpBtLeaderCard"','class="tkpBtLeaderCard" style="display:none"')}${bestStrategyBadge('all',maxMonthIndex).replace('class="tkpBtLeaderCard"','class="tkpBtLeaderCard" style="display:none"')}</div><div class="tableWrap compactBacktest tkpBacktestSummary tkpBacktestSummaryUnified tkpOneScreenBacktest"><table><thead><tr><th>Bahis</th><th class="num">Test</th><th class="num">Tuttu</th><th class="num">%</th><th class="num" title="Tek başarısı">Tek</th><th class="num">Test maliyeti</th><th class="num">Resmî</th><th class="num">Resmî maliyet</th><th class="num">Kazanç</th><th class="num">Net</th><th class="num">ROI</th></tr></thead><tbody class="tkpBacktestPeriodBody" data-period="month">${rowsMonth}</tbody><tbody class="tkpBacktestPeriodBody" data-period="last3" style="display:none">${rowsLast3}</tbody><tbody class="tkpBacktestPeriodBody" data-period="all" style="display:none">${rowsAll}</tbody></table></div></div>`;
+    const finalHtml=bankrollHtml+recordedCouponHistoryHTML()+real509ArchiveReferenceHTML()+algorithmDevelopmentComparisonHTML(result)+calibrationHtml+replayHtml;
     fastHtmlCache.set(htmlKey,finalHtml);
     if(fastHtmlCache.size>12) fastHtmlCache.delete(fastHtmlCache.keys().next().value);
     return finalHtml;
   }
 
-  async function fastHTMLAsync(budgets,limit=50,onProgress=null){
-    const safeLimit=Math.max(1,Math.min(509,num(limit,509)));
+  async function fastHTMLAsync(budgets,limit,onProgress=null){
+    const safeLimit=archiveLimit(limit);
     const coreKey=datasetKey(safeLimit,budgets);
-    const htmlKey=coreKey+'|HTML22';
+    const htmlKey=coreKey+'|HTML23';
     if(fastHtmlCache.has(htmlKey))return fastHtmlCache.get(htmlKey);
     await fastCoreAsync(budgets,safeLimit,coreKey,onProgress);
     return fastHTML(budgets,safeLimit,coreKey);

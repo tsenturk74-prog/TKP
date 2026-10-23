@@ -7,13 +7,14 @@
 (function(global){
   'use strict';
 
-  const VERSION='V1.1.333_SHARED_GOLD_TEK';
+  const VERSION='V1.1.333_R19_39_MENU_NO_REFRESH';
   const UI_DEADLINE_MS=15000;
   const renderCache=new Map();
   const renderInFlight=new Map();
-  // Sistem paneli canlı ölçüm gösterir; HTML önbelleğine alınırsa tıklama/render
-  // kayıtları değişse bile eski tablo ekranda kalır. Bu nedenle ucuz olan Sistem
-  // renderer'ı her açılışta yeniden çalışır.
+  // Menü değişimi veri güncelleme değildir. Aynı veri/kontrol imzasında tüm üst
+  // paneller mevcut DOM/cache üzerinden açılır; yalnız ağır paneller ilk üretimde
+  // arka plana ertelenir. Gerçek veri imzası değişirse cache otomatik geçersizdir.
+  const CACHED_PANES=new Set(['dashboard','advice','rules','analytics','import','data','prediction','files','profit','backtest','system','learning','backup']);
   const HEAVY_PANES=new Set(['advice','rules','analytics','data','files','profit','backtest','learning']);
   const _paneRenderGeneration=new Map();
 
@@ -68,7 +69,9 @@
       // bir ekranı cache isabeti sayarsak sekmeye dönüldüğünde "Hesaplanıyor…"
       // kutuları sonsuza kadar kalır. Tüm bekleme işaretleri bitmeden cache kullanma.
       const pane=document.getElementById('pane-analytics');
-      const required=['surfaceTable','breedTable','hippoTable','conditionTable','conditionRankTable','agfRankTableEl','distanceTable','valueTable','signalPerfTable','hippoSignalTable','accurateSpeedTable','xKulisAnalysisTable','kulvarTable','adaptiveLearningTable'];
+      // FIX (Tommy talebi): Pist/Safkan/Hipodrom/Koşu ailesi/Mesafe 5 ayrı id yerine
+      // tek birleşik id (categoryAnalysisTable) — bkz. ui-components.js categoryTablesMergedHTML.
+      const required=['categoryAnalysisTable','winnerRankMergedTable','valueTable','signalPerfTable','hippoSignalTable','accurateSpeedTable','xKulisAnalysisTable','kulvarTable','adaptiveLearningTable'];
       return !!pane && !pane.querySelector('[data-analytics-pending="1"],.tkpAnalyticsPending')
         && required.every(id=>{
           const el=document.getElementById(id);
@@ -196,7 +199,7 @@
     const baseSig=paneSignature(name);
     const sig=baseSig+'|'+paneControlSignature(name);
     const cached=renderCache.get(name);
-    if(HEAVY_PANES.has(name) && cached && cached.sig===sig && paneHasContent(name)){
+    if(CACHED_PANES.has(name) && cached && cached.sig===sig && paneHasContent(name)){
       return {cached:true,name,durationMs:cached.durationMs};
     }
     if(HEAVY_PANES.has(name)) return scheduleHeavyRender(name,fn,baseSig);
@@ -224,7 +227,7 @@
     if(detail.backtestChanged||detail.couponSnapshotChanged)renderCache.delete('backtest');
     const cols=Array.isArray(detail.collections)?detail.collections:[];
     if(cols.includes('bets'))renderCache.delete('profit');
-    if(cols.some(x=>['files','races'].includes(x))){for(const name of ['data','files','analytics','advice','rules','learning'])renderCache.delete(name);}
+    if(cols.some(x=>['files','races'].includes(x))){for(const name of ['dashboard','data','prediction','files','analytics','advice','rules','system','learning'])renderCache.delete(name);}
     if(cols.some(x=>['forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','surprise_cohort_tracking_log','bomb_hunter_shadow_log'].includes(x)))renderCache.delete('learning');
   });
 })(window);

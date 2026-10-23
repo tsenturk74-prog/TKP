@@ -8,7 +8,8 @@
 (function(global){
   'use strict';
 
-  const VERSION='V53-LEAKFREE-SURPRISE-PORTFOLIO';
+  const VERSION='V53-LEAKFREE-SURPRISE-PORTFOLIO-RESCUE-FIX';
+  const horseNumberCollator=new Intl.Collator('tr',{numeric:true,sensitivity:'base'});
   let preparedCache=new WeakMap();
 
   function numberOrNull(value){
@@ -162,7 +163,7 @@
     takeBest(row=>row.classicTail,row=>row.score+Math.min(6,Math.max(0,row.rank-4))*.08);
     takeBest(row=>row.consensusTail||row.valueTail,row=>row.score+(row.consensusTail ? .08 : 0)+(row.valueTail ? .05 : 0));
     takeBest(row=>row.moneySignal||row.evidence.includes('Son 6 galibiyeti'),row=>row.score+(row.moneySignal ? .08 : 0));
-    remaining.sort((left,right)=>right.score-left.score||left.rank-right.rank||TKP_TR_COLLATOR_NUM.compare(horseNo(left.horse),horseNo(right.horse)));
+    remaining.sort((left,right)=>right.score-left.score||left.rank-right.rank||horseNumberCollator.compare(horseNo(left.horse),horseNo(right.horse)));
     return anchors.concat(remaining);
   }
 
@@ -180,9 +181,8 @@
 
   function portfolioHedgesForRace(race,baseOrder,limit=2){
     const prepared=preparedEvidence(race,baseOrder);
-    return diversifiedTail(prepared.rows
-      .filter(row=>row.rank>4&&(row.evidence.length>0||row.score>=.34)))
-      .slice(0,Math.max(0,Number(limit)||0));
+    const eligible=prepared.rows.filter(row=>row.rank>4&&(row.evidence.length>0||row.score>=.34));
+    return diversifiedTail(eligible).slice(0,Math.max(0,Number(limit)||0));
   }
 
   function isPortfolioCandidate(race,horse,baseOrder){
@@ -190,6 +190,124 @@
     return row.rank>4&&(row.evidence.length>0||row.score>=.34);
   }
 
+  // Shadow rescue: yalnız ön-yarış aday özellikleri ve kupon seçimleri.
+  // Buradaki skor bir kazanma olasılığı DEĞİLDİR; öğrenme/kalibrasyon yokken
+  // canlı kupona otomatik müdahale etmek yerine gerekçeli aday üretir.
+  function coverageRescueAudit(race,baseOrder,couponPicks=[],options={}){
+    const prepared=preparedEvidence(race,baseOrder);
+    const normalizedPicks=(Array.isArray(couponPicks)?couponPicks:[]).map(p=>
+      typeof p==='object'?horseNo(p):String(p??'').trim()).filter(Boolean);
+    const existing=new Set(normalizedPicks);
+    const sameGroup=(a,b)=>{
+      if(a===b)return true;
+      try{return typeof global.sameEkuri==='function'&&!!global.sameEkuri(a,b);}catch(_){return false;}
+    };
+    const covered=(no)=>[...existing].some(p=>sameGroup(p,no));
+    const budget=Number(options.maxAddedPicks);
+    const slots=Number.isFinite(budget)?Math.max(0,Math.min(6,Math.floor(budget))):1;
+    const maxAlternatives=Number.isFinite(Number(options.maxAlternatives))?Math.max(0,Math.min(30,Math.floor(Number(options.maxAlternatives)))):8;
+    const estimatedCostFactor=existing.size>0?(existing.size+1)/existing.size:null;
+    const ranked=diversifiedTail(prepared.rows.filter(row=>{
+      const no=horseNo(row.horse);
+      return row.rank>4&&!covered(no)&&(row.evidence.length>0||row.score>=.34);
+    }));
+    const candidates=ranked.slice(0,maxAlternatives).map(row=>({
+      horse_no:horseNo(row.horse),score:row.score,originalRank:row.rank,
+      reasons:row.evidence.slice(),alreadyCovered:false,
+      // Tek ayak kuponuna bir at eklenirse kombinasyon maliyetinin çarpanı.
+      estimatedCostFactor,mode:'shadow'
+    }));
+    return {mode:'shadow',existingCount:existing.size,slots,
+      selected:candidates.slice(0,slots),candidates,
+      skippedAlreadyCovered:prepared.rows.filter(row=>covered(horseNo(row.horse))).length,
+      notice:'Kazanma ihtimali değildir; geçmiş sonuç görülmeden yalnız ön-yarış kurtarma adayıdır.'};
+  }
+
+  // TEK rakip denetimi: Sürpriz kurtarmadan farklı olarak 2-4. sıradaki
+  // atları da kapsar. Yalnız yarış öncesi özellikler; sonuç alanları kullanılmaz.
+  // Bu puan olasılık değildir, canlı TEK kararını otomatik değiştirmez.
+  function tekChallengerAudit(race,baseOrder,tekPick,options={}){
+    const prepared=preparedEvidence(race,baseOrder);
+    const tekNo=typeof tekPick==='object'?horseNo(tekPick):String(tekPick??'').trim();
+    const sameGroup=(a,b)=>{
+      if(a===b)return true;
+      try{return typeof global.sameEkuri==='function'&&!!global.sameEkuri(a,b);}catch(_){return false;}
+    };
+    const tek=prepared.rows.find(row=>horseNo(row.horse)===tekNo);
+    if(!tek)return {mode:'shadow',tek_no:tekNo,status:'TEK_NOT_FOUND',challengers:[]};
+    const rivals=prepared.rows.filter(row=>!sameGroup(tekNo,horseNo(row.horse)))
+      .map(row=>{
+        const nearTop=row.rank<=4;
+        const strength=Math.max(0,row.score);
+        const margin=Math.round((tek.score-strength)*10000)/10000;
+        const evidence=row.evidence.slice();
+        if(nearTop)evidence.unshift('İlk dört tahmin rakibi');
+        // Negatif fark: mevcut ön-yarış sinyalleri rakip lehine.
+        const riskIndex=Math.round((strength+(nearTop?.08:0)+(row.moneySignal?.06:0))*10000)/10000;
+        return {horse_no:horseNo(row.horse),originalRank:row.rank,score:row.score,
+          riskIndex,scoreMargin:margin,reasons:evidence};
+      }).sort((a,b)=>b.riskIndex-a.riskIndex||a.originalRank-b.originalRank||horseNumberCollator.compare(a.horse_no,b.horse_no));
+    const limit=Math.max(0,Math.min(12,Math.floor(Number(options.limit) || 3)));
+    const primary=rivals[0]||null;
+    return {mode:'shadow',tek_no:tekNo,tekScore:tek.score,primary,
+      challengers:rivals.slice(0,limit),
+      reviewRecommended:!!primary&&(primary.scoreMargin<=.10||primary.riskIndex>=tek.score),
+      notice:'Olasılık değildir. TEK kararını değiştirmez; rakip denetim önerisidir.'};
+  }
+  // Three-coupon joint review. Shadow only: no picks or stored snapshots are mutated.
+  // Prioritises horses uncovered by EVERY coupon, while reviewing a dangerous TEK
+  // challenger even when its prediction rank is 2-4. Never uses finish/winner data.
+  function jointTekRescueAudit(race,baseOrder,portfolios={},options={}){
+    const modes=['main','alt','surprise'];
+    const norm=(picks)=>Array.isArray(picks)?picks.map(p=>typeof p==='object'?horseNo(p):String(p??'').trim()).filter(Boolean):[];
+    const selections=Object.fromEntries(modes.map(mode=>[mode,norm(portfolios[mode])]));
+    const sameGroup=(a,b)=>{
+      if(a===b)return true;
+      try{return typeof global.sameEkuri==='function'&&!!global.sameEkuri(a,b);}catch(_){return false;}
+    };
+    const includes=(picks,no)=>picks.some(p=>sameGroup(p,no));
+    const alreadyAnywhere=(no)=>modes.some(mode=>includes(selections[mode],no));
+    const prepared=preparedEvidence(race,baseOrder);
+    const tekReviews={};const candidateMap=new Map();
+    modes.forEach(mode=>{
+      if(selections[mode].length!==1)return;
+      const tek=tekChallengerAudit(race,baseOrder,selections[mode][0],{limit:12});
+      tekReviews[mode]=tek;
+      (tek.challengers||[]).forEach(ch=>{
+        if(!ch.reasons.length && ch.riskIndex<.34)return;
+        const prior=candidateMap.get(ch.horse_no);
+        if(!prior||prior.priority<ch.riskIndex+.10)candidateMap.set(ch.horse_no,{
+          horse_no:ch.horse_no,priority:ch.riskIndex+.10,reasons:ch.reasons,source:'TEK_RAKIP'});
+      });
+    });
+    const rescue=coverageRescueAudit(race,baseOrder,[],{maxAlternatives:30,maxAddedPicks:0});
+    rescue.candidates.forEach(row=>{
+      const prior=candidateMap.get(row.horse_no);
+      if(!prior||prior.priority<row.score)candidateMap.set(row.horse_no,{
+        horse_no:row.horse_no,priority:row.score,reasons:row.reasons,source:'SURPRIZ'});
+    });
+    const requestedLimit=Number(options.maxSuggestions);
+    const maxSuggestions=Number.isFinite(requestedLimit)?Math.max(0,Math.min(12,Math.floor(requestedLimit))):6;
+    const proposed=[];const seen=[];const plannedCounts={alt:selections.alt.length,surprise:selections.surprise.length};
+    [...candidateMap.values()].filter(row=>!alreadyAnywhere(row.horse_no))
+      .sort((a,b)=>b.priority-a.priority||horseNumberCollator.compare(a.horse_no,b.horse_no))
+      .forEach(row=>{
+        if(proposed.length>=maxSuggestions||seen.some(no=>sameGroup(no,row.horse_no)))return;
+        seen.push(row.horse_no);
+        // Keep the normal coupon intact; reserve new coverage for surprise/alt.
+        const destination=plannedCounts.surprise<=plannedCounts.alt?'surprise':'alt';
+        const current=plannedCounts[destination]++;
+        proposed.push({...row,destination,estimatedLegCostMultiplier:current?(current+1)/current:null,
+          coveredBefore:false,mode:'shadow'});
+      });
+    return {mode:'shadow',selections,tekReviews,proposed,
+      notice:'Ön-yarış sinyalli ortak kupon önerisi; maliyet tüm ayaklarla ayrıca hesaplanmalıdır. Kupon değişmez.'};
+  }
+  global.tkpJointTekRescueAudit=jointTekRescueAudit;
+
+  global.tkpTekChallengerAudit=tekChallengerAudit;
+
+  global.tkpCoverageRescueAudit=coverageRescueAudit;
   global.TKP_SURPRISE_PORTFOLIO_VERSION=VERSION;
   global.tkpSurpriseEvidenceForHorse=surpriseEvidenceForHorse;
   global.tkpPortfolioOrderForRace=portfolioOrderForRace;

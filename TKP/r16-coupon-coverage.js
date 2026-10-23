@@ -213,6 +213,26 @@
     else if(gap >= 0.06) minCount = 4;
     else minCount = 6;
 
+    // Ortak sinyal kapsam denetimi: AGF6/TKP6, BH/BMB/ODB ve TR/PROF/Y PUAN
+    // yalnızca karışık ayakta at sayısı tabanını etkiler; lider olasılığını
+    // veya bahis sonucunu değiştirmez. Eksik alanlar 0 sayılır.
+    const topSixAgf = new Set(rows.slice().sort((a,b)=>safeNum(b.agf)-safeNum(a.agf)).slice(0,6).map(normalizeNo));
+    const topSixTkp = new Set(rows.slice().sort((a,b)=>safeNum(b.tkp_probability??b.probability??b.score)-safeNum(a.tkp_probability??a.probability??a.score)).slice(0,6).map(normalizeNo));
+    const bhSignal = h => {
+      const bhRank=safeNum(h?.bh_rank??h?.bhRank??h?.bh_order,0);
+      const annotated=bhRank>=1&&bhRank<=6;
+      return annotated || h?.bh_pick===true || h?.bh_coverage_pick===true;
+    };
+    const multiSupport = h => (Number(h?.bmb)===1?1:0)+(Number(h?.odb)===1?1:0)
+      +(safeNum(h?.ypuan)>=70?1:0)+(safeNum(h?.tr_profile_score)>=70?1:0)
+      +(safeNum(h?.tr_puan)>=7?1:0);
+    const bhOutsiders = rows.filter(h=> !topSixAgf.has(normalizeNo(h)) &&
+      (bhSignal(h) || multiSupport(h)>=2));
+    const unionCandidateCount = new Set([...topSixAgf,...topSixTkp]).size;
+    const contested = pool.length>=8 && top.p<0.40 && gap<0.14;
+    if(contested && (bhOutsiders.length>0 || unionCandidateCount>=9)){
+      minCount=Math.max(minCount,Math.min(7,5+(bhOutsiders.length>=2?1:0)));
+    }
     if(leg.picks?.length===1) minCount = 1;
     if(!Number.isFinite(minCount) || minCount < 1) minCount = 2;
 
@@ -300,6 +320,16 @@
       try{decision=global.dynamicSingleDecision(x,leader,second);}catch(_){return null;}
       if(!decision||decision.failureBlocked||decision.agfTrap?.hardBlock||decision.xBreakSingle||decision.weightOk===false)return null;
     }
+    // AGF lideri tek başına yeterli değildir. At 1/2/3 aynı koşullarla
+    // değerlendirilebilir; destek yoksa sahte güvenle TEK zorlanmaz.
+    const agfRows=spec.sourceRows.slice().sort((a,b)=>safeNum(b.agf)-safeNum(a.agf));
+    const marketLeader=agfRows[0];
+    const marketFavGap=agfRows.length>1?safeNum(agfRows[0].agf)-safeNum(agfRows[1].agf):100;
+    const modelFavDisagreement=marketLeader && normalizeNo(marketLeader)!==normalizeNo(leader);
+    const disputed=marketFavGap<4 && p<.65;
+    const support=safeNum(leader?.tr_profile_score)>=65 || safeNum(leader?.ypuan)>=70 ||
+      Number(leader?.bmb)===1 || Number(leader?.odb)===1;
+    if(disputed && !support && !modelFavDisagreement)return null;
     const strong=p>=.62&&p-rival>=.18&&(!decision||(decision.isSingle&&Number(decision.confidence)>=Number(decision.threshold||68)));
     spec.singleCandidate={...row,h:leader,p,gap:p-rival,strong,confidence:decision?.confidence??null,risk:Number(decision?.risk?.score)||0};
     return spec.singleCandidate;
@@ -493,7 +523,7 @@
 
     const unit = Number(coupon.unit) || 1;
     const low = Math.ceil(1000 / unit - 1e-8);
-    const high = Math.floor(1400 / unit + 1e-8);
+    const high = Math.floor(3000 / unit + 1e-8);
 
     const specs=[];
     for(let index=0;index<coupon.legs.length;index++){
@@ -512,7 +542,7 @@
 
     // Kupon dağılımı kuralı: iki atlı ayak yalnızca bir kez kullanılabilir.
     // Diğer çoklu ayaklar 3 veya daha fazla aday taşır. Önceki DP her ayağı
-    // 2'den başlatabildiği için 1400 TL tavanını doldururken 2-2-2 gibi
+    // 2'den başlatabildiği için 3000 TL tavanını doldururken 2-2-2 gibi
     // tekrarlı dar ayaklar üretebiliyordu. Durum anahtarına iki-at sayısını
     // ekleyerek bu kuralı ortak bütçe optimizasyonunun içinde uygularız.
     const states = new Map();
@@ -528,7 +558,7 @@
         // her çoklu ayak en az 3 attır. Yalnız 3'ten az bağımsız aday bulunan
         // bir ayakta 2 zorunlu olabilir; bu istisna da kupon genelinde bir kez
         // kullanılabilir. Öğrenilmiş `spec.minCount` daha yüksekse tercih
-        // sıralamasını etkiler, fakat 1.000–1.400 TL içinde geçerli planı
+        // sıralamasını etkiler, fakat 1.000–3.000 TL içinde geçerli planı
         // imkânsızlaştırıp eski 2-2-2 dağılımına geri döndürmez.
         const minMulti=spec.maxCount<3?2:3;
         const counts=[];
@@ -580,7 +610,7 @@
     }
 
     if(!best){
-      coupon.error = 'TEK ve korunan desteklerle 1.000–1.400 TL içinde dağıtım bulunamadı.';
+      coupon.error = 'TEK ve korunan desteklerle 1.000–3.000 TL içinde dağıtım bulunamadı.';
       coupon.distributionPlan = {status:'infeasible', visited, capped:false};
       return coupon;
     }
@@ -685,7 +715,7 @@
       const original=built.main,copy={...original,legs:original.legs?.map(l=>({...l,picks:l.picks.slice()}))};
       yield* planWidthsSteps(copy);
       if(!copy.error)built.main=copy;
-      else if(original.legs?.length===6&&distributionRule(original).valid&&original.cost>=1000&&original.cost<=1400&&original.legs.every(l=>l.picks.length!==1||singleEligibility(l,l.picks[0],'main').ok))original.distributionPlan={status:'kept_valid_plan',reason:copy.error};
+      else if(original.legs?.length===6&&distributionRule(original).valid&&original.cost>=1000&&original.cost<=3000&&original.legs.every(l=>l.picks.length!==1||singleEligibility(l,l.picks[0],'main').ok))original.distributionPlan={status:'kept_valid_plan',reason:copy.error};
       else built.main=copy;
       return built;
     }
@@ -745,9 +775,9 @@
       // Only a complete already-valid diversified set can be retained.
       const originalOK=auditSet(built).valid&&couponRoles.every(role=>{
         const c=built[role],cost=c.legs.reduce((p,l)=>p*l.picks.length,Number(c.unit)||0);
-        return cost>=1000&&cost<=1400&&distributionRule(c).valid&&c.legs.every(l=>l.picks.length!==1||singleEligibility(l,l.picks[0],role).ok);
+        return cost>=1000&&cost<=3000&&distributionRule(c).valid&&c.legs.every(l=>l.picks.length!==1||singleEligibility(l,l.picks[0],role).ok);
       });
-      if(!originalOK)for(const role of couponRoles)if(built[role])built[role].error='Farklı ayaklarda uygun TEK ve 1.000–1.400 TL şartını sağlayan üç kupon bulunamadı.';
+      if(!originalOK)for(const role of couponRoles)if(built[role])built[role].error='Farklı ayaklarda uygun TEK ve 1.000–3.000 TL şartını sağlayan üç kupon bulunamadı.';
     }
     return enforceSet(built);
   }

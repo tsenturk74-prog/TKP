@@ -174,7 +174,7 @@ function bestCounts(orders,maxCombos,maxK=10,fixedSingles=null,sharedMode=false,
   return best;
 }
 function couponUnit(coupon){const u=n(coupon?.unit,0);return u>0?u:1;}
-function userCap(coupon,fallback=1400){for(const v of [coupon?.userCapTL,coupon?.maxBudgetTL,coupon?.inputCapTL,coupon?.budgetTL]){const x=n(v,0);if(x>0)return Math.max(700,Math.min(1400,x));}return fallback;}
+function userCap(coupon,fallback=3000){for(const v of [coupon?.userCapTL,coupon?.maxBudgetTL,coupon?.inputCapTL,coupon?.budgetTL]){const x=n(v,0);if(x>0)return Math.max(700,Math.min(2000,x));}return fallback;}
 function allocationTarget(coupon,profile){
   const cap=userCap(coupon,profile.targetBudgetTL),difficultyTarget=n(coupon?.budgetTL,0);
   return difficultyTarget>0?Math.min(cap,Math.max(Math.min(1000,cap),difficultyTarget)):cap;
@@ -266,8 +266,8 @@ function rebalanceThirdHorse(coupon,profileKey='main'){
   const legs=coupon.legs,unit=couponUnit(coupon),widths=legs.map(l=>(l.picks||[]).length);
   const product=xs=>xs.reduce((a,b)=>a*b,1),beforeCost=product(widths)*unit;
   const singles=widths.filter(k=>k===1).length;
-  if(singles<1||singles>2||beforeCost<1000-1e-8||beforeCost>1400+1e-8)return coupon;
-  const cap=Math.min(1400,userCap(coupon),Math.max(beforeCost,n(coupon.budgetTL,userCap(coupon))));
+  if(singles<1||singles>2||beforeCost<1000-1e-8||beforeCost>3000+1e-8)return coupon;
+  const cap=Math.min(3000,userCap(coupon),Math.max(beforeCost,n(coupon.budgetTL,userCap(coupon))));
   const group=h=>{const e=typeof global.ekuriGroup==='function'?global.ekuriGroup(no(h)):null;return e?'E:'+e:'N:'+baseNo(h);};
   const protectedHorse=(leg,h)=>{
     if(leg.protectedFlag||h.__tkpStrategySingle||h.__tkpStrategyFallbackSingle)return true;

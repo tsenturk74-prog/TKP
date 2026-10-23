@@ -3,7 +3,22 @@
 const base=h=>String(h?.horse_no??h??'').replace(/-E\d+$/i,'');
 const hip=v=>typeof g.canonicalHippodrome==='function'?g.canonicalHippodrome(v):String(v||'').toLocaleUpperCase('tr-TR');
 function identity(r){return [r?.file_id,r?.race_date,hip(r?.hippodrome),r?.altili_no||1,r?.leg].join('|');}
+// Her render çağrısı (leg/coupon başına, ayak başına) 3 bin+ yarışlık gruplama haritasını
+// yeniden kuruyordu. Harita dizi kimliği/uzunluğu/son eleman ve DB revizyonuna göre
+// yeniden kullanılır; db-changed olayında ve revizyon değişiminde düşer.
+let _readerMemo=null;
+function _dbRevision(){try{return typeof _tkpDbRevision!=='undefined'?_tkpDbRevision:null;}catch(_e){return null;}}
 function reader(source){
+ const races=source?.races,files0=source?.files;
+ const last=Array.isArray(races)&&races.length?races[races.length-1]:null;
+ const rev=_dbRevision();
+ const m=_readerMemo;
+ if(m&&m.source===source&&m.races===races&&m.files===files0&&m.rlen===(races?.length||0)&&m.flen===(files0?.length||0)&&m.last===last&&m.rev===rev)return m.read;
+ const read=_buildReader(source);
+ _readerMemo={source,races,files:files0,rlen:races?.length||0,flen:files0?.length||0,last,rev,read};
+ return read;
+}
+function _buildReader(source){
  const files=new Map((source?.files||[]).map(f=>[String(f.id),f]));
  const groups=new Map();
  const meeting=r=>[r.race_date||files.get(String(r.file_id))?.race_date,hip(r.hippodrome||files.get(String(r.file_id))?.hippodrome),r.altili_no||files.get(String(r.file_id))?.altili_no||1,r.leg].join('|');
@@ -27,9 +42,18 @@ function reader(source){
 }
 function horse(h,result){
  if(!result)return h;
+ // Sonuç zaten aynıysa her renderda yüzlerce alanlı at nesnesini kopyalamak gereksiz
+ // (render başına binlerce kopya + GC); değişiklik yoksa aynı nesne döner.
+ let differs=false;
+ if(Object.prototype.hasOwnProperty.call(result,'finish_position')){
+  if(h.finish_position!==(result.finish_position??null)||h.winner!==(Number(result.finish_position)===1?1:0))differs=true;
+ }
+ const sn=Number(result.start_no);
+ if(!differs&&Number.isInteger(sn)&&sn>0&&/^TJK_(?:PROGRAM|RESULT)/i.test(String(result.start_no_source||''))&&(h.start_no!==sn||h.start_no_source!==result.start_no_source))differs=true;
+ if(!differs)return h;
  const out={...h};
  if(Object.prototype.hasOwnProperty.call(result,'finish_position')){out.finish_position=result.finish_position??null;out.winner=Number(result.finish_position)===1?1:0;}
- if(Number.isInteger(Number(result.start_no))&&Number(result.start_no)>0&&/^TJK_PROGRAM/i.test(String(result.start_no_source||''))){out.start_no=Number(result.start_no);out.start_no_source=result.start_no_source;}
+ if(Number.isInteger(Number(result.start_no))&&Number(result.start_no)>0&&/^TJK_(?:PROGRAM|RESULT)/i.test(String(result.start_no_source||''))){out.start_no=Number(result.start_no);out.start_no_source=result.start_no_source;}
  return out;
 }
 function leg(x,read=reader(g.db)){
@@ -79,9 +103,12 @@ function refresh(){
   if(next){node.replaceWith(next);next.scrollTop=top;next.scrollLeft=left;}
  }
  if(typeof g.renderCouponCard==='function')for(const role of ['main','alt','surprise'])g.renderCouponCard(role);
+ // R19.47.50: SÜRPRİZ ÖNERİ (Bomba Avcısı) panelini de tazele; sonuç gelince beklemeden dolsun.
+ if(typeof g.__tkpRefreshBombHunterPane==='function'){try{g.__tkpRefreshBombHunterPane();}catch(_e){}}
  refreshOverview();
 }
 let timer=0;
+if(typeof g.addEventListener==='function')g.addEventListener('tkp:db-changed',()=>{_readerMemo=null;});
 if(typeof g.addEventListener==='function')g.addEventListener('tkp:db-changed',e=>{
  if(!e?.detail?.resultsChanged&&!e?.detail?.outcomeChanged)return;clearTimeout(timer);timer=setTimeout(refresh,0);
 });

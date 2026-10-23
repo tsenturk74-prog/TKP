@@ -78,8 +78,9 @@
   const _singleCache=new WeakMap();
   function singleSignature(race,rows){
     const dbSig=typeof global.tkpFastDbSignature==='function'?global.tkpFastDbSignature(global.db):`${global.db?.files?.length||0}|${global.db?.races?.length||0}`;
-    return [VERSION,dbSig,race?.id||race?.file_id||'',race?.leg||'',rows.map(h=>[
-      no(h),h?.score,h?.prediction_score_snapshot,h?.agf,h?.agf_rank,h?.tr_ganyan,h?.jbyg,h?.g800,h?.hndkp,h?.ypuan,kg(h)
+    const adaptiveSig=typeof global.adaptiveOrderSignature==='function'?global.adaptiveOrderSignature(race,rows):'';
+    return [VERSION,dbSig,adaptiveSig,race?.id||race?.file_id||'',race?.leg||'',race?.hippodrome,race?.distance,race?.surface,race?.breed,race?.condition_family||race?.condition_text,rows.map(h=>[
+      no(h),h?.score,h?.prediction_score_snapshot,h?.agf,h?.agf_rank,h?.tr_ganyan,h?.jbyg,h?.g800,h?.hndkp,h?.ypuan,kg(h),h?.tkp_common_evidence,h?.prof,h?.priorAccurateAvgSpeed,h?.priorAccurateFinishSignal,h?.priorAccurateStarts,h?.best_time,h?.start_no
     ].join(':')).join(';')].join('|');
   }
 
@@ -91,7 +92,7 @@
       return {isSingle:false,source:'R16_ARCHIVE_SHADOW',reason:'Arşiv görünümünde canlı R16 yeniden çalıştırılmaz',version:VERSION};
     }
     const sig=singleSignature(race,rows),hit=_singleCache.get(race);
-    if(hit?.signature===sig)return {...hit.value};
+    if(hit?.signature===sig&&(!hit.value.candidate||rows.includes(hit.value.candidate)))return {...hit.value};
 
     const A=adaptiveInfo(race,rows);
     const adaptiveStrong=!!(A&&A.gap>=CFG.adaptiveGapMin);
@@ -187,7 +188,7 @@
         return promoted;
       }
     }
-    const sig=singleSignature(race,rows)+'|META',cached=_metaCache.get(race);if(cached?.signature===sig)return cached.order.slice();
+    const sig=singleSignature(race,rows)+'|META',cached=_metaCache.get(race);if(cached?.signature===sig&&cached.order.every(h=>rows.includes(h)))return cached.order.slice();
     const champion=safeCall(global.altiliWinnerOrderForRace,race,rows.slice())||rows.slice();
     const adaptive=safeCall(global.adaptiveOrderForRace,race,rows.slice())||[];
     const side=safeCall(global.sideBetAdaptiveOrderForRace,race,rows.slice())||[];

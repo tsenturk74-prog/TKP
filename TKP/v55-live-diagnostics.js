@@ -248,7 +248,8 @@ function tkpV55StrongHorseMeetingSummary(raceResults){
   return {strongLegs,hasStrongHorse:strongLegs>0};
 }
 function tkpV55BudgetTarget(raceResults,userCap,type='main',singleCount=1){
-  const max=tkpV55Clamp(userCap||1400,1000,1400);
+  const budgetMax=typeof tkpCouponMaxBudget==='function'?tkpCouponMaxBudget():3000;
+  const max=tkpV55Clamp(userCap||budgetMax,1000,budgetMax);
   const d=tkpV55MeetingDifficulty(raceResults);
   let raw;
   if(type==='main2'||singleCount>=2) raw=700+d.avg*1.75+d.hard*24+d.veryHard*34;
@@ -511,8 +512,10 @@ function tkpV55PerformanceWindowsHTML(){
   const types=[['main','Normal'],['alt','Sürpriz'],['surprise','Uzman + Kulis']];
   const liveCount=rows.filter(row=>row.source==='LIVE_SNAPSHOT').length,replayCount=rows.filter(row=>row.source==='ARCHIVE_REPLAY').length,permanentCount=rows.filter(row=>row.source==='REAL509_V46_ARCHIVE').length;
   const body=types.map(([type,label])=>`<tr><td><b>${label}</b></td>${windows.map(([,subset])=>{const m=tkpV55WindowMetric(type,subset);const pct=m.n>=TKP_V55_MIN_PERCENT_SAMPLE?` · %${m.rate}`:` · <span class="tkpSampleInsufficient">n=${m.n}/${TKP_V55_MIN_PERCENT_SAMPLE}</span>`;return `<td>${m.n?`<b>${m.hits}/${m.n}</b>${pct} <small>TEK hata ${m.wrongSingles} · kapsam ${m.coverage}</small>`:'<span class="muted">Kayıt yok</span>'}</td>`;}).join('')}</tr>`).join('');
-  const sourceNote=`Kalıcı REAL509/V46 yarış-öncesi arşiv <b>${permanentCount}</b> toplantı · güncel frozen replay <b>${replayCount}</b> · gerçek V55 canlı snapshot <b>${liveCount}</b>. Kalıcı arşiv sonuçları ANALIZ dosyalarındaki denetlenmiş çıktıdır; bugünkü motor sonucu diye gösterilmez.`;
-  return `<div class="card v55WindowCard"><h2>📊 Performans pencereleri · doğrulanmış arşiv dahil</h2><p>Ölçü birimi <b>6/6 Altılı toplantısıdır</b>. ${sourceNote}</p><div class="tableWrap"><table><thead><tr><th>Kupon</th>${windows.map(([n])=>`<th>${n}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+  const archiveFiles=typeof db==='object'&&db?Math.max(Number(db.__segmented_storage?.collections?.files?.total)||0,(db.files||[]).length):0;
+  const sourceNote=`Güncel arşiv: <b>${archiveFiles} dosya</b>. Bu ölçümde kayıtlı kupon ve eksiksiz 6 ayak sonucu olan <b>${rows.length} toplantı</b> var: eski REAL509/V46 referansından <b>${permanentCount}</b>, gerçek V55 canlı snapshotlarından <b>${liveCount}</b>${replayCount?`, ayrı frozen replay kaynağından ${replayCount}`:''}. Dosya sayısı kupon başarı paydası değildir; eksik yarış-öncesi kupon veya sonucu olan dosyalar zorla başarı hesabına katılmaz. Güncel algoritmanın frozen replay ölçümü ayrı kartta gösterilir; eski referans bugünkü motorun başarısı değildir.`;
+  return `<div class="card v55WindowCard"><h2>📊 Performans pencereleri · kayıtlı kupon kanıtı</h2><p>Ölçü birimi <b>6/6 Altılı toplantısıdır</b>. ${sourceNote}</p><div class="tableWrap"><table><thead><tr><th>Kupon</th>${windows.map(([n])=>`<th>${n}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+
 }
 
 function tkpV55CurrentReplaySummaryHTML(){
@@ -662,7 +665,7 @@ function tkpV55HistoricalDiagnosticRows(){
   const products=[['main','Normal · tarihsel V46'],['alt','Sürpriz · tarihsel V46'],['surprise','Uzman + Kulis · tarihsel V46']];
   return products.map(([type,label])=>{
     const metric=tkpV55WindowMetric(type,rows),misses=Math.max(0,metric.n-metric.hits);
-    return `<tr class="tkpHistoricalEvidenceRow"><td><b>${tkpV55Html(label)}</b><small>Doğrulanmış yarış-öncesi arşiv</small></td><td class="num">${metric.n}</td><td class="num">${metric.hits}</td><td class="num">${misses}</td><td class="num">${metric.wrongSingles}</td><td class="num">—</td><td class="num">${metric.coverage}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>`;
+    return `<tr class="tkpHistoricalEvidenceRow"><td><b>${tkpV55Html(label)}</b> <small>Doğrulanmış yarış-öncesi arşiv</small></td><td class="num">${metric.n}</td><td class="num">${metric.hits}</td><td class="num">${misses}</td><td class="num">${metric.wrongSingles}</td><td class="num" title="Eski V46 özetinde bu ayrıntı saklanmamış; bütçe/kurtarma hesabı için orijinal ayak kuponu ve yarış-öncesi aday sırası gerekir."><small>V46 ayrıntısı yok</small></td><td class="num">${metric.coverage}</td><td class="num" title="Eski V46 özetinde bu ayrıntı saklanmamış; bütçe/kurtarma hesabı için orijinal ayak kuponu ve yarış-öncesi aday sırası gerekir."><small>V46 ayrıntısı yok</small></td><td class="num" title="Eski V46 özetinde bu ayrıntı saklanmamış; bütçe/kurtarma hesabı için orijinal ayak kuponu ve yarış-öncesi aday sırası gerekir."><small>V46 ayrıntısı yok</small></td><td class="num" title="Eski V46 özetinde bu ayrıntı saklanmamış; bütçe/kurtarma hesabı için orijinal ayak kuponu ve yarış-öncesi aday sırası gerekir."><small>V46 ayrıntısı yok</small></td><td class="num" title="Eski V46 özetinde bu ayrıntı saklanmamış; bütçe/kurtarma hesabı için orijinal ayak kuponu ve yarış-öncesi aday sırası gerekir."><small>V46 ayrıntısı yok</small></td></tr>`;
   }).join('');
 }
 function tkpV55CanonicalLiveDiagnosticRows(){
@@ -691,14 +694,14 @@ function tkpV55CanonicalLiveDiagnosticRows(){
     const additions=detailedMisses.flatMap(x=>Array.isArray(x.needed_adds)?x.needed_adds:[x.needed_adds]).map(x=>tkpV55Num(x,NaN)).filter(Number.isFinite);
     const ranks=detailedMisses.flatMap(x=>Array.isArray(x.winner_ranks)?x.winner_ranks:[x.winner_ranks]).map(x=>tkpV55Num(x,NaN)).filter(Number.isFinite);
     const avg=v=>v.length?v.reduce((a,b)=>a+b,0)/v.length:null;
-    return `<tr><td><b>${tkpV55Html(label)}</b><small>${canonical?'auto_coupon_log + resmî sonuç':'detaylı teşhis yedeği'}</small></td><td class="num">${tests}</td><td class="num">${hits}</td><td class="num">${misses}</td><td class="num">${wrong}</td><td class="num">${budget}</td><td class="num">${coverage+model}</td><td class="num">${detailedMisses.length?`${rescuable}/${detailedMisses.length}`:'—'}</td><td class="num">${additions.length?avg(additions).toFixed(1):'—'}</td><td class="num">${ranks.length?avg(ranks).toFixed(1):'—'}</td><td class="num">${extra.length?(typeof fmt2==='function'?fmt2(avg(extra)):avg(extra).toFixed(2))+' TL':'—'}</td></tr>`;
+    return `<tr><td><b>${tkpV55Html(label)}</b> <small>${canonical?'auto_coupon_log + resmî sonuç':'detaylı teşhis yedeği'}</small></td><td class="num">${tests}</td><td class="num">${hits}</td><td class="num">${misses}</td><td class="num">${wrong}</td><td class="num">${budget}</td><td class="num">${coverage+model}</td><td class="num">${detailedMisses.length?`${rescuable}/${detailedMisses.length}`:'—'}</td><td class="num">${additions.length?avg(additions).toFixed(1):'—'}</td><td class="num">${ranks.length?avg(ranks).toFixed(1):'—'}</td><td class="num">${extra.length?(typeof fmt2==='function'?fmt2(avg(extra)):avg(extra).toFixed(2))+' TL':'—'}</td></tr>`;
   }).join('');
 }
 function tkpV55PersistentDiagnosticsHTML(){
   const liveRows=tkpV55CanonicalLiveDiagnosticRows();
   const historicalRows=tkpV55HistoricalDiagnosticRows();
   if(!historicalRows&&!liveRows)return '<div class="card v55DiagnosticStats"><h2>📚 Birikimli çözüm istatistiği</h2><p class="muted">Doğrulanmış tarihsel veya canlı teşhis kaydı bulunamadı.</p></div>';
-  return `<div class="card v55DiagnosticStats"><h2>📚 Birikimli çözüm istatistiği · tek kanonik kaynak</h2><p class="muted">Canlı Test/Tuttu/Kaçtı/TEK/Kapsam sayıları ayrı bir tabloya yeniden yazılmaz; <b>auto_coupon_log + resmî sonuç</b> üzerinden türetilir. v55_diagnostic_log yalnız +1/+2 kurtarma, neden ve ek maliyet gibi ayrıntıları zenginleştirir. Tarihsel V46 kanıtı ayrı şeritte tutulur ve canlı veriyle karıştırılmaz.</p><div class="tableWrap"><table><thead><tr><th>Ürün</th><th class="num">Test</th><th class="num">Tuttu</th><th class="num">Kaçtı</th><th class="num">TEK hata</th><th class="num">İlk bütçe kesimi</th><th class="num">Kapsam/model</th><th class="num">Kurtarılabilir</th><th class="num">Ort. +aday</th><th class="num">Ort. kazanan sıra</th><th class="num">Ort. ek maliyet</th></tr></thead><tbody>${historicalRows}${liveRows}</tbody></table></div></div>`;
+  return `<div class="card v55DiagnosticStats"><h2>📚 Birikimli çözüm istatistiği · tek kanonik kaynak</h2><p class="muted">Canlı Test/Tuttu/Kaçtı/TEK/Kapsam sayıları ayrı bir tabloya yeniden yazılmaz; <b>auto_coupon_log + resmî sonuç</b> üzerinden türetilir. v55_diagnostic_log yalnız +1/+2 kurtarma, neden ve ek maliyet gibi ayrıntıları zenginleştirir. Tarihsel V46 kanıtı ayrı şeritte tutulur ve canlı veriyle karıştırılmaz. V46 ayrıntısı yok: eski özet ilk bütçe kesimini, +1/+2 kurtarma adaylarını, kazananın aday sırasını ve ek maliyeti saklamamıştır; eksik bilgi 0 veya güncel motorla üretilmiş başarı olarak doldurulmaz.</p><div class="tableWrap"><table><thead><tr><th>Ürün</th><th class="num">Test</th><th class="num">Tuttu</th><th class="num">Kaçtı</th><th class="num">TEK hata</th><th class="num">İlk bütçe kesimi</th><th class="num">Kapsam/model</th><th class="num">Kurtarılabilir</th><th class="num">Ort. +aday</th><th class="num">Ort. kazanan sıra</th><th class="num">Ort. ek maliyet</th></tr></thead><tbody>${historicalRows}${liveRows}</tbody></table></div></div>`;
 }
 
 function tkpV55Real509SideBetReferenceHTML(){
@@ -723,16 +726,8 @@ function tkpV55DiagnosticsCenterHTML(){
 }
 
 async function tkpV55DiagnosticsCenterHTMLAsync(onProgress=null){
-  // Kalıcı V46 referansının bulunması güncel algoritma replay'ini artık iptal etmez.
-  // Ağır öğrenme görünümü zaten veri imzasıyla IndexedDB'de saklandığı için bu iş
-  // aynı veri/sürümde bir kez çalışır; Ctrl+F5 veya menü geçişi yeniden hesaplatmaz.
-  // Hesap cooperative'dir ve her toplantı diliminde event-loop'a döner.
-  if(typeof globalThis.tkpFastBacktestCoreAsync==='function'){
-    const main=typeof globalThis.tkpCouponBudgetFor==='function'?globalThis.tkpCouponBudgetFor(undefined,'main'):1200;
-    const expert=typeof globalThis.tkpCouponBudgetFor==='function'?globalThis.tkpCouponBudgetFor(undefined,'expert'):1200;
-    const progress=state=>{if(typeof onProgress==='function')try{onProgress(state?.processed||0,state?.total||0,state?.phase||'replay');}catch(_e){}};
-    try{await globalThis.tkpFastBacktestCoreAsync({main,main2:main,alt:main,surprise:expert},509,'',progress);}catch(error){console.warn('V55 arşiv replay hazırlığı:',error);}
-  }
+  // A results update or opening a panel must not launch a 509-meeting replay.
+  // The explicit Back Test action owns recomputation; diagnostics reads evidence.
   return tkpV55DiagnosticsCenterHTML();
 }
 
@@ -752,8 +747,18 @@ function tkpV55SideBetTrackingTextHTML(){
   };
   const displayDate=tkpLatestSideBetTrackingDate(all);
   const scoped=displayDate?all.filter(x=>String(x?.race_date||'').slice(0,10)===displayDate):all;
+  const products=[['Çifte',/Çifte/i],['Sıralı İkili',/Sıralı İkili/i],['Sıralı Üçlü',/Sıralı Üçlü/i],['Tabela / Dörtlü',/Tabela|Dörtlü/i],["Sıralı 5'li",/Sıralı 5/i]];
+  const coverage=products.map(([label,match])=>{
+    const history=all.filter(x=>match.test(String(x.product||x.title||'')));
+    const daily=history.filter(x=>String(x.race_date||'').slice(0,10)===displayDate);
+    const rescued=history.filter(x=>x.status==='KAÇTI'&&x.rescuable===true).length;
+    const last=tkpLatestSideBetTrackingDate(history);
+    const detail=history.slice(-3).reverse().map(x=>`<p><b>${tkpV55Html(x.race_date||'—')} · ${tkpV55Html(x.product||x.title||label)}</b> · ${tkpV55Html(x.status||'KAYIT')} · ${x.rescuable===true&&x.status!=='TUTTU'?'kurtarılabilirdi':x.status==='TUTTU'?'kurtarma gerekmiyor':'kurtarma sınırı dışında'}${x.detail?' · '+tkpV55Html(x.detail):''}</p>`).join('');
+    return `<tr><td>${tkpV55Html(label)}</td><td>${daily.length||'Kayıt yok'}</td><td>${history.length||'Kayıt yok'}</td><td>${history.length?rescued:'—'}</td><td>${tkpV55Html(last||'—')}</td><td>${history.length?`<details><summary>Son kayıtlar</summary>${detail}</details>`:'—'}</td></tr>`;
+  }).join('');
+  const coverageHTML=`<h3>Tüm geçmiş · bahis türüne göre kurtarma</h3><p class="muted">Günlük kayıt yoksa bahis oynanmadı veya teşhis henüz kaydedilmedi; başarı/başarısızlık sayılmaz. Kurtarılabilir sayısı yalnız kayıtlı kaçış teşhisidir, kazanılmış kupon değildir.</p><div class="tableWrap"><table><thead><tr><th>Bahis</th><th>Son gün</th><th>Tüm geçmiş</th><th>Kurtarılabilir</th><th>Son kayıt tarihi</th><th>Ayrıntı</th></tr></thead><tbody>${coverage}</tbody></table></div>`;
   const rows=scoped.slice(-8).reverse();
-  if(!rows.length)return `<div id="tkpSideBetRescueDailyPanel" class="card v55SideBetTrackingText"><h2>📝 Yan Bahis Kurtarma Takibi</h2><p class="muted">${displayDate?'Seçili gün için':'Bu gün için'} kaydedilmiş yan bahis kurtarma kaydı yok. Tüm geçmiş korunur; kayıt geldikçe burada yalnız o günün özeti görünür.</p></div>`;
+  if(!rows.length)return `<div id="tkpSideBetRescueDailyPanel" class="card v55SideBetTrackingText"><h2>📝 Yan Bahis Kurtarma Takibi</h2><p class="muted">${displayDate?'Seçili gün için':'Bu gün için'} kaydedilmiş yan bahis kurtarma kaydı yok. Tüm geçmiş korunur; kayıt geldikçe burada yalnız o günün özeti görünür.</p>${coverageHTML}</div>`;
   const total=all.length;
   const misses=scoped.filter(x=>String(x?.status||'')!=='TUTTU');
   const rescuable=misses.filter(x=>x?.rescuable===true).length;
@@ -768,7 +773,7 @@ function tkpV55SideBetTrackingTextHTML(){
     return `<p class="v55SideBetTrackingLine"><b>${product}</b> · ${status} · ${rescueText}${adds?` · +${adds} aday`:''}${Number.isFinite(rescue)?` · yaklaşık ${typeof fmt2==='function'?fmt2(rescue):rescue} TL`:''}${Number.isFinite(extra)?` · ek ${typeof fmt2==='function'?fmt2(extra):extra} TL`:''}${detail?` · ${detail}`:''}</p>`;
   }).join('');
   const dayLabel=displayDate||'Seçili gün';
-  return `<div id="tkpSideBetRescueDailyPanel" class="card v55SideBetTrackingText"><h2>📝 Yan Bahis Kurtarma Takibi · ${tkpV55Html(dayLabel)}</h2><p class="muted">Ekranda yalnız seçili günün ${scoped.length} kaydı var · kaçan ${misses.length} · kurtarılabilir ${rescuable}. Tüm geçmişte ${total} kayıt kalıcı olarak tutulur.</p><div class="v55SideBetTrackingNotes">${notes}</div></div>`;
+  return `<div id="tkpSideBetRescueDailyPanel" class="card v55SideBetTrackingText"><h2>📝 Yan Bahis Kurtarma Takibi · ${tkpV55Html(dayLabel)}</h2><p class="muted">Ekranda yalnız seçili günün ${scoped.length} kaydı var · kaçan ${misses.length} · kurtarılabilir ${rescuable}. Tüm geçmişte ${total} kayıt kalıcı olarak tutulur.</p>${coverageHTML}<h3>Son günün son ${rows.length} kaydı</h3><div class="v55SideBetTrackingNotes">${notes}</div></div>`;
 }
 
 globalThis.TKP_V55_ALGORITHM_VERSION=TKP_V55_ALGORITHM_VERSION;

@@ -60,11 +60,67 @@ function _tkpAdaptivePersistEntryValid(entry){
   return rolling[entry.raceCountAtCreation-1] === entry.rollingHashAtCreation;
 }
 
+// Bu önbellek 15 MB'a çıkabiliyor ve tamamen yeniden üretilebilir. Ana IndexedDB manifest'ine
+// (tkp-segmented-idb.js) yazılmaz; ayrı UI-cache deposuna JSON metni olarak, gecikmeli ve
+// UI'ya nefes vererek yazılır. Oturum başında yalnız RAM'de olmayan girdiler geri yüklenir.
+// Her girdi zaten rolling-hash ile doğrulandığı için eski/eksik yan depo yalnız yavaşlık yaratır.
+const TKP_ADAPTIVE_SIDECAR_KEY = 'tkp_adaptive_stats_cache_v1_sidecar';
+let _tkpAdaptiveSidecarHydrated = false, _tkpAdaptiveSidecarDirty = false, _tkpAdaptiveSidecarTimer = 0;
+function _tkpAdaptiveSidecarHydrate(){
+  if (_tkpAdaptiveSidecarHydrated) return;
+  if (typeof db === 'undefined' || !db) return; // db henüz yüklenmediyse bayrağı yakma
+  _tkpAdaptiveSidecarHydrated = true;
+  if (typeof tkpUiCacheGet !== 'function') return;
+  Promise.resolve().then(()=>tkpUiCacheGet(TKP_ADAPTIVE_SIDECAR_KEY)).then(text=>{
+    const store = db && db.learning_state && db.learning_state[TKP_ADAPTIVE_PERSIST_KEY];
+    if (typeof text !== 'string' || !text){
+      if (store && store.order && store.order.length) _tkpAdaptiveSidecarMarkDirty(); // eski manifest'ten gelen RAM önbelleğini yan depoya taşı
+      return;
+    }
+    const saved = JSON.parse(text);
+    if (!saved || typeof saved.entries !== 'object') return;
+    const target = _tkpAdaptivePersistStore();
+    for (const key of (Array.isArray(saved.order) ? saved.order : Object.keys(saved.entries))){
+      if (!(key in target.entries) && saved.entries[key]){ target.entries[key] = saved.entries[key]; target.order.push(key); }
+    }
+    while (target.order.length > TKP_ADAPTIVE_PERSIST_MAX_ENTRIES){ const evict = target.order.shift(); delete target.entries[evict]; }
+  }).catch(()=>{});
+}
+async function _tkpAdaptiveSidecarStringify(store){
+  const parts = ['{"order":', JSON.stringify(store.order || []), ',"entries":{'];
+  let clock = performance.now(), first = true;
+  for (const key of Object.keys(store.entries || {})){
+    if (!first) parts.push(','); first = false;
+    parts.push(JSON.stringify(key), ':', JSON.stringify(store.entries[key]));
+    if (performance.now()-clock >= 8){ await new Promise(r=>setTimeout(r,0)); clock = performance.now(); }
+  }
+  parts.push('}}');
+  return parts.join('');
+}
+function _tkpAdaptiveSidecarMarkDirty(){
+  _tkpAdaptiveSidecarDirty = true;
+  if (_tkpAdaptiveSidecarTimer || typeof tkpUiCacheSet !== 'function') return;
+  _tkpAdaptiveSidecarTimer = setTimeout(()=>{
+    const run = async () => {
+      _tkpAdaptiveSidecarTimer = 0;
+      if (!_tkpAdaptiveSidecarDirty) return;
+      _tkpAdaptiveSidecarDirty = false;
+      try{
+        const store = db && db.learning_state && db.learning_state[TKP_ADAPTIVE_PERSIST_KEY];
+        if (store) await tkpUiCacheSet(TKP_ADAPTIVE_SIDECAR_KEY, await _tkpAdaptiveSidecarStringify(store));
+      }catch(_e){}
+    };
+    if (typeof tkpRunWhenUserIdle === 'function') tkpRunWhenUserIdle(run, {minIdleMs:2000, retryMs:500, maxWaitMs:30000});
+    else run();
+  }, 20000);
+}
+
 function _tkpAdaptivePersistStore(){
   if (!db) return null;
   db.learning_state = db.learning_state && typeof db.learning_state==='object' ? db.learning_state : {};
   const s = db.learning_state[TKP_ADAPTIVE_PERSIST_KEY];
   if (!s || typeof s!=='object' || !s.entries) db.learning_state[TKP_ADAPTIVE_PERSIST_KEY] = {entries:{}, order:[]};
+  _tkpAdaptiveSidecarHydrate();
   return db.learning_state[TKP_ADAPTIVE_PERSIST_KEY];
 }
 
@@ -104,6 +160,7 @@ function tkpAdaptiveStatsPersistWrite(cacheKey, stats){
     const evict = store.order.shift();
     delete store.entries[evict];
   }
+  _tkpAdaptiveSidecarMarkDirty();
 }
 
 // db.learning_state.rule_cache_v2 (tkp-incremental-rules.js) ile aynı ilke: bu
@@ -157,4 +214,16 @@ async function tkpPrewarmPerformanceCaches(options={}){
     }
   }
   return {warmed,skipped};
+}
+
+// Yan depo yalnızca önbelleğe ilk erişimde yükleniyordu; manifest'ten çıkarılan önbellek bu yüzden
+// hiç yazılmadan kaybolabiliyordu. Açılışta db hazır olunca bir kez yüklenir (ve RAM'deki eski
+// manifest önbelleği varsa yan depoya taşınır).
+if (typeof window !== 'undefined') {
+  let _tkpAdaptiveBootTries = 0;
+  const _tkpAdaptiveBootTimer = setInterval(() => {
+    _tkpAdaptiveBootTries++;
+    try { _tkpAdaptiveSidecarHydrate(); } catch (_e) {}
+    if (_tkpAdaptiveSidecarHydrated || _tkpAdaptiveBootTries >= 40) clearInterval(_tkpAdaptiveBootTimer);
+  }, 3000);
 }

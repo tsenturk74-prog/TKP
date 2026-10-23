@@ -31,7 +31,60 @@ const TKP_INCR_RULES_CACHE_KEY = 'rule_cache_v2';
 const TKP_INCR_YIELD_EVERY = 40;
 let _tkpIncrInFlight = null;
 
-function _tkpIncrRaceContentFingerprint(r,feats){
+// Bu önbellek ~30 MB olabilir ve tamamen yeniden üretilebilir. Ana IndexedDB manifest'inde
+// (tkp-segmented-idb.js) saklanmaz; ayrı UI-cache deposuna JSON metni olarak yazılır ve
+// oturum başında yalnız RAM'de yoksa geri yüklenir. Geçerliliği zaten yarış parmak izi
+// ön-ek eşleşmesiyle doğrulanır; eksik/eski ise yalnız daha yavaş tam hesaba düşülür.
+const TKP_INCR_SIDECAR_KEY = 'tkp_rule_cache_v2_sidecar_v1';
+let _tkpIncrSidecarHydrated = false;
+let _tkpIncrSidecarSavedObject = null;
+async function _tkpIncrHydrateSidecar(){
+  if (_tkpIncrSidecarHydrated) return;
+  _tkpIncrSidecarHydrated = true;
+  try{
+    if (!db || _tkpIncrReadCache() || typeof tkpUiCacheGet !== 'function') return;
+    const text = await tkpUiCacheGet(TKP_INCR_SIDECAR_KEY);
+    if (typeof text !== 'string' || !text) return;
+    const c = JSON.parse(text);
+    if (c && c.version === 4 && Array.isArray(c.accum) && Array.isArray(c.raceFingerprints) && !_tkpIncrReadCache()){
+      db.learning_state = db.learning_state && typeof db.learning_state === 'object' ? db.learning_state : {};
+      db.learning_state[TKP_INCR_RULES_CACHE_KEY] = c;
+      _tkpIncrSidecarSavedObject = c;
+    }
+  }catch(_e){}
+}
+// 30 MB'lık nesneyi tek JSON.stringify ile çevirmek ~0,5 sn kesintisiz blok demekti;
+// büyük diziler 8 ms'lik dilimlerle, eleman eleman çevrilip UI'ya nefes verilir.
+async function _tkpIncrStringifyAsync(cache){
+  const parts = ['{']; let clock = performance.now(), first = true;
+  for (const key of Object.keys(cache)){
+    const value = cache[key];
+    if (!first) parts.push(','); first = false;
+    parts.push(JSON.stringify(key) + ':');
+    if (Array.isArray(value) && value.length > 64){
+      parts.push('[');
+      for (let i=0;i<value.length;i++){
+        if (i) parts.push(',');
+        parts.push(JSON.stringify(value[i]));
+        if (performance.now()-clock >= 8){ await new Promise(r=>setTimeout(r,0)); clock = performance.now(); }
+      }
+      parts.push(']');
+    } else { const js = JSON.stringify(value); parts.push(js === undefined ? 'null' : js); }
+  }
+  parts.push('}');
+  return parts.join('');
+}
+function _tkpIncrSaveSidecarSoon(cache){
+  if (!cache || cache === _tkpIncrSidecarSavedObject || typeof tkpUiCacheSet !== 'function') return;
+  _tkpIncrSidecarSavedObject = cache;
+  const run = async () => {
+    try{ await tkpUiCacheSet(TKP_INCR_SIDECAR_KEY, await _tkpIncrStringifyAsync(cache)); }catch(_e){}
+  };
+  if (typeof tkpRunWhenUserIdle === 'function') tkpRunWhenUserIdle(run, {minIdleMs:1500, retryMs:300, maxWaitMs:8000});
+  else setTimeout(run, 2000);
+}
+
+function _tkpIncrRaceContentFingerprint(r,feats,featureMask=null){
   // Kalıcı P1-P5 önbelleği bu ortak yardımcıyı özellik listesi olmadan çağırır.
   // Onun mevcut sonuç parmak izi sözleşmesini koru.
   if(!Array.isArray(feats))return String(r.id??'')+'#'+(r.horses||[]).map(h=>(h.horse_no??'')+':'+(h.finish_position??'')+':'+(Number(h.winner)===1?1:0)).join(',');
@@ -41,16 +94,18 @@ function _tkpIncrRaceContentFingerprint(r,feats){
   const parts = new Array(hs.length);
   for (let i=0;i<hs.length;i++){
     const h = hs[i];
-    parts[i] = [h.horse_no??'',h.finish_position??'',Number(h.winner)===1?1:0,feats.map(f=>f.test(h,r)?'1':'0').join('')];
+    parts[i] = [h.horse_no??'',h.finish_position??'',Number(h.winner)===1?1:0,feats.map((f,fi)=>{const pass=f.test(h,r);if(featureMask)featureMask[i*feats.length+fi]=pass?1:0;return pass?'1':'0';}).join('')];
   }
   return JSON.stringify([r.id,r.file_id,r.hippodrome,parts]);
 }
 
-async function _tkpIncrFingerprints(races,feats){
+async function _tkpIncrFingerprints(races,feats,featureMasks=null){
   const out=[];let clock=performance.now();
   for(let i=0;i<races.length;i++){
-    out.push(_tkpIncrRaceContentFingerprint(races[i],feats));
-    if((i+1)%16===0&&performance.now()-clock>=12){await new Promise(resolve=>setTimeout(resolve,0));clock=performance.now();}
+    const mask=featureMasks?new Uint8Array((races[i].horses||[]).length*feats.length):null;
+    out.push(_tkpIncrRaceContentFingerprint(races[i],feats,mask));
+    if(featureMasks)featureMasks.push(mask);
+    if(performance.now()-clock>=8){await new Promise(resolve=>setTimeout(resolve,0));clock=performance.now();}
   }
   return out;
 }
@@ -111,7 +166,7 @@ function _tkpIncrEmptyAccum(){
 // (yalnız girdi kümesi kısıtlı) hesap çekirdeği. currentN, ağırlık formülünün
 // PAYDA'sı olan GÜNCEL toplam yarış sayısıdır (eski dilimin ölçeklenmesi ayrı
 // yapılır, bkz. çağıran fonksiyon).
-async function _tkpIncrEvaluateNewSlice(feats, newRaces, currentN, startGlobalIdx){
+async function _tkpIncrEvaluateNewSlice(feats, newRaces, currentN, startGlobalIdx, featureMasks=null){
   const raceHorses = newRaces.map(r => r.horses || []);
   const raceStartOffset = [];
   { let off = 0; for (const hs of raceHorses){ raceStartOffset.push(off); off += hs.length; } }
@@ -148,7 +203,8 @@ async function _tkpIncrEvaluateNewSlice(feats, newRaces, currentN, startGlobalId
     for (let ri=0; ri<newRaces.length; ri++){
       const r = newRaces[ri];
       let raceMatched = false;
-      for (const h of raceHorses[ri]){ const pass=f.test(h,r); m[gi]=pass?1:0; if(pass)raceMatched=true; gi++; }
+      let hi=0;
+      for (const h of raceHorses[ri]){ const pass=featureMasks?.[ri]?featureMasks[ri][hi*feats.length+fi]:f.test(h,r); m[gi]=pass?1:0; if(pass)raceMatched=true; gi++;hi++; }
       if (raceMatched) matchingRaces.push(ri);
       if((ri+1)%32===0&&performance.now()-sliceClock>=12){
         await new Promise(resolve=>setTimeout(resolve,0));
@@ -263,6 +319,27 @@ function _tkpIncrHydrateAccum(serialized){
   }));
 }
 
+async function _tkpIncrMapAsync(items,fn){
+  const out=[];let clock=performance.now();
+  for(let i=0;i<items.length;i++){
+    out.push(fn(items[i],i));
+    if((i+1)%128===0||performance.now()-clock>=8){
+      if(typeof tkpYield==='function')await tkpYield();else await new Promise(r=>setTimeout(r,0));
+      clock=performance.now();
+    }
+  }
+  return out;
+}
+async function _tkpIncrMaterializeRowsAsync(feats,combos,accum){
+  const sig=new Map();
+  await _tkpIncrMapAsync(accum,(a,i)=>{
+    const x=_tkpIncrMaterializeRows(feats,[combos[i]],[a])[0];if(!x)return;
+    const old=sig.get(x.signature);
+    if(!old||x.features.length<old.features.length||(x.features.length===old.features.length&&x.name.length<old.name.length))sig.set(x.signature,x);
+  });
+  return [...sig.values()].sort((a,b)=>b.lb-a.lb||b.rate-a.rate||b.single-a.single||a.features.length-b.features.length||TKP_TR_COLLATOR.compare(a.name,b.name));
+}
+
 async function tkpBuildRulesIncrementalAsync(racesOverride){
   const analysisRaces = racesOverride || learningEligibleRaces();
   const signature = `${analysisRaces.length}|${analysisRaces.length?analysisRaces[analysisRaces.length-1].id:''}|${db?.settings?.max_rule_size??''}`;
@@ -275,8 +352,12 @@ async function tkpBuildRulesIncrementalAsync(racesOverride){
     if (analysisRaces.length > 250 && max > 2) max = 2;
     const featKey = _tkpIncrFeatureSetKey(feats);
     const combos = _tkpIncrCombos(feats, max);
-    const fingerprints = await _tkpIncrFingerprints(analysisRaces,feats);
+    // The same feature tests used to run twice: fingerprint, then masks.
+    // Reuse this invocation's masks only; no cross-input cache is trusted.
+    const featureMasks=[];
+    const fingerprints = await _tkpIncrFingerprints(analysisRaces,feats,featureMasks);
 
+    await _tkpIncrHydrateSidecar();
     const cache = _tkpIncrReadCache();
     let startN = 0, accum = combos.map(_tkpIncrEmptyAccum);
     const reusable = !!cache
@@ -287,15 +368,15 @@ async function tkpBuildRulesIncrementalAsync(racesOverride){
       && _tkpIncrPrefixMatches(fingerprints, cache);
     if (reusable){
       startN = cache.raceCount;
-      accum = _tkpIncrHydrateAccum(cache.accum);
+      accum = await _tkpIncrMapAsync(cache.accum,a=>_tkpIncrHydrateAccum([a])[0]);
     }
     try{if(typeof globalThis!=='undefined')globalThis.__tkpIncrementalRuleCacheDiagnostic={cachePresent:!!cache,reusable,startN,raceCount:analysisRaces.length,comboCount:combos.length,featureCount:feats.length,at:new Date().toISOString()};}catch(_e){}
 
     if (startN < analysisRaces.length){
       const newRaces = analysisRaces.slice(startN);
       const currentN = analysisRaces.length;
-      const evalCombo = await _tkpIncrEvaluateNewSlice(feats, newRaces, currentN, startN);
-      let sinceYield = 0;
+      const evalCombo = await _tkpIncrEvaluateNewSlice(feats, newRaces, currentN, startN,featureMasks.slice(startN));
+      let sinceYield = 0,sliceClock=performance.now();
       for (let ci=0; ci<combos.length; ci++){
         const delta = evalCombo(combos[ci]);
         const a = accum[ci];
@@ -308,21 +389,27 @@ async function tkpBuildRulesIncrementalAsync(racesOverride){
         if(delta.recentOutcomes.length)a.recentOutcomes.push(...delta.recentOutcomes);
         if(a.recentOutcomes.length>20)a.recentOutcomes.splice(0,a.recentOutcomes.length-20);
         sinceYield++;
-        if (sinceYield >= TKP_INCR_YIELD_EVERY){
+        if (sinceYield >= TKP_INCR_YIELD_EVERY||performance.now()-sliceClock>=8){
           sinceYield = 0;
           if (typeof tkpYield === 'function') await tkpYield(); else await new Promise(r=>setTimeout(r,0));
+          sliceClock=performance.now();
         }
       }
     }
 
-    const rows = _tkpIncrMaterializeRows(feats, combos, accum);
+    const rows = await _tkpIncrMaterializeRowsAsync(feats, combos, accum);
+    // Önbellek birebir aynıysa (yeni yarış yok) 20 MB'lık accum'u yeniden serileştirip
+    // aynı içerikle değiştirmenin anlamı yok; her kural isteğinde saniyeler harcıyordu.
+    if (reusable && startN >= analysisRaces.length) return rows;
+    const serializedAccum=await _tkpIncrMapAsync(accum,a=>_tkpIncrSerializeAccum([a])[0]);
     if (db){
       db.learning_state = db.learning_state && typeof db.learning_state === 'object' ? db.learning_state : {};
       db.learning_state[TKP_INCR_RULES_CACHE_KEY] = {
         version:4, featureKey:featKey, maxRuleSize:max, raceCount:analysisRaces.length,
         raceFingerprints: fingerprints,
-        accum: _tkpIncrSerializeAccum(accum)
+        accum: serializedAccum
       };
+      _tkpIncrSaveSidecarSoon(db.learning_state[TKP_INCR_RULES_CACHE_KEY]);
     }
     return rows;
   })();

@@ -12,7 +12,8 @@
 
   const VERSION='V1-COMMENTATOR-LIVE-LOCK-GOVERNANCE';
   const SCHEMA_VERSION=1;
-  const MIN_LIVE_AUTHOR_RACE_EVENTS=150;
+  const MIN_LIVE_AUTHOR_RACE_EVENTS=100;
+  const AUTO_PROMOTE_MIN_EDGE_LOWER=.02;
   // Y.PUAN içindeki küçük, otomatik yazar kalibrasyonu için daha erken fakat
   // güvenli eşik. Bu katman kuponu/TEK'i zorlayamaz; yalnız eşit yazar oyunu
   // geçmişteki doğrulanmış canlı başarıya göre %85-%125 aralığında düzeltir.
@@ -23,8 +24,8 @@
   let indexedLength=-1;
   let raceIndex=new Map();
   let governanceRevision=0;
-  // A coupon run owns this read cache. Outside the run integrity is checked on
-  // every request as before; an import, append, result or approval invalidates it.
+  // A coupon run prepares the verified index cooperatively. Keep it for later
+  // side-bet/weekly reads; revision, row identity and settings guard staleness.
   let couponReadCache=null;
   function couponCacheCurrent(cache=couponReadCache){
     return !!cache && cache.rows===log() && cache.length===cache.rows.length
@@ -54,7 +55,29 @@
     couponReadCache=cache;
     return cache;
   }
-  function releaseCouponReadCache(cache){if(couponReadCache===cache)couponReadCache=null;}
+  // Okuma önbelleği yalnız kupon koşusunda değil, her okumada kullanılır: doğrulanmış satır dizini ve
+  // yazar raporları revizyon/uzunluk/ayar değişmedikçe yeniden hesaplanmaz (tahmin başına tam tarama yok).
+  function ensureReadCache(){
+    if(couponCacheCurrent())return couponReadCache;
+    const rows=log(),cache={rows,length:rows.length,revision:governanceRevision,
+      settings:settings(),valid:[],byAuthor:new Map(),byRace:new Map(),reports:new Map(),groups:new Map()};
+    for(let i=0;i<rows.length;i++){
+      const row=rows[i];
+      if(row?.evidence_class!=='LIVE_PRE_RACE_LOCKED')continue;
+      if(isIntegrityValid(row)){
+        cache.valid.push(row);
+        const authorKey=JSON.stringify([row.source_type,row.author_id]);
+        if(!cache.byAuthor.has(authorKey))cache.byAuthor.set(authorKey,[]);
+        cache.byAuthor.get(authorKey).push(row);
+        const race=text(row.race_key);
+        if(!cache.byRace.has(race))cache.byRace.set(race,[]);
+        cache.byRace.get(race).push(row);
+      }else{try{row.integrity='HASH_MISMATCH';}catch(_){}}
+    }
+    couponReadCache=cache;
+    return cache;
+  }
+  function releaseCouponReadCache(cache){if(couponReadCache===cache&&!couponCacheCurrent(cache))couponReadCache=null;}
 
   const text=value=>String(value??'').trim();
   const number=(value,fallback=0)=>{const n=Number(value);return Number.isFinite(n)?n:fallback;};
@@ -155,8 +178,25 @@
     if(text(record?.source_sha256))payload.source_sha256=text(record.source_sha256).toLowerCase();
     return payload;
   }
+  // HIZ KÖK FIX: her kontrol stable()+FNV hash'i ile satırı baştan serileştiriyordu ve tek bir tahmin
+  // hesabında (at × yazar × tüm kayıt) yüz binlerce kez çağrılıyordu (12 bin satırlık gerçek yedekte
+  // ilk tahmin ~150 sn ana thread'i kilitledi). Sonuç satır başına, hash'e giren TÜM alanların ucuz
+  // parmak izine bağlı olarak saklanır: bir alan değişirse parmak izi değişir ve hash yeniden doğrulanır
+  // (kurcalama tespiti korunur); değişmeyen satır tekrar hash'lenmez.
+  const integrityMemo=new WeakMap();
+  function integrityFingerprint(r){
+    return [r.immutable_snapshot_hash,r.source_type,r.source_id,r.author_id,r.author_race_key,r.race_key,r.race_uid,r.meeting_uid,
+      r.race_date,r.hippodrome,r.altili_no,r.leg,r.evidence_class,r.captured_at,r.published_at,r.race_start_at,r.direction,
+      Array.isArray(r.selections)?r.selections.join(','):'',Array.isArray(r.selection_refs)?r.selection_refs.join(','):'',r.runner_count,r.source_sha256,r.schema_version].join('\u0001');
+  }
   function isIntegrityValid(record){
-    return !!record&&text(record.immutable_snapshot_hash)!==''&&record.immutable_snapshot_hash===eventHash(stable(immutablePayload(record)));
+    if(!record||typeof record!=='object')return false;
+    if(text(record.immutable_snapshot_hash)==='')return false;
+    const fp=integrityFingerprint(record),memo=integrityMemo.get(record);
+    if(memo&&memo.fp===fp)return memo.ok;
+    const ok=record.immutable_snapshot_hash===eventHash(stable(immutablePayload(record)));
+    integrityMemo.set(record,{fp,ok});
+    return ok;
   }
   function collectorSourceFor(source){return canonicalSource(source)==='atyarisi'?'editor':canonicalSource(source);}
   function collectorProofValid(context,source,sourceRef,sourceSha,capturedAt){
@@ -222,7 +262,7 @@
   }
   function validLiveRows(source=null,author=null){
     const src=source==null?null:canonicalSource(source),who=author==null?null:canonicalAuthor(author,src||'');
-    const cached=couponCacheCurrent()?couponReadCache:null;
+    const cached=ensureReadCache();
     if(cached){
       if(src!==null&&who!==null)return cached.byAuthor.get(JSON.stringify([src,who]))||[];
       return cached.valid.filter(row=>(src===null||row.source_type===src)&&(who===null||row.author_id===who));
@@ -271,17 +311,26 @@
   function isApproved(source,author){return approvalMap()[approvalKey(source,author)]===true;}
   function performance(source,author){
     const src=canonicalSource(source),who=canonicalAuthor(author,src);
-    const cached=couponCacheCurrent()?couponReadCache:null,key=JSON.stringify([src,who]);
+    const cached=ensureReadCache(),key=JSON.stringify([src,who]);
     if(cached?.reports.has(key))return {...cached.reports.get(key)};
     const groups=groupedLiveRows(src,who);
     const evaluated=groups.map(groupEvaluation).filter(Boolean);
     const events=evaluated.length,wins=evaluated.reduce((sum,item)=>sum+item.observed,0),expected=events?evaluated.reduce((sum,item)=>sum+item.expected,0)/events:0;
     const singleEvaluated=evaluated.filter(item=>item.direction>0&&item.selections.length===1),singleEvents=singleEvaluated.length,singleWins=singleEvaluated.reduce((sum,item)=>sum+item.observed,0),singleExpected=singleEvents?singleEvaluated.reduce((sum,item)=>sum+item.expected,0)/singleEvents:0,singleAccuracy=singleEvents?singleWins/singleEvents:0;
     const accuracy=events?wins/events:0,lower=wilsonLower(wins,events),edge=accuracy-expected,edgeLower=lower-expected;
-    const reviewed=events>=MIN_LIVE_AUTHOR_RACE_EVENTS,approved=isApproved(src,who);
+    const reviewed=events>=MIN_LIVE_AUTHOR_RACE_EVENTS;
+    // V1.1.337 (kullanıcı talebi): elle onay yerine kanıta bağlı OTOMATİK terfi. Yazar >=100 doğrulanmış
+    // canlı olay VE rastgele beklentinin (genişlik/saha büyüklüğüne göre) Wilson alt sınırı en az %2 üstünde
+    // ise ACTIVE olur; kanıt bozulup alt sınır eşiğin altına inerse kendiliğinden REVIEW'a döner (otomatik
+    // geri çekilme). approvalMap()[key]===false elle dışlamadır ve her zaman kazanır.
+    const manualDeny=approvalMap()[approvalKey(src,who)]===false;
+    const autoQualified=reviewed&&!manualDeny&&edgeLower>=AUTO_PROMOTE_MIN_EDGE_LOWER;
+    const approved=!manualDeny&&(isApproved(src,who)||autoQualified);
     const state=!reviewed?'SHADOW':approved?'ACTIVE':'REVIEW';
     const report={version:VERSION,source_type:src,author_id:who,events,wins,accuracy,expected_accuracy:expected,edge,lower_bound:lower,edge_lower_bound:edgeLower,single_events:singleEvents,single_wins:singleWins,single_accuracy:singleAccuracy,single_expected_accuracy:singleExpected,single_edge:singleAccuracy-singleExpected,
-      state,reviewed,manual_approved:approved,minimum_events:MIN_LIVE_AUTHOR_RACE_EVENTS,automatic_promotion:false};
+      single_lower_bound:wilsonLower(singleWins,singleEvents),single_skill:singleEvents?Math.max(0,wilsonLower(singleWins,singleEvents)-singleExpected):0,
+      avg_width:evaluated.filter(item=>item.direction>0).length?evaluated.filter(item=>item.direction>0).reduce((sum,item)=>sum+item.selections.length,0)/evaluated.filter(item=>item.direction>0).length:0,
+      state,reviewed,manual_approved:approved,minimum_events:MIN_LIVE_AUTHOR_RACE_EVENTS,automatic_promotion:autoQualified,auto_min_edge_lower:AUTO_PROMOTE_MIN_EDGE_LOWER};
     if(cached)cached.reports.set(key,report);
     return {...report};
   }
@@ -317,7 +366,7 @@
   }
   function activeGroupForRace(race){
     const key=raceKey(race);
-    const cached=couponCacheCurrent()?couponReadCache:null;
+    const cached=ensureReadCache();
     if(cached?.groups.has(key))return cached.groups.get(key);
     const rows=log(),groups=new Map();
     const candidates=cached?(cached.byRace.get(key)||[]):(eventRaceIndex().get(key)||[]).map(index=>rows[index]);
@@ -334,6 +383,9 @@
   function consensus(race,horse){
     const target=horseNo(horse);if(!target)return {available:false,score:null,authors:0,total:0,positive:0,top2:0,single:0,omissions:0,limited_boost:0,single_eligible:false,comments:[]};
     const groups=activeGroupForRace(race);let totalWeight=0,supportWeight=0,singleWeight=0,positive=0,top2=0,single=0;
+    // Tek isabet ve at kapsama (ortalama seçim genişliği) kullanımı: yalnız yarış-öncesi kilitli kanıttan
+    // gelen performance() değerleri kullanılır; yarış sonrası/zamansız kayıtlar bu hesaba girmez.
+    let skilledSingle=false,singleSampled=false,narrowBonus=0,omitWeight=0;
     const comments=[];
     for(const group of groups){
       const selections=[...new Set(group.rows.flatMap(row=>row.selections||[]).map(String))];
@@ -344,15 +396,35 @@
         supportWeight+=group.weight;positive++;
         const minWidth=Math.min(...group.rows.map(row=>(row.selections||[]).length));
         if(minWidth<=2)top2++;
-        if(minWidth===1){single++;singleWeight+=group.weight;}
+        const perf=group.performance||{};
+        // Dar seçim, yazarın alışkın olduğu kapsamdan ne kadar darsa o kadar güçlü sinyaldir (sınırlı).
+        if(perf.events>=MIN_CALIBRATION_EVENTS&&perf.avg_width>0&&minWidth<perf.avg_width&&perf.edge>0)
+          narrowBonus+=group.weight*(clamp(Math.sqrt(perf.avg_width/minWidth),1,1.5)-1);
+        if(minWidth===1){
+          single++;
+          const sampled=perf.single_events>=8;
+          if(sampled)singleSampled=true;
+          // Tek oynadığında şansı yenen yazarın ağırlığı büyür; yenemeyenin küçülür.
+          const factor=sampled?clamp(perf.single_skill>0?1+perf.single_skill*10:.6,.6,2):1;
+          if(sampled&&perf.single_skill>0)skilledSingle=true;
+          singleWeight+=group.weight*factor;
+        }
         comments.push({source:group.source_type,author:group.author_id,score:Math.round((50+group.weight*100)*10)/10,value:Math.round(group.weight*1000)/10,direction:1,selection_count:minWidth,approved:group.performance?.manual_approved===true,automatic_calibration:group.performance?.manual_approved!==true,events:group.performance?.events||0,accuracy:group.performance?.accuracy||0,edge:group.performance?.edge||0});
       }
     }
     if(!totalWeight)return {available:false,score:null,authors:0,total:0,positive:0,top2:0,single:0,omissions:0,limited_boost:0,single_eligible:false,comments:[]};
     const ratio=supportWeight/totalWeight;
-    const boost=Math.round(Math.min(MAX_EXPERT_RANK_BOOST,MAX_EXPERT_RANK_BOOST*ratio+Math.min(2,singleWeight*8))*10)/10;
+    // Geniş kapsamlı ve güvenilir (şansın üstünde) yazarın bu atı dışarıda bırakması hafif olumsuz kanıttır.
+    for(const group of groups){
+      const selections=[...new Set(group.rows.flatMap(row=>row.selections||[]).map(String))];
+      if(!selections.length||selections.includes(target))continue;
+      const perf=group.performance||{};
+      if(perf.events>=30&&perf.avg_width>=4&&perf.edge_lower_bound>0)omitWeight+=group.weight*Math.min(1,perf.edge_lower_bound*3);
+    }
+    const rawBoost=MAX_EXPERT_RANK_BOOST*ratio+Math.min(2,singleWeight*8)+Math.min(1.5,narrowBonus*6)-Math.min(2,omitWeight*6);
+    const boost=Math.round(clamp(rawBoost,0,MAX_EXPERT_RANK_BOOST)*10)/10;
     return {available:supportWeight>0,score:Math.round((50+boost)*10)/10,authors:groups.length,total:groups.length,positive,top2,single,omissions:Math.max(0,groups.length-positive),ratio,
-      limited_boost:boost,single_eligible:singleWeight>0&&ratio>=.5,comments};
+      limited_boost:boost,single_eligible:singleWeight>0&&ratio>=.5&&(!singleSampled||skilledSingle),narrow_bonus:Math.round(narrowBonus*1000)/1000,omission_weight:Math.round(omitWeight*1000)/1000,comments};
   }
   function resolveResults(races){
     const rows=log();let changed=0;
@@ -450,13 +522,124 @@
   }
   function report(source=null,author=null){
     if(source!=null&&author!=null)return performance(source,author);
-    const seen=new Set(),out=[];
-    for(const row of validLiveRows()){
-      const key=`${row.source_type}|${row.author_id}`;if(seen.has(key))continue;seen.add(key);out.push(performance(row.source_type,row.author_id));
+    // A report contains many authors. Without a read snapshot, each author
+    // re-verifies the immutable hash of every event (authors × events) while
+    // the Analytics tab is opening. Verify once, index by author, then reuse
+    // the existing performance calculation without relaxing integrity checks.
+    const previous=couponReadCache,hadCurrent=couponCacheCurrent();
+    if(!hadCurrent){
+      const rows=log(),valid=validLiveRows(),byAuthor=new Map();
+      for(const row of valid){
+        const key=JSON.stringify([row.source_type,row.author_id]);
+        if(!byAuthor.has(key))byAuthor.set(key,[]);
+        byAuthor.get(key).push(row);
+      }
+      couponReadCache={rows,length:rows.length,revision:governanceRevision,
+        settings:settings(),valid,byAuthor,byRace:new Map(),reports:new Map(),groups:new Map()};
     }
-    return out.sort((a,b)=>b.edge_lower_bound-a.edge_lower_bound||b.events-a.events);
+    try{
+      const seen=new Set(),out=[];
+      for(const row of couponReadCache.valid){
+        const key=`${row.source_type}|${row.author_id}`;if(seen.has(key))continue;seen.add(key);out.push(performance(row.source_type,row.author_id));
+      }
+      return out.sort((a,b)=>b.edge_lower_bound-a.edge_lower_bound||b.events-a.events);
+    }finally{if(!hadCurrent)couponReadCache=previous;}
   }
 
+  // Read-only observation lane. Never feeds weight(), consensus() or approvals.
+  function* shadowReportSteps(){
+    const target=currentDb(),rows=target?.commentator_evidence_log||[],races=target?.races||[];
+    const byId=new Map(),byContext=new Map(),authors=new Map(),groups=new Map();
+    const normalized=new Map(),identities=new Map(),raceContexts=new WeakMap();
+    const folded=value=>{const raw=text(value);if(!normalized.has(raw))normalized.set(raw,fold(raw));return normalized.get(raw);};
+    const contextKey=row=>{
+      const date=text(row?.race_date||row?.date),city=folded(row?.hippodrome);
+      const six=number(row?.altili_no),leg=number(row?.leg);
+      return date&&city&&six>0&&leg>0?JSON.stringify([date,city,six,leg]):'';
+    };
+    const add=(map,key,race)=>{if(!key)return;const bucket=map.get(key)||new Set();bucket.add(race);map.set(key,bucket);};
+    let processed=0;
+    for(const race of races){
+      if((++processed&15)===0)yield;
+      for(const key of [race?.race_uid,race?.id])add(byId,text(key),race);
+      const context=contextKey(race);raceContexts.set(race,context);add(byContext,context,race);
+    }
+    for(const row of rows){
+      if((++processed&15)===0)yield;
+      const rawIdentity=JSON.stringify([row?.source_type,row?.author_id]);
+      let identityInfo=identities.get(rawIdentity);
+      if(!identityInfo){const source=canonicalSource(row?.source_type);identityInfo={source,author:canonicalAuthor(row?.author_id,source)};identities.set(rawIdentity,identityInfo);}
+      const {source,author}=identityInfo;
+      if(!author||author==='unverified'||source==='tkp_baseline')continue;
+      const key=JSON.stringify([source,author]);
+      if(!authors.has(key))authors.set(key,{source_type:source,author_id:author,events:0,wins:0,
+        single_events:0,single_wins:0,pending_events:0,unmatched_events:0,excluded_records:0,late_records:0,
+        stored_events:0,selection_total:0,state:'OBSERVATION',new_bonus:0});
+      const stats=authors.get(key);
+      const start=Date.parse(row.race_start_at),captured=Date.parse(row.captured_at),published=Date.parse(row.published_at);
+      // Bu rapor yalnız izleme amaçlıdır (weight()/consensus()/onay hattına girmez). Kullanıcı kararıyla
+      // yarış öncesi/sonrası ve zaman damgasız tüm kayıtlar sayılır; yalnız bütünlük hash'i bozuk, yönü ≠ 1
+      // veya seçimi boş kayıtlar dışlanır. Sıkı "yarış öncesi kilitli" kuralı kupon kararlarında aynen geçerlidir;
+      // burada yarış öncesi kanıtı olmayanlar ayrıca late_records olarak sayılır.
+      if(!isIntegrityValid(row)||number(row.direction)!==1||!(row.selections||[]).length){stats.excluded_records++;continue;}
+      if(row.evidence_class!=='LIVE_PRE_RACE_LOCKED'||!Number.isFinite(start)||!Number.isFinite(captured)||!Number.isFinite(published)
+        ||captured>=start||published>=start)stats.late_records++;
+      const identity=text(row.race_key),context=contextKey(row);
+      const candidates=byId.get(identity)||byContext.get(context);
+      const race=candidates?.size===1?[...candidates][0]:null;
+      // Reject a recycled ID whose date/city/six/leg no longer agrees.
+      const matched=race&&context&&raceContexts.get(race)===context?race:null;
+      const actualNo=number(matched?._absRaceNo??matched?.race_no);
+      const eventKey=matched&&actualNo>0?JSON.stringify([text(matched.race_date||matched.date),folded(matched.hippodrome),actualNo]):context||identity;
+      const groupKey=JSON.stringify([key,eventKey]);
+      const group=groups.get(groupKey)||{stats,race:matched,selections:new Set()};
+      for(const pick of row.selections)group.selections.add(String(pick));
+      groups.set(groupKey,group);
+    }
+    for(const {stats,race,selections} of groups.values()){
+      if((++processed&15)===0)yield;
+      stats.stored_events++;
+      if(!race){stats.unmatched_events++;continue;}
+      const roster=new Set((race.horses||[]).map(horseNo));
+      if([...selections].some(pick=>!roster.has(pick))){stats.unmatched_events++;continue;}
+      const official=race.result_integrity_status==='VERIFIED'&&number(race.result_verified_depth)>0
+        &&/^TJK_OFFICIAL_(?:ORDERED_PAYOUT|RESULT_ROWS)$/.test(text(race.result_integrity_source));
+      const winners=official?(race.horses||[]).filter(h=>number(h.winner)===1||number(h.finish_position)===1).map(horseNo):[];
+      if(!winners.length){stats.pending_events++;continue;}
+      const hit=winners.some(no=>selections.has(no))?1:0;
+      stats.events++;stats.wins+=hit;stats.selection_total+=selections.size;
+      if(selections.size===1){stats.single_events++;stats.single_wins+=hit;}
+    }
+    return [...authors.values()].map(stats=>{
+      const {selection_total,...out}=stats;
+      return {...out,accuracy:stats.events?stats.wins/stats.events:null,
+        single_accuracy:stats.single_events?stats.single_wins/stats.single_events:null,
+        avg_selections:stats.events?selection_total/stats.events:null,
+        lower_bound:stats.events?wilsonLower(stats.wins,stats.events):null};
+    }).sort((a,b)=>(b.lower_bound??-1)-(a.lower_bound??-1)||b.events-a.events
+      ||a.source_type.localeCompare(b.source_type)||a.author_id.localeCompare(b.author_id));
+  }
+
+  function shadowReport(){
+    const steps=shadowReportSteps();let step;
+    do{step=steps.next();}while(!step.done);
+    return step.value;
+  }
+  async function shadowReportAsync(options={}){
+    const target=currentDb(),rows=target?.commentator_evidence_log,races=target?.races;
+    const length=rows?.length,raceCount=races?.length,revision=governanceRevision;
+    const pause=options.pause||global.tkpYieldToUi||(()=>new Promise(resolve=>setTimeout(resolve,0)));
+    for(const steps=shadowReportSteps();;){
+      if(options.signal?.aborted)throw new Error('Yorumcu takip taramasi iptal edildi.');
+      if(currentDb()!==target||target?.commentator_evidence_log!==rows||target?.races!==races
+        ||rows?.length!==length||races?.length!==raceCount||governanceRevision!==revision)
+        throw new Error('Takip verisi degisti; raporu yeniden acin.');
+      const step=steps.next();if(step.done)return step.value;
+      await pause();
+    }
+  }
+  global.tkpCommentatorShadowReportAsync=shadowReportAsync;
+  global.tkpCommentatorShadowReport=shadowReport;
   global.TKP_COMMENTATOR_GOVERNANCE_VERSION=VERSION;
   global.tkpCommentatorAppendEvidence=appendEvidence;
   global.tkpCommentatorCaptureX=captureX;

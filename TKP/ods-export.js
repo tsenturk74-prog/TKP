@@ -226,12 +226,14 @@ const TKP_JBYG_EXPORT_KEYS = [
 const TKP_TRUSTED_JBYG_EXPORT_SOURCES = new Set([
   'GANYAN_CANAVARI_JBYG',
   'YENIBEYGIR_JBYG_FALLBACK',
+  'ODS_IMPORT',
   'TJK_PROGRAM_JBYG'
 ]);
 const TKP_TRUSTED_GLP_EXPORT_SOURCE = 'GANYAN_CANAVARI_GALOPLAR_OZET';
 const TKP_TRUSTED_GLP_EXPORT_SOURCES = new Set([
   TKP_TRUSTED_GLP_EXPORT_SOURCE,
   'YENIBEYGIR_GLP_FALLBACK',
+  'ODS_IMPORT',
   'TJK_PROGRAM_GALOP'
 ]);
 function tkpOdsSourceName(value){
@@ -244,8 +246,9 @@ function tkpHasTrustedGlpProvenance(h){
   return TKP_TRUSTED_GLP_EXPORT_SOURCES.has(tkpOdsSourceName(h?.glp_source));
 }
 function tkpValidJBygRank(value){
+  if(typeof value!=='number' && typeof value!=='string') return null;
   const n=Number(value);
-  return Number.isFinite(n) && n >= 1 && n <= 7 ? Math.round(n) : null;
+  return Number.isInteger(n) && n >= 1 && n <= 7 ? n : null;
 }
 function tkpExportJByg(h){
   // KİLİT KURAL: J-BYG ODS'ye yalnız doğrulanmış GC veya GC-sonrası Yeni Beygir
@@ -263,12 +266,10 @@ function tkpExportJByg(h){
     'j_beyg','j_beygir','j_beygir_rank','jokey_beygir','jokey_beygir_rank','jockey_beygir','jockey_beygir_rank'
   ];
   for(const key of keys){
-    const n=Number(h?.[key]);
-    if(Number.isFinite(n) && n >= 1 && n <= 7) return String(Math.round(n));
+    const rank=tkpValidJBygRank(h?.[key]);
+    if(rank!==null) return String(rank);
   }
-  // GC'den gelen gerçek 0, "eksik" veya yedek çağrısı değildir. Sıra değildir,
-  // fakat ODS/ekran doğrulamasında kaynak değeri olarak aynen görünmelidir.
-  if(Number(h?.jbyg)===0) return '0';
+  // Kaynakta 0 bulunsa bile sira degildir; ODS hucresi bos kalir.
   return '';
 }
 
@@ -286,28 +287,34 @@ function tkpOdsHip(value){
 }
 function tkpFindStoredRaceForOds(race){
   const stored=(typeof db!=='undefined' && Array.isArray(db?.races)) ? db.races : [];
-  if(!race || stored.includes(race)) return race;
+  if(!race) return null;
+  if(stored.includes(race)) return race;
   const fileId=String(race.file_id??'');
   const abs=Number(race._absRaceNo);
   const leg=Number(race.leg);
+  const hasAbs=Number.isInteger(abs)&&abs>0;
   const date=String(race.race_date||race.date||'');
   const hip=tkpOdsHip(race.hippodrome||'');
-  let hit=null;
-  if(fileId) hit=stored.find(r=>String(r?.file_id??'')===fileId &&
-    (Number.isFinite(abs) ? Number(r?._absRaceNo)===abs : Number(r?.leg)===leg));
-  if(!hit && date && hip && Number.isFinite(abs)) hit=stored.find(r=>
-    String(r?.race_date||r?.date||'')===date && tkpOdsHip(r?.hippodrome||'')===hip && Number(r?._absRaceNo)===abs);
-  if(!hit && date && hip && Number.isFinite(leg)) hit=stored.find(r=>
-    String(r?.race_date||r?.date||'')===date && tkpOdsHip(r?.hippodrome||'')===hip && Number(r?.leg)===leg);
-  return hit;
+  const meetingMatches=r=>(!date||String(r?.race_date||r?.date||'')===date)&&
+    (!hip||tkpOdsHip(r?.hippodrome||'')===hip);
+  if(fileId){
+    const sameFile=stored.filter(r=>String(r?.file_id??'')===fileId && meetingMatches(r) &&
+      (hasAbs?Number(r?._absRaceNo)===abs:Number.isInteger(leg)&&leg>0&&Number(r?.leg)===leg));
+    if(sameFile.length) return sameFile.length===1?sameFile[0]:null;
+  }
+  // Relative legs repeat in different six-leg windows; never use them across files.
+  if(!hasAbs||!date||!hip) return null;
+  const matches=stored.filter(r=>meetingMatches(r)&&Number(r?._absRaceNo)===abs);
+  return matches.length===1?matches[0]:null;
 }
 function tkpFindStoredHorseForOds(horse, storedRace){
   const horses=Array.isArray(storedRace?.horses)?storedRace.horses:[];
   const name=tkpOdsHorseName(horse?.horse_name);
   const no=String(horse?.horse_no??'').trim();
-  return (name ? horses.find(h=>tkpOdsHorseName(h?.horse_name)===name) : null)
-    || (no ? horses.find(h=>String(h?.horse_no??'').trim()===no) : null)
-    || null;
+  if(!name&&!no) return null;
+  const matches=horses.filter(h=>(!name||tkpOdsHorseName(h?.horse_name)===name)&&
+    (!no||String(h?.horse_no??'').trim()===no));
+  return matches.length===1?matches[0]:null;
 }
 function tkpPromoteValidJByg(horse){
   const rank=tkpValidJBygRank(tkpExportJByg(horse));
@@ -365,9 +372,10 @@ function tkpHydrateStoredYpuan(horse, source){
 function tkpPrepareRacesForOdsExport(races){
   // Her ODS üretim yolu bu tek kapıdan geçer. Ekran payload'ı db.races'in eksik
   // bir kopyasıysa, aynı yarıştaki asıl atın yalnız doğrulanmış J-BYG alanı alınır.
-  for(const race of (races||[])){
-    const storedRace=tkpFindStoredRaceForOds(race);
-    if(storedRace && storedRace!==race){
+  return (races||[]).map(original=>{
+    const storedRace=tkpFindStoredRaceForOds(original);
+    const race={...original,horses:(original.horses||[]).map(h=>({...h}))};
+    if(storedRace && storedRace!==original){
       for(const horse of (race.horses||[])){
         const source=tkpFindStoredHorseForOds(horse,storedRace);
         if(!source) continue;
@@ -377,8 +385,8 @@ function tkpPrepareRacesForOdsExport(races){
       }
     }
     for(const horse of (race.horses||[])) tkpPromoteValidJByg(horse);
-  }
-  return races;
+    return race;
+  });
 }
 function tkpExport800G(h){
   // KİLİT KURAL: ODS 800 G/GLP alanına ham galop derecesi/süresi DEĞİL,
@@ -388,8 +396,8 @@ function tkpExport800G(h){
   // Yeni Beygir fallback tablosu olmalıdır; TJK/Atlagel alanları taşınmaz.
   if(!tkpHasTrustedGlpProvenance(h)) return '';
   for(const key of ['g800','g800_rank','galop_rank','glp_rank','galop800_rank','galop_800_rank','g_800_rank','g400_rank']){
-    const n=Number(h?.[key]);
-    if(Number.isFinite(n)&&n>=1&&n<=6)return String(Math.round(n));
+    const rank=tkpValidJBygRank(h?.[key]);
+    if(rank!==null && rank<=6)return String(rank);
   }
   return '';
 }
@@ -459,7 +467,7 @@ function buildOdsFromRaces(races, filenameHint){
   races = (races||[]).slice().sort((a,b)=>(Number(a?.leg)||0)-(Number(b?.leg)||0));
   // Eksik ekran kopyası varsa yalnız doğrulanmış GC/Yeni Beygir J-BYG/GLP kaydı
   // tamamlanır. TJK/geçmiş oranlarından ODS uğruna sıra üretilmez.
-  tkpPrepareRacesForOdsExport(races);
+  races=tkpPrepareRacesForOdsExport(races);
   let parser = new DOMParser();
   let doc = parser.parseFromString(ODS_TPL_CONTENT, 'text/xml');
   let tables = [...doc.getElementsByTagNameNS('*','table')];

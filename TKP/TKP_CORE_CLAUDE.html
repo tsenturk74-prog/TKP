@@ -87,7 +87,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>TKP CORE — V1.1.333 R19.4 X SHARE VIEWPORT FINAL</title>
+<title>TKP CORE - V1.1.333 - TOMMY-2026</title>
 
 <style id="sideBetPlainHorseNumbers">
 /* Yan bahis tabloları: at numaralarında sonuç/tahmin renklendirmesi kaldırıldı. */
@@ -418,6 +418,13 @@
 #tkpRoot .badge.tkp{background:#dbeafe!important;color:#1e40af!important;border-color:#60a5fa!important}
 /* KÖK FIX: odb-row satır rengiyle (turkuaz, #e4faf6/#9edfd6) eşleşen görünür ODB rozeti. */
 #tkpRoot .badge.odb-signal{background:#e4faf6!important;color:#0f766e!important;border-color:#5eead4!important}
+/* Tommy talebi: "atom bombası" gözlem rozeti — kanıtlanmış sinyal değil, yalnız izleme notu. */
+#tkpRoot .badge.atom-watch{background:#fff7ed!important;color:#c2410c!important;border-color:#fdba74!important;font-weight:900!important}
+/* Tommy talebi: KAÇAN AT uyarısı — benzer şartlarda kazananın ana tahminden sık kaçtığı atlar. At isminin yanında, dikkat çekici. */
+#tkpRoot .badge.escBadge,#tkpRoot #predictionResult .proPredTable .badge.escBadge{background:#fee2e2!important;color:#b91c1c!important;border:1px solid #ef4444!important;font-weight:900!important;font-size:9.5px!important;letter-spacing:.2px!important;padding:0 4px!important;border-radius:5px!important;vertical-align:middle!important;white-space:nowrap!important;animation:tkpEscPulse 1.6s ease-in-out infinite!important}
+@keyframes tkpEscPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.45)}50%{box-shadow:0 0 0 3px rgba(239,68,68,0)}}
+/* Ayak düzeyi "favori zayıf · kaçan riski" uyarısı — ayak başlık şeridinde, dikkat çekici. */
+#tkpRoot .predTopRibbon .legEscWarn{display:inline-flex!important;align-items:center!important;gap:3px!important;margin-left:8px!important;background:#fef2f2!important;color:#b91c1c!important;border:1px solid #ef4444!important;border-radius:6px!important;padding:1px 7px!important;font-size:10.5px!important;font-weight:900!important;letter-spacing:.2px!important;white-space:nowrap!important;vertical-align:middle!important}
 </style>
 <style id="v1046-tommy-clean-signals-20260806">
 /* BMB / ODB / TKP sinyalleri: küçük, açık zeminli ve birbirinden net. */
@@ -1220,8 +1227,82 @@
   #tkpRoot .tkpR17ModelTracking .trackWarn{font-size:12.5px!important;color:#9a3412!important;margin-top:5px!important;font-weight:750!important;}
 }
 </style>
+
+<style id="r19-17-coupon-plain-no-compact-final">
+/* R19.17 — eküri rozeti olmayan kupon numaraları daha küçük kutu, daha okunaklı rakam. */
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipPlain{padding:0 2px!important;min-height:16px!important;margin:1px 0!important;}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipPlain .compactHorseNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipPlain .compactWinnerNo{font-size:15px!important;line-height:1!important;}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipEkuri{padding:1px 3px!important;min-height:17px!important;}
+</style>
+
+<style id="r1938-final-ui-lock">
+#tkpRoot #predictionResult .predHorseIcon,#tkpRoot h1 .predHorseIcon{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:25px!important;height:25px!important;margin-right:5px!important;border-radius:999px!important;background:#fff!important;color:#0f4c81!important;font-size:17px!important;line-height:1!important;box-shadow:0 1px 6px rgba(0,0,0,.24)!important;vertical-align:middle!important;flex-shrink:0!important}
+#tkpRoot #predictionResult .predHorseRow.isBmb:not(.isWinner),#tkpRoot #predictionResult tr.isBmb:not(.isWinner){background:#fff4c7!important}
+#tkpRoot #predictionResult .predHorseRow.isWinner,#tkpRoot #predictionResult tr.isWinner{background:#86efac!important;border-color:#22c55e!important;color:#064e3b!important}
+</style>
+<style id="r1940-analysis-table-palette">
+/* R19.40 ANALYSIS TABLE PALETTE — compact, clean and intentionally avoids
+   winner-green, turquoise and BMB-yellow in analysis/learning tables. */
+#tkpRoot #pane-learning .tkpFirstLookTekCard,
+#tkpRoot #pane-learning .tkpCommentatorPerformanceCard,
+#tkpRoot #pane-learning .tkpTrackingKpis span{
+  background:#ffffff!important;
+  border-color:#d7e0eb!important;
+  color:#172033!important;
+  box-shadow:0 2px 8px rgba(15,23,42,.06)!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable,
+#tkpRoot #pane-learning .tkpCommentatorTable{
+  border:1px solid #d7e0eb!important;
+  border-radius:10px!important;
+  overflow:hidden!important;
+  background:#ffffff!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable thead th,
+#tkpRoot #pane-learning .tkpCommentatorTable thead th{
+  background:#243b5a!important;
+  color:#ffffff!important;
+  border-color:#d7e0eb!important;
+  font-weight:900!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable tbody tr:nth-child(odd) td,
+#tkpRoot #pane-learning .tkpCommentatorTable tbody tr:nth-child(odd) td{
+  background:#f8fafc!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable tbody tr:nth-child(even) td,
+#tkpRoot #pane-learning .tkpCommentatorTable tbody tr:nth-child(even) td{
+  background:#eef2f7!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable tbody tr:hover td,
+#tkpRoot #pane-learning .tkpCommentatorTable tbody tr:hover td{
+  background:#e8eef6!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable td,
+#tkpRoot #pane-learning .tkpCommentatorTable td{
+  color:#172033!important;
+  border-color:#d7e0eb!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekTable td.num,
+#tkpRoot #pane-learning .tkpCommentatorTable td.num{
+  font-variant-numeric:tabular-nums!important;
+  font-weight:800!important;
+}
+#tkpRoot #pane-learning .tkpFirstLookTekCard h2,
+#tkpRoot #pane-learning .tkpFirstLookTekCard h3,
+#tkpRoot #pane-learning .tkpCommentatorPerformanceCard h2,
+#tkpRoot #pane-learning .tkpCommentatorPerformanceCard h3{
+  color:#20344f!important;
+}
+</style>
 </head>
 <body>
+<style id="r19-16-coupon-status-fit-final">
+/* R19.16 — 3 kolonlu kupon kartında Durum rozeti taşmadan görünür. */
+#tkpRoot #budgetCouponResult .budgetCouponCompact th:last-child,
+#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child{width:60px!important;text-align:center!important;}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus{font-size:8px!important;padding:2px 3px!important;line-height:1!important;min-width:0!important;max-width:100%!important;box-sizing:border-box!important;white-space:nowrap!important;}
+</style>
 <style>
   html,body{margin:0;padding:0;overflow-x:hidden;}
   #tkpRoot{font-family:'Segoe UI',Arial,sans-serif;color:#172033;max-width:calc(100vw - 2cm);width:calc(100vw - 2cm);margin:0 auto;padding:14px 1cm 14px 18px;overflow-x:hidden;}
@@ -3989,13 +4070,13 @@
 </style>
 <div id="tkpRoot">
   <div class="hdr">
-    <h1>🐎 TKP CORE V1.1.333 · R19.4 X SHARE VIEWPORT FINAL</h1>
+    <h1><span class="predHorseIcon" aria-hidden="true">🐎</span> TKP CORE V1.1.333 · TOMMY-2026</h1>
     <p>Veri kalitesi, doğrulanmış kurallar, tahmin ve kâr/zarar tek yerde. Bu sohbette veya kendi bilgisayarında çalıştırdığında veriler kalıcı olarak saklanır.</p>
     <button id="tkpBackToStartMenu" type="button" style="margin-top:6px;padding:6px 10px;font-weight:800;">↩ Başlangıç Menüsüne Geri Dön</button>
   </div>
   <div class="finalStatusBar" aria-label="Sistem durumu">
     <span class="fsItem"><b>Sürüm:</b> V1.1.333</span>
-    <span class="fsItem"><b>Motor:</b> R17.4 AutoGluon + EV/ROI Portfolio</span>
+    <span class="fsItem"><b>Motor:</b> Champion R16.94 + R19.44 AutoGluon (gölge) + EV/ROI Portfolio</span>
     <span class="fsItem fsOk">● Öğrenme aktif</span>
     <span class="fsItem"><b>Veri tabanı:</b> <span id="finalDbCount">0 yarış</span></span>
     <span class="fsItem"><b>Mod:</b> Veri toplama</span>
@@ -4024,12 +4105,6 @@
     <div class="card">
       <div class="sectionTitle"><div><h2 style="margin:0;">Bugünkü öneriler</h2><p class="muted">Mevcut veri ve güven düzeyine göre otomatik oluşturulur.</p></div></div>
       <div id="dashAdvice" class="adviceGrid"></div>
-    </div>
-    <div class="grid">
-      <div class="card">
-        <h2 style="margin:0 0 8px;">🏆 En iyi 10</h2><div id="dashBest"></div>
-        <h2 style="margin:14px 0 8px;">👑 Mükemmel 5</h2><div id="dashPerfect"></div>
-      </div>
     </div>
     <div class="card"><h2 style="margin:0 0 8px;">Veri kapsamı</h2><div id="coverage"></div></div>
     <div class="card"><h2 style="margin:0 0 8px;">Son kalite / öğrenme olayları</h2><div id="recentLog"></div></div>
@@ -4100,17 +4175,17 @@
       <div class="card" style="margin-top:10px;border-left:5px solid #2563eb;">
         <h3 style="margin:0 0 8px;font-size:14px;">🎟️ Kupon bütçeleri</h3>
         <div class="row" style="align-items:flex-end;gap:10px;">
-          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Normal bütçe aralığı (1.000–1.400 TL)</span>
-            <span class="budgetFixedRangeBox" title="Uyarlanır aralık: 1.000–1.400 TL">1.000–1.400 TL</span>
-            <input id="normalCouponBudget" type="hidden" value="1400" data-min="1000" data-max="1400">
+          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Normal bütçe aralığı (2.500–3.000 TL)</span>
+            <span class="budgetFixedRangeBox" title="Hedef 2.500 TL · üst limit 3.000 TL">2.500–3.000 TL</span>
+            <input id="normalCouponBudget" type="hidden" value="2500" data-min="1000" data-max="3000">
           </label>
-          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Sürpriz / Uzman bütçe aralığı (1.000–1.400 TL)</span>
-            <span class="budgetFixedRangeBox" title="Uyarlanır aralık: 1.000–1.400 TL">1.000–1.400 TL</span>
-            <input id="surpriseCouponBudget" type="hidden" value="1400" data-min="1000" data-max="1400">
+          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Sürpriz / Uzman bütçe aralığı (2.500–3.000 TL)</span>
+            <span class="budgetFixedRangeBox" title="Hedef 2.500 TL · üst limit 3.000 TL">2.500–3.000 TL</span>
+            <input id="surpriseCouponBudget" type="hidden" value="2500" data-min="1000" data-max="3000">
           </label>
           <button id="buildBudgetCoupon" class="primary">🎟️ 3 kuponu oluştur</button>
         </div>
-        <p class="muted" style="margin:8px 0 0;font-size:11px;"><b>Bütçe:</b> Normal / Sürpriz / Uzman 1.000–1.400 TL. Eski kayıtların tutarı korunur; güncel kupon için yeniden hesapla.</p>
+        <p class="muted" style="margin:8px 0 0;font-size:11px;"><b>Bütçe:</b> Normal / Sürpriz / Uzman 2.000 TL’ye kadar genişler. Çok güçlü tek, sürpriz veya diğer adaylar için yeterli bağımsız destek varsa tavan 2.400 TL olur. Eski kayıtların tutarı korunur; güncel kupon için yeniden hesapla.</p>
       </div>
       <!-- Yan bahis miktarları ilgili yan bahis kartlarında zaten gösterilir.
            Motorun mevcut varsayılanlarını korumak için girişler görünmez tutulur. -->
@@ -4153,11 +4228,11 @@
     <div id="historicalPortfolioAnalysis"></div>
     <div id="analyticsCommentatorPerformance"></div>
     <div class="tkpCenterTableGrid" id="analyticsCoreTables">
-      <div class="card"><h3 style="margin:0 0 8px;">🏟️ Pist analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="surfaceTable"></div></div>
-      <div class="card"><h3 style="margin:0 0 8px;">🐎 Safkan türü analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="breedTable"></div></div>
-      <div class="card"><h3 style="margin:0 0 8px;">📍 Hipodrom analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="hippoTable"></div></div>
-      <div class="card"><h3 style="margin:0 0 8px;">🏁 Koşu ailesi analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="conditionTable"></div></div>
-      <div class="card"><h3 style="margin:0 0 8px;">📏 Mesafe grubu analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="distanceTable"></div></div>
+      <!-- FIX (Tommy talebi — benzer/ortak veri toplayan tablolar birleştirildi):
+           Pist/Safkan türü/Hipodrom/Koşu ailesi/Mesafe grubu kartları birebir aynı
+           6 sütunu (Koşu, Ort. at, VALUE kapsamı, AGF1, SONUÇ1, BMB yakalama) ayrı
+           ayrı gösteriyordu; artık tek kartta "Boyut" sütunuyla art arda. -->
+      <div class="card" style="grid-column:1/-1"><h3 style="margin:0 0 8px;">🏟️ Pist · 🐎 Safkan türü · 📍 Hipodrom · 🏁 Koşu ailesi · 📏 Mesafe grubu analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="categoryAnalysisTable"></div></div>
     </div>
   </section>
 
@@ -4186,8 +4261,9 @@
         <label>Tarih<input id="betDate" type="date"></label>
         <label>Kupon tipi<select id="betType">
           <option value="main">💪 Normal · 1 TEK</option>
-          <option value="surprise">🧠 Uzman + Kulis</option>
-          <option value="other">Diğer</option>
+<option value="surprise">🧠 Uzman + Kulis</option>
+<option value="alt">Sürpriz</option>
+<option value="other">Diğer</option>
         </select></label>
         <label>Pist / Hipodrom<select id="betCity"><option value="">Pist seç</option></select></label>
         <label id="betTrackOtherWrap" style="display:none;">Diğer pist<input id="betTrackOther" placeholder="Örn. Del Mar"></label>
@@ -4225,6 +4301,7 @@
 
   <section id="pane-backtest" class="pane">
     <div class="hero profit"><h2>🧪 Back Test / Başarı Paneli</h2><p>Son çalışan algoritmanın arşivdeki gerçek sonucunu gösterir. Ağır tarama otomatik çalışmaz; yalnızca bu ekrandaki butona basınca hesaplanır.</p></div>
+    <div id="tkpSelfTestPanel"></div>
     <div id="r16SelectivePreview"><div class="card" style="border-left:5px solid #0f766e;"><div class="empty">R17.4 seçici TEK önizlemesi otomatik çalışmaz. <button id="runR16Preview" type="button" class="compactUploadBtn">🎯 R17.4 Önizleme Hesapla</button></div></div></div>
     <div class="card" style="border-left:5px solid #7c3aed;">
       <div class="sectionTitle">
@@ -4234,12 +4311,12 @@
         </div>
         <div class="row" style="align-items:flex-end;">
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;">Son kaç toplantı?
-            <input id="couponBacktestLimit" type="number" min="1" max="509" step="1" value="509" style="width:110px;">
+            <input id="couponBacktestLimit" type="number" min="1" step="1" value="509" style="width:110px;" title="Varsayılan olarak kayıtlı arşivin tamamı kullanılır.">
           </label>
           <button id="runCouponBacktest" class="compactUploadBtn nativeFolderPicker" type="button">🧪 Back Test Hesapla</button>
         </div>
       </div>
-      <p class="muted" style="font-size:11.5px;margin:0 0 8px;">En fazla 509 arşiv toplantısı taranır. Sonucu eksik toplantıların tahmin/kupon snapshotı korunur; yalnız sonuç değerlendirmesi sonuç tamamlanana kadar bekler. Sonuçlar önbelleğe alınır ve yeni sonuç/dosya gelince temizlenir.</p>
+      <p class="muted" style="font-size:11.5px;margin:0 0 8px;">Varsayılan olarak kayıtlı arşivin tamamı taranır; istersen daha küçük bir toplantı sayısı girebilirsin. Sonucu eksik toplantıların tahmin/kupon snapshotı korunur; yalnız sonuç değerlendirmesi sonuç tamamlanana kadar bekler. Sonuçlar önbelleğe alınır ve yeni sonuç/dosya gelince temizlenir.</p>
       <div id="couponBacktestResult" style="margin-top:10px;"><div class="empty">Back Test için butona bas.</div></div>
     </div>
   </section>
@@ -4251,8 +4328,7 @@
   <section id="pane-learning" class="pane">
     <div id="learningTable"></div>
     <div class="tkpCenterTableGrid" id="trackingAnalyticTables">
-      <div class="card"><h3 style="margin:0 0 8px;">🎙️ Koşu şartına göre kazananın AGF sırası <span class="learningBadge">🟢 Güncel</span></h3><div id="agfRankTableEl" class="winnerRankTable"></div></div>
-      <div class="card"><h3 style="margin:0 0 8px;">🎯 Koşu şartına göre kazananın SONUÇ sırası <span class="learningBadge">🟢 Güncel</span></h3><div id="conditionRankTable" class="winnerRankTable"></div></div>
+      <div class="card" style="grid-column:1/-1"><h3 style="margin:0 0 8px;">🎯 Koşu şartına göre kazananın sıra dağılımı · AGF + SONUÇ <span class="learningBadge">🟢 Güncel</span></h3><div id="winnerRankMergedTable" class="winnerRankTable"></div><div id="agfRankTableEl" style="display:none"><div class="empty">Birleşik tabloda gösteriliyor.</div></div><div id="conditionRankTable" style="display:none"><div class="empty">Birleşik tabloda gösteriliyor.</div></div></div>
       <div class="card"><h3 style="margin:0 0 8px;">🎙️ VALUE (yorumcu puanı) analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="valueTable"></div></div>
       <div class="card"><h3 style="margin:0 0 8px;">🏇 Kulvar analizi <span class="learningBadge">🟢 Güncel</span></h3><div id="kulvarTable"></div></div>
       <div class="card tkpAdaptiveLearningCard" style="border-left:5px solid #16a34a;"><h3 style="margin:0 0 4px;">🧠 Kendini Güncelleyen Model Ailesi Analizi</h3><p class="muted" style="margin:0 0 10px;">TKP, AGF, Y.PUAN, SONUÇ, J-BYG, 400G/800G, HNDKP, S, TR, VALUE, SP, KG, DRC, Accurate, G.PR, Profil Gücü, X/Twitter Kulis, Koşu Uyumu, Geçmiş Gücü, ODB ve gerçek BMB dâhil tüm sinyaller; gerçek 1., 2., 3., 4. ve 5. bitiriş konumlarında ayrı ayrı kalibre edilir. Her yeni doğrulanmış sonuçta tahmin, tek ve yan bahis öğrenme verisi güncellenir; eksik veri paydaya katılmaz ve küçük örneklerde etki kademeli tutulur.</p><div id="adaptiveLearningTable"></div></div>
@@ -4302,55 +4378,62 @@
   </section>
 </div>
 
-<script src="fixed-scroll-grips.js?v=r1693-final-2cm"></script>
-<script src="ods-export.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="core-utils.js?v=1.1.333-r1669-scope"></script>
-<script src="tkp-segmented-idb.js?v=r1694-agf-1"></script>
-<script src="state.js?v=r1693-agf-responsive-1"></script>
-<script src="race-data.js?v=r1679-first-five-support"></script>
-<script src="commentator-performance-engine.js?v=r1691-coupon-responsive"></script>
-<script src="prediction-engine.js?v=1.1.333-r16.63-benter-audit"></script>
-<script src="stats-engine.js?v=r1693-agf-responsive-1"></script>
-<script src="tkp-incremental-rules.js?v=1.1.333-r1669-scope"></script>
-<script src="tkp-adaptive-cache-persist.js?v=r1693-agf-responsive-1"></script>
-<script src="tkp-score-calibration.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="learning-engine-v2.js?v=r1692-pipeline"></script>
-<script src="online-ranking-engine.js?v=r1692-pipeline"></script>
-<script src="tkp-r17-autogluon-bridge.js?v=r17-autogluon-20260913"></script>
-<script src="tkp-r18-analytics-bridge.js?v=r18.1-accuracy-20260914"></script>
-<script src="r17-ev-roi-portfolio-engine.js?v=r17.4-ev-roi-20260913"></script>
-<script src="tkp-monte-carlo-engine.js?v=r17.9-montecarlo-20260914"></script>
-<script src="tkp-smart-coupon-filter.js?v=r17.9-smart-filter-20260914"></script>
-<script src="r16-challenger-engine.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="v53-target15-engine.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="surprise-portfolio-engine.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="strategy-lab.js?v=1.1.333-r16.52-tr-source-alias"></script>
-<script src="tkp-v320-portfolio-engine.js?v=1.1.333-r16.64-third-horse"></script>
-<script src="tkp-v321-sidebet-calibration.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="tkp-real509-archive.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="tkp-marginal-gain-optimizer.js?v=v1.0-mgo-20260920"></script>
-<script src="coupon-builder-r1681-baseline-v2.js?v=r1693-algorithm-fix-1"></script>
-<script src="tkp-calibration-engine-r1681-bankroll-90k-v1.js"></script>
-<script src="tkp-baseline-evidence.js?v=r1679-evidence-scope"></script>
-<script src="tkp-backtest-fast-r1681-surprise-band-v1.js?v=r18.8-audited1"></script>
-<script src="ui-components.js?v=r1693-distinct-singles"></script>
-<script src="v55-live-diagnostics.js?v=r18.8-audited1"></script>
-<script src="tkp-champion-portfolio-engine.js?v=r1671-final"></script>
-<script src="tkp-probability-portfolio-engine.js?v=r1693-algorithm-fix-1"></script>
-<script src="tkp-archive-snapshot-repair.js?v=1.1.333-r16.63-benter-audit"></script>
-<script src="tkp-v296-cost-roi-policy.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="tkp-rescue509-engine.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="historical-all-data-bridge.js?v=1.1.333-r16.51-first-look-six-leg-leaders"></script>
-<script src="performance-runtime-r1681-band-bankroll-v2.js?v=r1692-pipeline"></script>
-<script src="tkp-indexes.js?v=1.1.333-r16.52-tr-source-alias"></script>
-<script src="tkp-virtual-table.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="tkp-profiler.js?v=1.1.333-r16.56-latency-sla"></script>
-<script src="tkp-menu-fast.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="tkp-v31-runtime.js?v=r1692-pipeline"></script>
-<script src="tkp-analysis-cache.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="research-analytics.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="weekly-model-tracker.js?v=r1692-pipeline"></script>
-<script src="surprise-cohort-tracker.js?v=1.1.333-r16.44-source-speed-fix"></script>
+<script src="fixed-scroll-grips.js?v=1.1.333-r19.47.1"></script>
+<script src="ods-export.js?v=1.1.333-tommy-2026-1-ods-ranks"></script>
+<script src="tkp-degree-history-index.js?v=1.1.333-r19.45.5"></script>
+<script src="core-utils.js?v=tommy-20261018-r12"></script>
+<script src="tkp-segmented-idb.js?v=1.1.333-r19.47.9-bounded-codec"></script>
+<script src="state.js?v=tommy-20261018-r23"></script>
+<script src="race-data.js?v=tommy-20261019-foreign-yraw-1"></script>
+<script src="tkp-program-field-repair.js?v=1.1.333-r19.45.5"></script>
+<script src="commentator-performance-engine.js?v=1.1.333-tommy-2026-1-r19"></script>
+<script src="prediction-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="stats-engine.js?v=tommy-20261018-r4"></script>
+<script src="tkp-incremental-rules.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-adaptive-cache-persist.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-score-calibration.js?v=1.1.333-r19.45.5"></script>
+<script src="learning-engine-v2.js?v=1.1.333-r19.45.5"></script>
+<script src="online-ranking-engine.js?v=1.1.333-r19.47.13-final"></script>
+<script src="tkp-continuous-learning.js?v=1.1.333-r19.45.5-learn1"></script>
+<script src="tkp-r17-autogluon-bridge.js?v=1.1.333-r19.47.31-audit1"></script>
+<script src="deep-surprise-shadow-coupon.js?v=1.1.333-r19.47.31-audit1"></script>
+<script src="deep-surprise-tracker.js?v=1.1.333-r19.47.31-audit1"></script>
+<script src="tkp-r18-analytics-bridge.js?v=1.1.333-r19.45.5"></script>
+<script src="r17-ev-roi-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-monte-carlo-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-smart-coupon-filter.js?v=1.1.333-r19.45.5"></script>
+<script src="r16-challenger-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="v53-target15-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="surprise-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="strategy-lab.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-v320-portfolio-engine.js?v=20261020-2500-3000"></script>
+<script src="tkp-v321-sidebet-calibration.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-real509-archive.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-marginal-gain-optimizer.js?v=1.1.333-r19.45.5"></script>
+<script src="coupon-builder-r1681-baseline-v2.js?v=20261020-tek-takibi-v2"></script>
+<script src="tkp-calibration-engine-r1681-bankroll-90k-v1.js?v=tommy-20261018-r11"></script>
+<script src="tkp-baseline-evidence.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-backtest-fast-r1681-surprise-band-v1.js?v=1.1.333-r19.47.13-final"></script>
+<script src="bet-template-engine.js?v=20261004-results"></script>
+<script src="ui-components.js?v=20261020-2500-3000"></script>
+<script src="v55-live-diagnostics.js?v=20261020-2500-3000"></script>
+<script src="tkp-champion-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-probability-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-archive-snapshot-repair.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-v296-cost-roi-policy.js?v=20261020-2500-3000"></script>
+<script src="tkp-rescue509-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="historical-all-data-bridge.js?v=1.1.333-r19.47.4"></script>
+<script src="performance-runtime-r1681-band-bankroll-v2.js?v=20261020-2500-3000"></script>
+<script src="tkp-indexes.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-data-table-query.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-virtual-table.js?v=1.1.333-tommy-2026-1"></script>
+<script src="tkp-profiler.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-menu-fast.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-v31-runtime.js?v=1.1.333-r19.45.5-speed47"></script>
+<script src="tkp-analysis-cache.js?v=1.1.333-tommy-2026-1"></script>
+<script src="research-analytics.js?v=1.1.333-tommy-2026-1"></script>
+<script src="weekly-model-tracker.js?v=tommy-20261018-r23"></script>
+<script src="surprise-cohort-tracker.js?v=1.1.333-r19.45.5-tommy-r16"></script>
 <style id="v1340-balanced-center-tables">
 /* İleri analiz / İzleme / Operasyon merkezleri: tablo kartları üç merkeze
    dengeli dağıtılır. İç tablo HTML'i ve kolon oranları korunur; yalnız dış
@@ -4369,20 +4452,20 @@
    korunur -- yalnız artık 2 katına yakın gerçek piksel genişliğinde çizilir. */
 #tkpRoot .tkpCenterTableGrid>.tkpAdaptiveLearningCard{grid-column:1/-1!important;}
 </style>
-  <script src="vendor/pako.min.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="r16-learned-features.js?v=r1671-final"></script>
-<script src="r16-learned-model.js?v=r1671-final"></script>
-<script src="r16-position-runtime.js?v=r1671-final"></script>
-<script src="r16-coupon-coverage.js?v=r1693-distinct-singles"></script>
-<script src="coupon-policy-governance.js?v=r1680-policy-audit"></script>
-<script src="result-display-sync.js?v=r1680-result-view"></script>
-<script src="selective-backup.js?v=r17.8-selective-transfer"></script>
-<script src="app-controller-r1681-baseline-v24.js?v=r19.4-x-share-viewport"></script>
-<script src="tkp-r19-integrity-runtime.js?v=r19.2-integrity"></script>
-<script src="archive-coupon-planner.js?v=r1691-coupon-responsive"></script>
-<script src="historical-calibration.js?v=r1692-pipeline"></script>
-<script src="final-runtime-fixes.js?v=1.1.333-r16.68-live-audit-40s"></script>
-<script src="print-report.js?v=1.1.333-r16.44-source-speed-fix"></script>
+  <script src="vendor/pako.min.js?v=1.1.333-r19.45.5"></script>
+<script src="r16-learned-features.js?v=1.1.333-r19.45.5"></script>
+<script src="r16-learned-model.js?v=1.1.333-r19.45.5"></script>
+<script src="r16-position-runtime.js?v=1.1.333-r19.45.5"></script>
+<script src="r16-coupon-coverage.js?v=20261020-width-single-opt-r2"></script>
+<script src="coupon-policy-governance.js?v=1.1.333-r19.47.8-display-top-n-2"></script>
+<script src="result-display-sync.js?v=1.1.333-r19.47.50"></script>
+<script src="selective-backup.js?v=tommy-20261018-r2"></script>
+<script src="app-controller-r1681-baseline-v24.js?v=1.1.348-SA-OLD-SNAPSHOT"></script>
+<script src="tkp-r19-integrity-runtime.js?v=tommy-20261010-blank-startup"></script>
+<script src="archive-coupon-planner.js?v=1.1.333-r20.3000.bh2"></script>
+<script src="historical-calibration.js?v=1.1.333-r20.3000.bh2"></script>
+<script src="final-runtime-fixes.js?v=tommy-20261010-blank-startup"></script>
+<script src="print-report.js?v=1.1.333-r19.45.5"></script>
 
 
 <style>
@@ -7692,11 +7775,12 @@
 })();
 </script>
 
-  <script src="tkp-similar-race-engine.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="x-kulis-engine.js?v=1.1.333-r16.44-source-speed-fix"></script>
-<script src="tkp-collector-bridge.js?v=r1679-support-scope"></script>
+  <script src="tkp-similar-race-engine.js?v=1.1.333-r19.45.5"></script>
+<script src="x-kulis-engine.js?v=tommy-20261018-r5"></script>
+<script src="tkp-history-query.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-collector-bridge.js?v=tommy-20261018-r2"></script>
 <div id="tkpFreezeDiagnosticDock" aria-live="polite"></div>
-<script src="tkp-freeze-diagnostics.js?v=r18.8-audited1"></script>
+<script src="tkp-freeze-diagnostics.js?v=1.1.333-tommy-2026-1-diagnostic-depth"></script>
 
 <style id="tkp-v1044-winner-signal-final">
 /* Sonuç geldikten sonra gerçek kazanan, BMB/ODB/TKP dahil tüm sinyal renklerini ezer. */
@@ -9507,16 +9591,17 @@
 #tkpRoot #coverage .coverageCompactTable td:last-child>b{font-size:10.8px!important;line-height:1.1!important;}
 #tkpRoot #recentLog{width:1000px!important;max-width:100%!important;}
 #tkpRoot .tkpDashboardLogList{width:100%!important;}
-#tkpRoot .tkpDashboardLogEntry{display:grid!important;grid-template-columns:140px minmax(0,1fr)!important;column-gap:11px!important;align-items:start!important;padding:6px 0!important;border-bottom:1px solid #eef2f7!important;}
+/* Log başlığı tam genişlikte: olay solda kırılır, saat sağda sabit kalır.
+   Açıklama ayrı satırdadır; uzun olaylar ve dar/zoomlu alanlar yanına taşmaz. */
+#tkpRoot .tkpDashboardLogEntry{display:grid!important;grid-template-columns:minmax(0,1fr)!important;row-gap:4px!important;min-width:0!important;align-items:start!important;padding:6px 0!important;border-bottom:1px solid #eef2f7!important;}
 #tkpRoot .tkpDashboardLogEntry:last-child{border-bottom:0!important;}
-#tkpRoot .tkpDashboardLogMeta{display:flex!important;align-items:center!important;gap:4px!important;min-width:0!important;white-space:nowrap!important;}
-#tkpRoot .tkpDashboardLogMeta .badge{font-size:10px!important;line-height:1.1!important;padding:3px 6px!important;}
-#tkpRoot .tkpDashboardLogMeta time{font-size:10.5px!important;line-height:1.1!important;}
-#tkpRoot .tkpDashboardLogMessage{min-width:0!important;font-size:12.5px!important;line-height:1.3!important;overflow-wrap:anywhere!important;}
+#tkpRoot .tkpDashboardLogMeta{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:start!important;gap:12px!important;min-width:0!important;white-space:normal!important;}
+#tkpRoot .tkpDashboardLogMeta .badge{min-width:0!important;max-width:100%!important;box-sizing:border-box!important;justify-self:start!important;white-space:normal!important;overflow-wrap:anywhere!important;font-size:10px!important;line-height:1.35!important;padding:3px 6px!important;}
+#tkpRoot .tkpDashboardLogMeta time{white-space:nowrap!important;text-align:right!important;justify-self:end!important;font-size:10.5px!important;line-height:1.35!important;}
+#tkpRoot .tkpDashboardLogMessage{min-width:0!important;white-space:normal!important;font-size:12.5px!important;line-height:1.35!important;overflow-wrap:anywhere!important;}
 @media(max-width:760px){
   #tkpRoot #coverage .coverageCompactWrap,#tkpRoot #coverage .coverageCompactTable,#tkpRoot #recentLog{width:100%!important;}
   #tkpRoot #coverage .coverageCompactTable th,#tkpRoot #coverage .coverageCompactTable td{font-size:10.5px!important;padding:3px 4px!important;}
-  #tkpRoot .tkpDashboardLogEntry{grid-template-columns:112px minmax(0,1fr)!important;column-gap:7px!important;}
   #tkpRoot .tkpDashboardLogMessage{font-size:11px!important;}
 }
 </style>
@@ -10771,7 +10856,7 @@ body::-webkit-scrollbar-button{
 #tkpRoot #predictionResult .proPredTable tbody tr{height:28px!important}
 #tkpRoot #predictionResult .proPredTable td.horseCell{text-align:left!important;white-space:nowrap!important;padding-left:4px!important;padding-right:4px!important}
 #tkpRoot #predictionResult .proPredTable .predictionHorseIdentity{display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:4px!important;width:100%!important;min-width:0!important}
-#tkpRoot #predictionResult .proPredTable .predictionHorseLead{display:inline-flex!important;align-items:center!important;justify-content:flex-start!important;gap:2px!important;flex:0 0 38px!important;width:38px!important;min-width:38px!important}
+#tkpRoot #predictionResult .proPredTable .predictionHorseLead{display:inline-flex!important;align-items:center!important;justify-content:flex-start!important;gap:2px!important;flex:0 0 34px!important;width:34px!important;min-width:34px!important}
 #tkpRoot #predictionResult .proPredTable .predictionHorseName{display:block!important;flex:1 1 auto!important;min-width:0!important;max-width:none!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;text-align:left!important;font-size:10px!important}
 #tkpRoot #predictionResult .proPredTable .predictionHorseNo{min-width:20px!important;width:20px!important;height:20px!important;line-height:18px!important;padding:0 4px!important}
 #tkpRoot #predictionResult .proPredTable td.ypuanCell{
@@ -10853,18 +10938,18 @@ body::-webkit-scrollbar-button{
 
 #tkpRoot #predictionResult .proPredTable table{table-layout:fixed!important;width:100%!important;min-width:0!important;border-collapse:collapse!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(1){width:3.2%!important}
-#tkpRoot #predictionResult .proPredTable col:nth-child(2){width:23.6%!important}
+#tkpRoot #predictionResult .proPredTable col:nth-child(2){width:18.0%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(3){width:3.2%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(4){width:2.8%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(5){width:3.5%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(6){width:4.7%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(7){width:4.5%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(8){width:4.4%!important}
-#tkpRoot #predictionResult .proPredTable col:nth-child(9){width:7.5%!important}
+#tkpRoot #predictionResult .proPredTable col:nth-child(9){width:6.3%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(10){width:4.3%!important}
 #tkpRoot #predictionResult .proPredTable col:nth-child(11){width:6.2%!important}
-#tkpRoot #predictionResult .proPredTable col:nth-child(12){width:5.2%!important}
-#tkpRoot #predictionResult .proPredTable col:nth-child(13){width:26.9%!important}
+#tkpRoot #predictionResult .proPredTable col:nth-child(12){width:4.2%!important}
+#tkpRoot #predictionResult .proPredTable col:nth-child(13){width:34.7%!important}
 #tkpRoot #predictionResult .proPredTable thead th{
   font-size:9.4px!important;line-height:1.02!important;padding:3px 2px!important;white-space:normal!important;word-break:keep-all!important;
   overflow:visible!important;text-overflow:unset!important;text-align:center!important;vertical-align:middle!important;height:29px!important;
@@ -11037,6 +11122,851 @@ html,body{width:100%!important;min-width:100%!important;margin:0!important;paddi
 #tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus.waiting{background:#f1f5f9!important;color:#475569!important;border:1px solid #cbd5e1!important;}
 </style>
 
+
+<style id="tkp-r19-20-live-coupon-neon-style">
+/* R19.20: Canlı kupon kartlarını X paylaşım görseline yakınlaştır */
+#tkpRoot #budgetCouponResult #couponTripleWrap{gap:14px!important;align-items:stretch!important}
+#tkpRoot #budgetCouponResult #couponCard-main>.budgetCouponCompact,
+#tkpRoot #budgetCouponResult #couponCard-surprise>.budgetCouponCompact,
+#tkpRoot #budgetCouponResult #couponCard-alt>.budgetCouponCompact{
+  border-radius:22px!important;
+  border:2px solid rgba(255,255,255,.15)!important;
+  overflow:hidden!important;
+  padding:0 0 10px!important;
+  background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(6,20,34,.94))!important;
+  box-shadow:0 12px 28px rgba(2,6,23,.22), inset 0 1px 0 rgba(255,255,255,.07)!important;
+}
+#tkpRoot #budgetCouponResult #couponCard-main>.budgetCouponCompact{
+  border-color:#24ddff!important;
+  box-shadow:0 0 0 1px rgba(36,221,255,.12),0 10px 24px rgba(36,221,255,.12)!important;
+}
+#tkpRoot #budgetCouponResult #couponCard-surprise>.budgetCouponCompact{
+  border-color:#ffc928!important;
+  box-shadow:0 0 0 1px rgba(255,201,40,.12),0 10px 24px rgba(255,201,40,.12)!important;
+}
+#tkpRoot #budgetCouponResult #couponCard-alt>.budgetCouponCompact{
+  border-color:#43ef79!important;
+  box-shadow:0 0 0 1px rgba(67,239,121,.12),0 10px 24px rgba(67,239,121,.12)!important;
+}
+#tkpRoot #budgetCouponResult #couponCard-main>.budgetCouponCompact h2,
+#tkpRoot #budgetCouponResult #couponCard-surprise>.budgetCouponCompact h2,
+#tkpRoot #budgetCouponResult #couponCard-alt>.budgetCouponCompact h2{
+  margin:0!important;
+  padding:13px 15px 12px!important;
+  font-size:18px!important;
+  line-height:1.05!important;
+  font-weight:950!important;
+  letter-spacing:-.01em!important;
+  color:#fff!important;
+  border-radius:18px 18px 0 0!important;
+}
+#tkpRoot #budgetCouponResult #couponCard-main>.budgetCouponCompact h2{background:linear-gradient(90deg,#04d9ff,#0c90d2 64%,rgba(12,144,210,.25) 100%)!important}
+#tkpRoot #budgetCouponResult #couponCard-surprise>.budgetCouponCompact h2{background:linear-gradient(90deg,#ffd11c,#ff9c08 64%,rgba(255,156,8,.25) 100%)!important;color:#241600!important}
+#tkpRoot #budgetCouponResult #couponCard-alt>.budgetCouponCompact h2{background:linear-gradient(90deg,#4bf46e,#02c866 64%,rgba(2,200,102,.25) 100%)!important;color:#06250e!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponTopBlock,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactFoot,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .v55ExpertEvidence{padding-left:12px!important;padding-right:12px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactMeta{font-size:10.5px!important;line-height:1.15!important;margin:5px 0 4px!important;color:#dbeafe!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .tkpAdaptiveBudgetNote,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .tkpDecisionLine{
+  margin:6px 12px 5px!important;
+  padding:6px 8px!important;
+  border-radius:12px!important;
+  border:1px solid rgba(255,255,255,.12)!important;
+  background:rgba(255,255,255,.08)!important;
+  color:#ecf7ff!important;
+  font-size:11px!important;
+  line-height:1.18!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact table{width:calc(100% - 24px)!important;margin:6px 12px 0!important;border-collapse:separate!important;border-spacing:0!important;overflow:hidden!important;border-radius:14px!important;background:rgba(255,255,255,.04)!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact thead th{
+  padding:9px 10px!important;
+  font-size:13px!important;
+  font-weight:950!important;
+  color:#f8fafc!important;
+  background:rgba(255,255,255,.10)!important;
+  border-bottom:1px solid rgba(255,255,255,.14)!important;
+}
+#tkpRoot #budgetCouponResult #couponCard-main .budgetCouponCompact thead th{background:linear-gradient(180deg,rgba(4,217,255,.28),rgba(255,255,255,.08))!important}
+#tkpRoot #budgetCouponResult #couponCard-surprise .budgetCouponCompact thead th{background:linear-gradient(180deg,rgba(255,209,28,.30),rgba(255,255,255,.08))!important;color:#fff7da!important}
+#tkpRoot #budgetCouponResult #couponCard-alt .budgetCouponCompact thead th{background:linear-gradient(180deg,rgba(75,244,110,.28),rgba(255,255,255,.08))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact tbody td{
+  padding:9px 10px!important;
+  font-size:13px!important;
+  line-height:1.2!important;
+  border-bottom:1px solid rgba(255,255,255,.10)!important;
+  background:transparent!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact tbody tr:nth-child(even)>td{background:rgba(255,255,255,.035)!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact tbody tr:hover>td{background:rgba(255,255,255,.075)!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact th:first-child,
+#tkpRoot #budgetCouponResult .budgetCouponCompact td:first-child{width:84px!important;font-weight:900!important;white-space:nowrap!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact th:last-child,
+#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child{width:60px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos{
+  font-size:14px!important;
+  line-height:1.28!important;
+  font-weight:900!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChip,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipPlain,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipEkuri,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipTek{
+  display:inline-flex!important;
+  align-items:center!important;
+  gap:4px!important;
+  min-height:30px!important;
+  border-radius:10px!important;
+  margin:2px 4px 2px 0!important;
+  padding:3px 9px!important;
+  border:1px solid rgba(14,25,48,.12)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 3px 7px rgba(2,6,23,.18)!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChip,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipPlain{
+  background:linear-gradient(180deg,#ffffff,#dbe8fb)!important;
+  color:#0b1930!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipEkuri{
+  background:linear-gradient(180deg,#f3cffd,#d89cff)!important;
+  color:#351347!important;
+  border-color:rgba(106,13,173,.12)!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipTek{
+  background:transparent!important;
+  border:none!important;
+  box-shadow:none!important;
+  padding:0!important;
+  min-height:0!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactHorseNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactWinnerNo{
+  font-size:17px!important;
+  line-height:1!important;
+  font-weight:950!important;
+  color:inherit!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTek{
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  height:30px!important;
+  padding:0 12px!important;
+  border-radius:10px!important;
+  background:linear-gradient(180deg,#ffe45a,#ffbf00)!important;
+  color:#281800!important;
+  font-size:13px!important;
+  font-weight:950!important;
+  border:1px solid rgba(255,191,0,.35)!important;
+  box-shadow:0 3px 7px rgba(2,6,23,.18)!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTekName{
+  display:inline-flex!important;
+  align-items:center!important;
+  min-height:30px!important;
+  max-width:180px!important;
+  padding:5px 10px!important;
+  border-radius:10px!important;
+  background:rgba(3,18,35,.86)!important;
+  border:1px solid rgba(65,247,255,.55)!important;
+  color:#eef7ff!important;
+  font-size:13px!important;
+  font-weight:900!important;
+  line-height:1.08!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  box-shadow:0 3px 7px rgba(2,6,23,.18)!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTeksizHint{
+  margin-top:6px!important;
+  padding:5px 7px!important;
+  border-radius:10px!important;
+  background:rgba(255,255,255,.07)!important;
+  border:1px solid rgba(255,255,255,.10)!important;
+  color:#dbeafe!important;
+  font-size:10px!important;
+  line-height:1.15!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus{font-size:8px!important;padding:2px 5px!important;min-width:0!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponStartNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponResultRank,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFirstFiveResult{font-size:8px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickRemove{color:#7b8794!important;font-size:11px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickRemove:hover{color:#ef4444!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactFoot{
+  margin:8px 0 0!important;
+  font-size:11px!important;
+  line-height:1.16!important;
+  color:#e5efff!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox{
+  margin:8px 12px 0!important;
+  padding:8px 10px!important;
+  border-radius:14px!important;
+  border:1px solid rgba(255,255,255,.14)!important;
+  background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(0,0,0,.16))!important;
+  font-size:11px!important;
+  line-height:1.18!important;
+  color:#edf4ff!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox b{font-size:12px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox .num,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox strong{color:#ffd643!important;font-weight:950!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .v55ExpertEvidence{margin-top:8px!important;font-size:10px!important;line-height:1.16!important;color:#d8e8ff!important}
+@media (max-width:1360px){
+  #tkpRoot #budgetCouponResult .budgetCouponCompact h2{font-size:16px!important}
+  #tkpRoot #budgetCouponResult .budgetCouponCompact .compactHorseNo,
+  #tkpRoot #budgetCouponResult .budgetCouponCompact .compactWinnerNo{font-size:15px!important}
+  #tkpRoot #budgetCouponResult .budgetCouponCompact .compactTekName{max-width:150px!important}
+}
+</style>
+
+<style id="tkp-r19-21-bmb-ypuan-flat-fix">
+/* R19.21: BMB atlarda YPUAN+X sütunu altında görünen koyu ara çizgileri kaldır */
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.ypuanCell,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.bmbSignalCell{
+  background:#fffaf0!important;
+  background-image:none!important;
+  box-shadow:none!important;
+  border-top-color:#ecd9a6!important;
+  border-bottom-color:#ecd9a6!important;
+}
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell *,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.ypuanCell *,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.bmbSignalCell *,
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell::before,
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell::after,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.ypuanCell::before,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.ypuanCell::after{
+  box-shadow:none!important;
+  background-image:none!important;
+}
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell .ypSignalSquares,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow) > td.ypuanCell .ypSignalSquares{
+  border:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+</style>
+
+<style id="tkp-r19-21-bmb-odb-winner-fix">
+/* R19.21: BMB YPUAN+X alt çizgi yumuşatma + ODB destek rozeti + daha koyu birincilik yeşili */
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow)>td.ypuanCell,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow)>td.bmbSignalCell,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow):hover>td.ypuanCell,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow):hover>td.bmbSignalCell{
+  background:#fff8ea!important;
+  background-image:none!important;
+  box-shadow:none!important;
+  border-top-color:#eddca4!important;
+  border-bottom-color:#eddca4!important;
+}
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell .ypSignalSquares,
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell .ypuanTwitterPair,
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell>b,
+#tkpRoot #predictionResult .proPredTable td.bmbSignalCell .xShadowPoints{
+  background:transparent!important;
+  box-shadow:none!important;
+}
+#tkpRoot #predictionResult .proPredTable tbody tr.actualWinnerRow>td,
+#tkpRoot #predictionResult .proPredTable tbody tr.actualWinnerRow>td[class],
+#tkpRoot #predictionResult .proPredTable tbody tr.actualWinnerRow:hover>td,
+#tkpRoot #predictionResult .proPredTable tbody tr.actualWinnerRow:hover>td[class],
+#tkpRoot #predictionResult .proPredTable tbody tr.actualWinnerRow.real-bmb-row>td,
+#tkpRoot #predictionResult .proPredTable tbody tr.actualWinnerRow.odb-row>td{
+  background:#bfe9ca!important;
+  background-image:none!important;
+  color:#124124!important;
+  border-color:#4bb96d!important;
+  box-shadow:none!important;
+}
+#tkpRoot .badge.result-rank-1,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponResultRank.result-rank-1{
+  background:#5fcd7d!important;
+  border-color:#15803d!important;
+  color:#10351d!important;
+}
+</style>
+
+<style id="tkp-r19-22-ekuri-deadheat-fix">
+/* R19.22: Sonuç hücresinde 3 + E1 aynı satırda; atbaşı sonuçlarda satır sırası korunarak 1..5 normalize edilir */
+#tkpRoot .compactHorseNoWrap,
+#tkpRoot .statusWinnerNo{
+  display:inline-flex!important;
+  align-items:center!important;
+  gap:3px!important;
+  flex-wrap:nowrap!important;
+  white-space:nowrap!important;
+  vertical-align:middle!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .statusWinnerNo{
+  margin-left:4px!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .statusWinnerNo .ekuriMiniBadge,
+#tkpRoot #predictionResult .statusWinnerNo .ekuriMiniBadge{
+  margin-left:0!important;
+  vertical-align:middle!important;
+  transform:none!important;
+}
+</style>
+
+<style id="tkp-r19-23-deadheat-winner-finance-ui">
+/* R19.23: iki resmî kazananı birlikte göster; tek atın E1 rozeti numaranın yanında kalır */
+#tkpRoot #budgetCouponResult .budgetCouponCompact .deadheatWinnerGroup{
+  display:flex!important;
+  flex-wrap:wrap!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:2px!important;
+  margin-top:2px!important;
+  width:100%!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .statusWinnerNo{
+  display:inline-flex!important;
+  flex-wrap:nowrap!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:2px!important;
+  white-space:nowrap!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .deadheatWinnerSep{
+  display:inline-block!important;
+  font-size:8px!important;
+  font-weight:900!important;
+  color:#64748b!important;
+  line-height:1!important;
+}
+</style>
+
+<style id="tkp-r19-24-status-winner-no-nowrap-fix">
+/* R19.24: Durum sütununda 14 gibi iki haneli kazanan numarası tek blok kalsın, 1 ve 4 diye kırılmasın */
+#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child{
+  white-space:normal!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .deadheatWinnerGroup{
+  display:inline-flex!important;
+  flex-wrap:wrap!important;
+  justify-content:center!important;
+  align-items:center!important;
+  gap:3px!important;
+  width:auto!important;
+  max-width:100%!important;
+  margin-top:2px!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .statusWinnerNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactHorseNoWrap{
+  display:inline-flex!important;
+  flex-wrap:nowrap!important;
+  align-items:center!important;
+  justify-content:center!important;
+  white-space:nowrap!important;
+  width:auto!important;
+  min-width:0!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .statusWinnerNo .compactWinnerNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .statusWinnerNo .compactHorseNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .deadheatWinnerGroup .compactWinnerNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .deadheatWinnerGroup .compactHorseNo{
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  white-space:nowrap!important;
+  width:auto!important;
+  min-width:22px!important;
+  padding:0 4px!important;
+  line-height:16px!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .statusWinnerNo .ekuriMiniBadge,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .deadheatWinnerGroup .ekuriMiniBadge{
+  flex:0 0 auto!important;
+  white-space:nowrap!important;
+}
+</style>
+
+<style id="tkp-r19-25-coupon-leg-grid-fix">
+/* R19.25: Ayak tablolarında 3 at ve 6-7 at seçimlerinde hiçbir at kaybolmasın */
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"]{
+  display:grid!important;
+  align-items:center!important;
+  justify-items:stretch!important;
+  gap:2px!important;
+  width:100%!important;
+  min-width:0!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-1{grid-template-columns:repeat(1,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-2{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-3{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-4{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-5{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-6{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-7{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-8{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-9,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-10,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-11,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-12{grid-template-columns:repeat(5,minmax(0,1fr))!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-tek{
+  display:flex!important;
+  flex-wrap:nowrap!important;
+  align-items:center!important;
+  gap:4px!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .couponPickChip:not(.couponPickChipTek),
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .couponPickChipPlain,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .couponPickChipEkuri{
+  display:inline-flex!important;
+  flex:none!important;
+  width:100%!important;
+  max-width:none!important;
+  min-width:0!important;
+  min-height:20px!important;
+  justify-content:center!important;
+  align-items:center!important;
+  margin:0!important;
+  padding:1px 2px!important;
+  box-sizing:border-box!important;
+  overflow:visible!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .compactHorseNo,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .compactWinnerNo{
+  width:auto!important;
+  min-width:18px!important;
+  padding:0 2px!important;
+  white-space:nowrap!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .couponSep{display:none!important}
+</style>
+
+<style id="tkp-r19-26-five-picks-per-row">
+/* R19.26: Kupon ayaklarında kullanıcı kuralı: bir satıra en fazla 5 at. 6-10 seçim ikinci satıra devam eder. */
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"]{
+  display:grid!important;
+  grid-template-columns:repeat(5,minmax(0,1fr))!important;
+  gap:2px!important;
+  width:100%!important;
+  min-width:0!important;
+  align-items:center!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-1,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-2,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-3,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-4,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-5,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-6,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-7,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-8,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-9,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-10,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-11,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-count-12{
+  grid-template-columns:repeat(5,minmax(0,1fr))!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos.compactNos-tek{
+  display:flex!important;
+  flex-wrap:nowrap!important;
+  align-items:center!important;
+  gap:4px!important;
+}
+</style>
+
+<style id="tkp-r19-27-commentator-eski-n-nowrap">
+/* R19.27: Yorumcu tablosunda "Eski n" başlığı ve hücreleri tek satır */
+#tkpRoot .tkpCommentatorTable th:nth-child(3),
+#tkpRoot .tkpCommentatorTable td:nth-child(3){
+  white-space:nowrap!important;
+  overflow-wrap:normal!important;
+  word-break:keep-all!important;
+  min-width:58px!important;
+  text-align:center!important;
+}
+#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorTable th:nth-child(3),
+#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorTable td:nth-child(3),
+#tkpRoot #operationsCommentatorPerformance .tkpCommentatorTable th:nth-child(3),
+#tkpRoot #operationsCommentatorPerformance .tkpCommentatorTable td:nth-child(3),
+#tkpRoot #pane-learning .tkpCommentatorTable th:nth-child(3),
+#tkpRoot #pane-learning .tkpCommentatorTable td:nth-child(3){
+  width:64px!important;
+  white-space:nowrap!important;
+  overflow-wrap:normal!important;
+  word-break:keep-all!important;
+  text-align:center!important;
+}
+</style>
+
+<style id="tkp-r19-31-bh-winner-green-badge">
+/* R19.31: Resmî kazanan BH/ODB adayının kategori ikonu yeşil görünür */
+#tkpRoot .bombHunterPick .bombHunterKind.bhWinnerKind{
+  background:#22c55e!important;
+  border-color:#15803d!important;
+  color:#062f13!important;
+  box-shadow:0 0 0 1px rgba(21,128,61,.18),0 2px 7px rgba(34,197,94,.22)!important;
+}
+#tkpRoot .bombHunterPick.bhWinnerPick{
+  border-color:#86efac!important;
+}
+</style>
+
+<style id="tkp-r19-32-bh-xshare-number-style">
+/* R19.32: Bomba Avcısı numara rozetleri X paylaşım görselindeki parlak chip stiline yakınlaştırıldı */
+#tkpRoot #predictionResult .bombHunterPick{
+  gap:8px!important;
+}
+#tkpRoot #predictionResult .bombHunterPick .bombHunterNo{
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  min-width:34px!important;
+  width:auto!important;
+  height:30px!important;
+  padding:0 8px!important;
+  margin-right:7px!important;
+  border-radius:10px!important;
+  background:linear-gradient(180deg,#ffffff 0%,#e7eef8 100%)!important;
+  color:#0b1930!important;
+  border:1px solid #c9d5e6!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 2px 6px rgba(15,23,42,.18)!important;
+  font-size:17px!important;
+  line-height:1!important;
+  font-weight:950!important;
+  letter-spacing:-.01em!important;
+  white-space:nowrap!important;
+  vertical-align:middle!important;
+}
+#tkpRoot #predictionResult .bombHunterPick .bombHunterKind{
+  min-width:44px!important;
+  height:26px!important;
+  padding:0 8px!important;
+  margin-right:6px!important;
+  border-radius:999px!important;
+  background:#0f172a!important;
+  color:#ffffff!important;
+  border:1px solid #334155!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 2px 5px rgba(15,23,42,.14)!important;
+  font-size:11px!important;
+  line-height:1!important;
+  font-weight:950!important;
+}
+#tkpRoot #predictionResult .bombHunterOdbPick .bombHunterKind{
+  background:#0f766e!important;
+  color:#ffffff!important;
+  border-color:#115e59!important;
+}
+#tkpRoot #predictionResult .bombHunterPick .bombHunterScore{
+  display:inline-flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  min-height:24px!important;
+  padding:2px 7px!important;
+  margin-left:7px!important;
+  border-radius:8px!important;
+  background:linear-gradient(180deg,#fff7d6,#ffedaa)!important;
+  color:#8a4b00!important;
+  border:1px solid #e5c55c!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.75)!important;
+  font-size:10px!important;
+  line-height:1!important;
+  font-weight:950!important;
+  white-space:nowrap!important;
+}
+/* Resmî kazanan: X paylaşım görünümündeki güçlü yeşil vurguyla numara da yeşile döner. */
+#tkpRoot #predictionResult .bombHunterPick.bhWinnerPick .bombHunterNo{
+  background:linear-gradient(180deg,#dcfce7 0%,#86efac 100%)!important;
+  color:#10351d!important;
+  border-color:#22c55e!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 7px rgba(34,197,94,.2)!important;
+}
+#tkpRoot #predictionResult .bombHunterPick .bombHunterKind.bhWinnerKind{
+  background:#22c55e!important;
+  color:#062f13!important;
+  border-color:#15803d!important;
+}
+</style>
+
+<style id="tkp-r19-35-white-coupon-black-x-uniform-bmb">
+/* R19.35 authoritative final visual lock */
+#tkpRoot #budgetCouponResult #couponCard-main>.budgetCouponCompact,
+#tkpRoot #budgetCouponResult #couponCard-surprise>.budgetCouponCompact,
+#tkpRoot #budgetCouponResult #couponCard-alt>.budgetCouponCompact{
+  background:#fff!important;background-image:none!important;color:#172033!important;
+  border-color:#d7dee8!important;box-shadow:0 2px 8px rgba(15,23,42,.08)!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact h2,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactMeta,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactFoot,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .tkpDecisionLine,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .tkpAdaptiveBudgetNote,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .v55ExpertEvidence{color:#263244!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact table{background:#fff!important;margin:4px 7px 0!important;width:calc(100% - 14px)!important;border-radius:9px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact thead th{background:#eef3f8!important;color:#253247!important;padding:5px 4px!important;font-size:10px!important}
+#tkpRoot #budgetCouponResult #couponCard-main .budgetCouponCompact thead th,
+#tkpRoot #budgetCouponResult #couponCard-surprise .budgetCouponCompact thead th,
+#tkpRoot #budgetCouponResult #couponCard-alt .budgetCouponCompact thead th{background:#eef3f8!important;color:#253247!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact tbody td{background:#fff!important;color:#172033!important;padding:4px!important;font-size:10px!important;line-height:1.08!important;border-bottom:1px solid #d8e0e9!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact tbody tr:nth-child(even)>td,
+#tkpRoot #budgetCouponResult .budgetCouponCompact tbody tr:hover>td{background:#fff!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact th:first-child,#tkpRoot #budgetCouponResult .budgetCouponCompact td:first-child{width:62px!important;font-size:9px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact th:last-child,#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child{width:58px!important;white-space:nowrap!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"]{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:2px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChip:not(.couponPickChipTek),
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipPlain,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipEkuri{min-height:18px!important;padding:0 2px!important;margin:0!important;border-radius:8px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactHorseNo,#tkpRoot #budgetCouponResult .budgetCouponCompact .compactWinnerNo{font-size:12px!important;min-width:15px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus{font-size:7px!important;line-height:1!important;padding:2px 3px!important;letter-spacing:-.15px!important;white-space:nowrap!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTek{height:22px!important;padding:0 6px!important;font-size:9px!important;border-radius:7px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTekName{min-height:22px!important;max-width:105px!important;padding:2px 5px!important;font-size:9px!important;line-height:1!important;border-radius:7px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTekDot{font-size:8px!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox{margin:5px 7px 0!important;padding:5px 7px!important;border-radius:9px!important;background:#f5f7fa!important;color:#263244!important;border-color:#d8e0e9!important;font-size:9px!important;line-height:1.08!important}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox b{font-size:10px!important}
+#tkpRoot #shareCouponShot{background:#000!important;background-image:none!important;color:#fff!important;border:2px solid #000!important;font-weight:950!important;box-shadow:0 0 0 2px #fff,0 4px 12px rgba(0,0,0,.34)!important}
+/* BMB: bütün hücreler tek sarı ton; ara açık/koyu yama yok */
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow)>td,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow)>td[class],
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow):hover>td,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow):hover>td[class]{background:#ffe7a3!important;background-image:none!important;box-shadow:none!important;border-top-color:#d6b23f!important;border-bottom-color:#d6b23f!important}
+</style>
+
+<style id="tkp-r19-36-coupon-result-color-lock">
+/* R19.36 authoritative coupon result colors: old green/red semantics restored after white-card lock. */
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus.hit{
+  background:#dcfce7!important;color:#15803d!important;border:1px solid #4ade80!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus.miss{
+  background:#fee2e2!important;color:#dc2626!important;border:1px solid #fca5a5!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponLegStatus.waiting{
+  background:#f1f5f9!important;color:#475569!important;border:1px solid #cbd5e1!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.hit{
+  background:#f0fdf4!important;color:#15803d!important;border-color:#86efac!important;border-left:5px solid #16a34a!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.hit b,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.hit strong,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.hit .num{
+  color:#15803d!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.miss{
+  background:#fef2f2!important;color:#dc2626!important;border-color:#fecaca!important;border-left:5px solid #dc2626!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.miss b,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.miss strong,
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.miss .num{
+  color:#dc2626!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.waiting{
+  background:#f8fafc!important;color:#475569!important;border-color:#cbd5e1!important;border-left:5px solid #64748b!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.missing{
+  background:#fffbeb!important;color:#92400e!important;border-color:#fde68a!important;border-left:5px solid #d97706!important;
+}
+#tkpRoot #budgetCouponResult .budgetCouponCompact .couponFinanceBox.rollover{
+  background:#f5f3ff!important;color:#6d28d9!important;border-color:#ddd6fe!important;border-left:5px solid #7c3aed!important;
+}
+</style>
+
+<style id="tkp-r19-37-x-share-vivid-lock">
+/* R19.37: black X-share button restored with vivid neon contrast. */
+#tkpRoot #shareCouponShot{
+  background:#000!important;
+  background-image:none!important;
+  color:#fff!important;
+  border:2px solid #000!important;
+  border-radius:10px!important;
+  font-weight:950!important;
+  letter-spacing:.15px!important;
+  box-shadow:0 0 0 2px #111827,0 0 0 4px #22d3ee,0 0 18px rgba(34,211,238,.78),0 6px 16px rgba(0,0,0,.38)!important;
+  text-shadow:0 0 7px rgba(255,255,255,.9),0 0 12px rgba(34,211,238,.85)!important;
+  transition:transform .14s ease,box-shadow .14s ease,filter .14s ease!important;
+}
+#tkpRoot #shareCouponShot:hover{
+  transform:translateY(-1px) scale(1.015)!important;
+  filter:brightness(1.12)!important;
+  box-shadow:0 0 0 2px #111827,0 0 0 4px #67e8f9,0 0 26px rgba(34,211,238,.95),0 8px 20px rgba(0,0,0,.42)!important;
+}
+#tkpRoot #shareCouponShot:active{
+  transform:translateY(0) scale(.995)!important;
+}
+</style>
+
+<style id="r1941-vivid-analysis-tables">
+/* R19.41 — tüm analiz/istatistik tabloları için canlı ama sade ortak tema.
+   İstenen kısıt: yeşil/turkuaz/BMB-sarısı analiz paletinde kullanılmaz. */
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable),
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable),
+#tkpRoot .adaptiveLearningWrap table,
+#tkpRoot .winnerRankTable table{
+  width:100%; border-collapse:separate!important; border-spacing:0!important;
+  background:#fff!important; color:#14213d!important;
+  border:1px solid #d9e2ef!important; border-radius:9px!important;
+  overflow:hidden!important; box-shadow:0 3px 11px rgba(23,58,99,.08)!important;
+}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) thead th,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) thead th,
+#tkpRoot .adaptiveLearningWrap table thead th,
+#tkpRoot .winnerRankTable table thead th{
+  background:linear-gradient(90deg,#173a63 0%,#2457a6 55%,#6d3fc0 100%)!important;
+  color:#fff!important; font-weight:900!important; text-shadow:0 1px 1px rgba(0,0,0,.18)!important;
+  border-right:1px solid rgba(255,255,255,.18)!important; border-bottom:0!important;
+  padding-top:6px!important; padding-bottom:6px!important;
+}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(odd)>td,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(odd)>td,
+#tkpRoot .adaptiveLearningWrap table tbody tr:nth-child(odd)>td,
+#tkpRoot .winnerRankTable table tbody tr:nth-child(odd)>td{background:#fbfdff!important;}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(even)>td,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(even)>td,
+#tkpRoot .adaptiveLearningWrap table tbody tr:nth-child(even)>td,
+#tkpRoot .winnerRankTable table tbody tr:nth-child(even)>td{background:#f5f3ff!important;}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody td,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody td,
+#tkpRoot .adaptiveLearningWrap table tbody td,
+#tkpRoot .winnerRankTable table tbody td{
+  border-right:1px solid #e1e8f2!important; border-bottom:1px solid #e1e8f2!important;
+  color:#17233b!important;
+}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody tr:hover>td,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody tr:hover>td,
+#tkpRoot .adaptiveLearningWrap table tbody tr:hover>td,
+#tkpRoot .winnerRankTable table tbody tr:hover>td{
+  background:#fff0f6!important; box-shadow:inset 0 1px 0 #f5c2dd,inset 0 -1px 0 #f5c2dd!important;
+}
+/* Sayısal vurgu: mavi/mor/fuşya/turuncu; mevcut veri anlamını değiştirmez. */
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody td:nth-child(3n+1) b,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody td:nth-child(3n+1) b{color:#1d4ed8!important;}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody td:nth-child(3n+2) b,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody td:nth-child(3n+2) b{color:#7e22ce!important;}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody td:nth-child(3n) b,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody td:nth-child(3n) b{color:#c026d3!important;}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody tr>td:first-child,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody tr>td:first-child{
+  border-left:3px solid #f97316!important; font-weight:800!important;
+}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(3n+2)>td:first-child,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(3n+2)>td:first-child{border-left-color:#2563eb!important;}
+#tkpRoot .card table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(3n)>td:first-child,
+#tkpRoot .tableWrap table:not(.couponMiniTable):not(.proPredTable) tbody tr:nth-child(3n)>td:first-child{border-left-color:#9333ea!important;}
+/* Tablo başlık kartları da aynı görsel dili kullansın; kompakt ölçüler korunur. */
+#tkpRoot .card h3 + div[id$="Table"],#tkpRoot .card h3 + .winnerRankTable{margin-top:5px!important;}
+#tkpRoot .learningBadge{background:#eef2ff!important;color:#4338ca!important;border:1px solid #c7d2fe!important;}
+</style>
+<script id="r1941-empty-analysis-card-guard">
+(()=>{
+ 'use strict';
+ function tkpDataSettled(){
+   try{return typeof db!=='undefined'&&db&&Array.isArray(db.races)&&(db.races.length>0||Array.isArray(db.files));}catch(_){return false;}
+ }
+ function meaningfulRows(card){
+   const tables=[...card.querySelectorAll('table')];
+   if(tables.length)return tables.some(t=>t.querySelectorAll('tbody tr').length>0);
+   const hosts=[...card.querySelectorAll('div[id$="Table"],div[id$="TableEl"],.winnerRankTable')];
+   if(!hosts.length)return true;
+   return hosts.some(h=>h.querySelector('table tbody tr')||String(h.textContent||'').trim().replace(/[—\-\s]/g,'').length>8);
+ }
+ function hasUserAction(card){return !!card.querySelector('button,select,input,textarea,a[href]');}
+ // FIX (R19.41 regresyonu — menü geçişinde "darboğaz/kasma/bekle"):
+ // önceki sürüm her DOM mutasyonunda (subtree+characterData, TÜM document
+ // kökünden) TÜM panellerdeki (aktif olsun olmasın) TÜM kartları/tabloları
+ // tarıyordu. Analiz/Kural/Back Test gibi panellerde binlerce satır
+ // olabildiğinden bu tarama ana thread'i bloke edip her sekme değişiminde
+ // (render kendi DOM'unu güncellediği için mutasyon tetiklenir) sayfayı
+ // donduruyor, "yanıt vermiyor" hissi veriyordu. Artık: (1) yalnız o an
+ // GÖRÜNEN aktif panel taranır, (2) characterData izlenmez (bu koddaki tüm
+ // render yolları innerHTML/textContent ile yazıyor, bu da zaten childList
+ // mutasyonu üretir; characterData izleme tüm metin düğümlerini
+ // enstrümante ettiği için asıl maliyetin büyük kısmıydı), (3) tarama
+ // requestIdleCallback ile ana thread boşalana kadar ertelenir.
+ function reconcile(){
+   if(!tkpDataSettled())return;
+   const activePane=document.querySelector('#tkpRoot .pane.active');
+   if(!activePane)return;
+   activePane.querySelectorAll('.card').forEach(card=>{
+     const hasAnalysisHost=!!card.querySelector('table,div[id$="Table"],div[id$="TableEl"],.winnerRankTable');
+     if(!hasAnalysisHost||hasUserAction(card)){
+       if(card.getAttribute('data-tkp-empty-hidden')==='1'){card.hidden=false;card.removeAttribute('data-tkp-empty-hidden');}
+       return;
+     }
+     const empty=!meaningfulRows(card);
+     if(empty){card.hidden=true;card.setAttribute('data-tkp-empty-hidden','1');}
+     else if(card.getAttribute('data-tkp-empty-hidden')==='1'){card.hidden=false;card.removeAttribute('data-tkp-empty-hidden');}
+   });
+ }
+ const runIdle=typeof requestIdleCallback==='function'
+   ? (fn)=>requestIdleCallback(fn,{timeout:800})
+   : (fn)=>setTimeout(fn,0);
+ let timer=0; const schedule=()=>{clearTimeout(timer);timer=setTimeout(()=>runIdle(reconcile),450);};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{setTimeout(reconcile,3500);});
+ else setTimeout(reconcile,3500);
+ const guardRoot=document.getElementById('tkpRoot')||document.documentElement;
+ new MutationObserver(schedule).observe(guardRoot,{subtree:true,childList:true});
+ window.addEventListener('tkp:data-updated',schedule);
+ window.addEventListener('tkp:results-updated',schedule);
+ // Menü/sekme değişimi: cache isabetinde render kendi DOM'unu değiştirmez
+ // (yalnız .active class'ı taşınır), bu childList mutasyonu ÜRETMEZ. Yeni
+ // aktif panel de değerlendirilsin ki önceden gizlenmiş kartlar tutarlı kalsın.
+ document.addEventListener('click',e=>{ if(e.target&&e.target.closest&&e.target.closest('.tab')) schedule(); },true);
+})();
+</script>
+<style id="r1944-bmb-readability-fix">
+/* R19.44 DÜZELTME (Tommy talebi -- "hala bmb satır rengi çok koyu punto neden
+   açılmıyor bu renk"): Dosyada BMB/ODB rengi için ~15 ayrı !important kural
+   üst üste birikmiş (satır 404, 413, 8030, 8075, 8216, 8288, 10799, 10880,
+   10907, 10997 vb.) -- her "rengi açalım" isteğinde bir yenisi eklenmiş ama
+   eskisi silinmediği için hangisinin kazandığı artık belirsizdi. Asıl kırık
+   nokta bu liste DEĞİL: "Y.PU+X sütununun boyalı iç yaması yok" kuralı
+   (yukarıda, tkpuanCell .ypSignalSquare.bmbSq için background:transparent +
+   color:inherit + font-size:7.5px) dosyadaki EN SON kural olduğu için tüm o
+   özenle açılmış pastel altın/kahve renklerini eziyor: metin satırın normal
+   KOYU rengini (inherit) alıyor ve 7.5px -- dosyadaki en küçük punto -- ile
+   yazılıyor. "Çok koyu, punto küçük" şikayeti tam olarak budur. Aşağıdaki
+   kural (aynı seçici, dosyanın en sonunda) rengi kasıtlı soluk altın tonuna
+   geri döndürür ve punto'yu 7.5px -> 10px, rozet punto'sunu 8.9px -> 11px
+   çıkarır. Boyalı arka plan yamasını GERİ GETİRMEZ (o tasarım kararı
+   korunuyor); yalnız metin okunaklı ve doğru renkte olsun diye düzeltiyor. */
+#tkpRoot #predictionResult .proPredTable td.ypuanCell .ypSignalSquare.bmbSq{
+  color:#8a6a2f!important; font-size:10px!important; font-weight:800!important;
+}
+#tkpRoot #predictionResult .proPredTable .badge.real-bmb,
+#tkpRoot .badge.real-bmb{
+  font-size:11px!important; line-height:1.25!important; padding:2px 7px!important;
+}
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row>td,
+#tkpRoot #predictionResult .proPredTable tbody tr.real-bmb-row:not(.actualWinnerRow)>td{
+  background:#fdfbf6!important;
+}
+</style>
+<script src="tkp-archive-analytics.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-archive-portfolio.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-archive-analytics-ui.js?v=1.1.333-r19.45.5"></script>
+<script src="tkp-table-presentation.js?v=1.1.333-r19.47.8-x-race-refresh"></script>
+<script src="tkp-coupon-share.js?v=1.1.333-r19.45.5"></script>
+<link rel="stylesheet" href="tkp-plain-tables.css?v=tommy-20261019-atr-synth-1">
+<style id="tkpGroupColors">
+/* V1.1.337: AGF / TR PU. yalnız RAKAM rengi (hücre arka planı değişmez); bantlar sistemdeki kayıtlı eşiklerdir */
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="agf0"] b{color:#dc2626!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="agf1"] b{color:#ea580c!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="agf2"] b{color:#7c3aed!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="agf3"] b{color:#2563eb!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="agf4"] b{color:#db2777!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="tr0"] b{color:#dc2626!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="tr1"] b{color:#ea580c!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="tr2"] b{color:#7c3aed!important;font-weight:900!important}
+#tkpRoot#tkpRoot #predictionResult .proPredTable tbody tr>td[data-grp="tr3"] b{color:#2563eb!important;font-weight:900!important}
+</style>
+<script id="tkp-coupon-label-font-size">
+/* Browser minimum fonts may enlarge 10px to 12px. Compensate locally,
+   without changing browser preferences, selections, or result text. */
+(function(){
+ const root=document.getElementById('tkpRoot');if(!root)return;
+ const probe=document.createElement('span');
+ probe.style.cssText='position:fixed;left:-20000px;font:10px Arial!important;visibility:hidden;pointer-events:none';
+ probe.textContent='TUTMADI';document.body.appendChild(probe);
+ const actual=parseFloat(getComputedStyle(probe).fontSize)||10;probe.remove();
+ root.style.setProperty('--tkp-coupon-label-scale',String(Math.min(1,10/actual)));
+})();
+</script>
 </body>
 
 </html>

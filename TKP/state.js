@@ -29,7 +29,7 @@ let _learningEligibleRacesCache = {db:null,races:null,files:null,raceCount:-1,fi
 const _learningEligibleRacesBacktestCache = new Map();
 function invalidateLearningEligibleRacesCache(){ _learningEligibleRacesCache={db:null,races:null,files:null,raceCount:-1,fileCount:-1,revision:-1,value:null}; }
 
-function tkpClearHorseHistoryBestCache(){if(globalThis.__tkpHorseHistoryBestCache)globalThis.__tkpHorseHistoryBestCache.clear();globalThis.__tkpSimilarFieldHistoryIndex=null;}
+function tkpClearHorseHistoryBestCache(){globalThis.TKPDegreeHistory?.invalidate();if(globalThis.__tkpHorseHistoryBestCache)globalThis.__tkpHorseHistoryBestCache.clear();globalThis.__tkpSimilarFieldHistoryIndex=null;}
 function invalidateConditionStatsCache(){ _statsByConditionCache.clear(); _matchedResultRankStatsCache.clear(); _bmbWinRateByConditionCache = null; tkpClearHorseHistoryBestCache(); if(globalThis.__tkpSimilarFieldPoolCache) globalThis.__tkpSimilarFieldPoolCache.clear(); if(globalThis.__tkpSimilarFieldSpeedsCache) globalThis.__tkpSimilarFieldSpeedsCache.clear(); }
 
 let _winnerProfileCache = new Map();
@@ -54,7 +54,7 @@ const TKP_CHRONOLOGY_SORT_POLICY = 'DATE_ASC_SEQUENCE_RENUMBERED_RAW_RACE_NO_ASC
 // Haricî geri yükleme/legacy yolunda bu güven varsayımı kullanılmaz.
 const TKP_STARTUP_HYGIENE_MARKER_VERSION = 2;
 
-const SEED = { schema_version:DB_SCHEMA_VERSION, files:[], races:[], bets:[], changelog:[], prediction_log:[], auto_coupon_log:[], forward_tracking_log:[], weekly_model_log:[], v55_diagnostic_log:[], sidebet_ticket_log:[], commentator_evidence_log:[], surprise_cohort_tracking_log:[], bomb_hunter_shadow_log:[], settings:{best_min_single:5, perfect_min_single:12, perfect_min_rate:0.75, perfect_min_lb:0.5, max_rule_size:2, max_history_analysis_races:0, strict_no_result_leakage_from:'2026-08-23'} };
+const SEED = { schema_version:DB_SCHEMA_VERSION, files:[], races:[], bets:[], changelog:[], prediction_log:[], auto_coupon_log:[], forward_tracking_log:[], weekly_model_log:[], v55_diagnostic_log:[], sidebet_ticket_log:[], commentator_evidence_log:[], surprise_cohort_tracking_log:[], bomb_hunter_shadow_log:[], surprise_condition_shadow_log:[], deep_surprise_tracking_log:[], settings:{best_min_single:5, perfect_min_single:12, perfect_min_rate:0.75, perfect_min_lb:0.5, max_rule_size:2, max_history_analysis_races:0, strict_no_result_leakage_from:'2026-08-23'} };
 
 
 // V1.1.307 — USER SETTINGS REGRESSION LOCK
@@ -69,7 +69,7 @@ const TKP_PROTECTED_USER_SETTING_KEYS = Object.freeze(['best_min_single','perfec
 // Hesaplama sırasında üretilen/runtime alanları kullanıcı ayarından ayrıdır. Bunlar
 // guard tarafından geri yazılmaz; aksi halde yeni veri geldikçe öğrenme sonuçları
 // eski snapshot'a zorla dönerdi.
-const TKP_RUNTIME_SETTING_KEYS = new Set(['strict_no_result_leakage_from','strict_no_result_leakage_from_iso','tkp_score_model_version','x_kulis_last','historical_no_data','historical_layer_complete','historical_training_quality_gate','historical_calibration','historical_learning_modules','similar_reference_pools','weekly_model_tracker','tr_profile_backfill_version','tr_profile_backfill_last','historical_snapshot_backfill_version','historical_snapshot_backfill_stats','verified_bet_optimizer','walkforward_500','bh_historical_500_profile','backtest_snapshot_revision','backtest_snapshot_updated_at']);
+const TKP_RUNTIME_SETTING_KEYS = new Set(['strict_no_result_leakage_from','strict_no_result_leakage_from_iso','tkp_score_model_version','x_kulis_last','historical_no_data','historical_layer_complete','historical_training_quality_gate','historical_calibration','historical_learning_modules','similar_reference_pools','weekly_model_tracker','tr_profile_backfill_version','tr_profile_backfill_last','historical_snapshot_backfill_version','historical_snapshot_backfill_stats','verified_bet_optimizer','coupon_budget_optimizer','agf_order_policy','auto_selftest','ypuan_scale_backfill_last','walkforward_500','bh_historical_500_profile','backtest_snapshot_revision','backtest_snapshot_updated_at']);
 const TKP_LEGACY_PROTECTED_USER_SETTING_KEYS = Object.freeze(['best_min_single','perfect_min_single','perfect_min_rate','max_rule_size']);
 function tkpStableValue(value){if(Array.isArray(value))return '['+value.map(tkpStableValue).join(',')+']';if(value&&typeof value==='object'){return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+tkpStableValue(value[k])).join(',')+'}';}const out=JSON.stringify(value);return out===undefined?'undefined':out;}
 function tkpStableSettingsString(obj){const src=obj&&typeof obj==='object'?obj:{};return Object.keys(src).sort().map(k=>`${JSON.stringify(k)}:${tkpStableValue(src[k])}`).join('|');}
@@ -184,7 +184,7 @@ function tkpPersistFinalRuleCacheSoon(){
     const started=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
     try{
       const generation=String(db?.__segmented_storage?.baseGeneration||persistenceStatus().generation||'');
-      await api.updateMetaPatch({learning_state:{rule_cache:db.learning_state.rule_cache}},{expectedGeneration:generation,timeoutMs:30000});
+      await api.updateMetaPatch({learning_state:{rule_cache:db.learning_state.rule_cache}},{expectedGeneration:generation,timeoutMs:30000,returnManifest:false});
       if(typeof tkpRecordPerformance==='function')tkpRecordPerformance('rules:persist-final-cache',started);
       return true;
     }catch(error){
@@ -286,7 +286,7 @@ const _CORE_PERSIST_KEYS = new Set([
 ]);
 const IDB_OPEN_TIMEOUT_MS = 10000;
 const IDB_READ_TIMEOUT_MS = 30000;
-const IDB_WRITE_TIMEOUT_MS = 120000;
+const IDB_WRITE_TIMEOUT_MS = 50000;
 let _idbPromise = null;
 function _withTimeout(promise, ms){
   return new Promise((resolve) => {
@@ -546,11 +546,13 @@ function tkpFastDbSignature(sourceDb=db){
     Array.isArray(d.auto_coupon_log)?d.auto_coupon_log.length:0,
     Array.isArray(d.forward_tracking_log)?d.forward_tracking_log.length:0,
     Array.isArray(d.weekly_model_log)?d.weekly_model_log.length:0,
+    Array.isArray(d.deep_surprise_tracking_log)?d.deep_surprise_tracking_log.length:0,
     Array.isArray(d.v55_diagnostic_log)?d.v55_diagnostic_log.length:0,
     Array.isArray(d.sidebet_ticket_log)?d.sidebet_ticket_log.length:0,
     Array.isArray(d.commentator_evidence_log)?d.commentator_evidence_log.length:0,
     Array.isArray(d.surprise_cohort_tracking_log)?d.surprise_cohort_tracking_log.length:0,
     Array.isArray(d.bomb_hunter_shadow_log)?d.bomb_hunter_shadow_log.length:0,
+    Array.isArray(d.surprise_condition_shadow_log)?d.surprise_condition_shadow_log.length:0,
     Array.isArray(d.changelog)?d.changelog.length:0
   ].join('|');
 }
@@ -559,23 +561,54 @@ function tkpFastDbSignature(sourceDb=db){
 // Avcısı ve takip kayıtlarına da dayanır. Bu yardımcı imza bu koleksiyonlarda
 // yerinde güncellenen bir satırı da yakalar; aynı imzada tekrar hesap yoktur.
 let _tkpAuxiliaryAnalysisSignatureCache={revision:-1,source:null,refs:null,value:''};
-function tkpAuxiliaryAnalysisSignature(sourceDb=db){
-  const keys=['bets','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log',
+const _tkpScopedAuxiliarySignatureCaches=new Map();
+function tkpAuxiliaryAnalysisSignature(sourceDb=db,selectedKeys=null){
+  const keys=selectedKeys||['bets','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log',
     'sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log',
-    'bomb_hunter_shadow_log','changelog'];
+    'bomb_hunter_shadow_log','surprise_condition_shadow_log','deep_surprise_tracking_log','changelog'];
+  const scope=keys.join('|');
+  const cached=selectedKeys?(_tkpScopedAuxiliarySignatureCaches.get(scope)||{}):_tkpAuxiliaryAnalysisSignatureCache;
   const refs=keys.map(key=>sourceDb?.[key]);
-  if(sourceDb===db&&_tkpAuxiliaryAnalysisSignatureCache.source===sourceDb
-    &&_tkpAuxiliaryAnalysisSignatureCache.revision===_tkpDbRevision
-    &&_tkpAuxiliaryAnalysisSignatureCache.refs?.every((rows,index)=>rows===refs[index])
-    &&_tkpAuxiliaryAnalysisSignatureCache.value)return _tkpAuxiliaryAnalysisSignatureCache.value;
+  if(sourceDb===db&&cached.source===sourceDb&&cached.revision===_tkpDbRevision
+    &&cached.refs?.length===refs.length&&cached.refs.every((rows,index)=>rows===refs[index])
+    &&cached.value)return cached.value;
   let hash=2166136261>>>0;
   const mix=value=>{const s=String(value??'');for(let i=0;i<s.length;i++){hash^=s.charCodeAt(i);hash=Math.imul(hash,16777619)>>>0;}};
+  // Büyük koleksiyonların (ör. 25 MB auto_coupon_log, 20 MB forward_tracking_log) her
+  // kayıtta tam JSON.stringify + karakter karakter hash'lenmesi ana iş parçacığını
+  // 1+ sn kilitliyordu. Küçük koleksiyon ve son satırlar eskisi gibi birebir hash'lenir
+  // (yerinde güncellemeler esas olarak sondaki satırlarda olur); eski satırlar sınırlı
+  // derinlikte yapısal parmak izi ile hash'lenir, yani sonuç/durum alanı değişimi yine yakalanır.
+  const FULL_ROWS=400,FULL_TAIL=32;
+  const fp=(v,depth)=>{
+    if(v===null||v===undefined){mix('~');return;}
+    const t=typeof v;
+    if(t==='string'){mix(v.length>96?v.length+':'+v.slice(0,48)+v.slice(-48):v);return;}
+    if(t==='number'||t==='boolean'){mix(v);return;}
+    if(t!=='object')return;
+    if(Array.isArray(v)){
+      const n=v.length;mix('[');mix(n);if(depth>=3)return;
+      const head=n<=8?n:4;for(let i=0;i<head;i++)fp(v[i],depth+1);
+      if(n>8)for(let i=n-4;i<n;i++)fp(v[i],depth+1);
+      return;
+    }
+    const names=Object.keys(v);mix('{');mix(names.length);if(depth>=3)return;
+    for(const name of names){mix(name);fp(v[name],depth+1);}
+  };
   for(const [index,key] of keys.entries()){
     const rows=Array.isArray(refs[index])?refs[index]:[];mix(key);mix(rows.length);
-    for(const row of rows){try{mix(JSON.stringify(row));}catch(_e){mix(row?.id||row?.ts||'ROW');}}
+    const exactFrom=rows.length<=FULL_ROWS?0:rows.length-FULL_TAIL;
+    for(let i=0;i<rows.length;i++){
+      const row=rows[i];
+      if(i>=exactFrom){try{mix(JSON.stringify(row));}catch(_e){mix(row?.id||row?.ts||'ROW');}}
+      else{try{fp(row,0);}catch(_e){mix(row?.id||row?.ts||'ROW');}}
+    }
   }
-  const value=`AUX_ANALYSIS_V2:${(hash>>>0).toString(36)}`;
-  if(sourceDb===db)_tkpAuxiliaryAnalysisSignatureCache={revision:_tkpDbRevision,source:sourceDb,refs,value};
+  const value=`AUX_ANALYSIS_V3:${(hash>>>0).toString(36)}`;
+  if(sourceDb===db){
+    const next={revision:_tkpDbRevision,source:sourceDb,refs,value};
+    if(selectedKeys)_tkpScopedAuxiliarySignatureCaches.set(scope,next);else _tkpAuxiliaryAnalysisSignatureCache=next;
+  }
   return value;
 }
 if(typeof globalThis!=='undefined')globalThis.tkpAuxiliaryAnalysisSignature=tkpAuxiliaryAnalysisSignature;
@@ -600,7 +633,7 @@ function tkpPersistDerivedSignatureMetaSoon(patch){
     _tkpDerivedSignatureMetaPatch={};
     try{
       const generation=String(db?.__segmented_storage?.baseGeneration||persistenceStatus().generation||'');
-      await api.updateMetaPatch({learning_state:payload},{expectedGeneration:generation,timeoutMs:30000});
+      await api.updateMetaPatch({learning_state:payload},{expectedGeneration:generation,timeoutMs:30000,returnManifest:false});
       return true;
     }catch(_e){
       _tkpDerivedSignatureMetaPatch={...payload,..._tkpDerivedSignatureMetaPatch};
@@ -618,19 +651,28 @@ function tkpPersistDerivedSignatureMetaSoon(patch){
 if(typeof globalThis!=='undefined')globalThis.tkpPersistDerivedSignatureMetaSoon=tkpPersistDerivedSignatureMetaSoon;
 let _tkpTopLevelMetaPatch={};
 let _tkpTopLevelMetaPersistQueued=false;
-function tkpPersistTopLevelMetaSoon(patch,taskKey='top-level-meta-persist'){
+let _tkpTopLevelMetaRetries=0;
+function tkpPersistTopLevelMetaSoon(patch,taskKey='top-level-meta-persist',retry=false){
   if(!patch||typeof patch!=='object')return false;
+  if(!retry)_tkpTopLevelMetaRetries=0;
   _tkpTopLevelMetaPatch={..._tkpTopLevelMetaPatch,...patch};
   if(_tkpTopLevelMetaPersistQueued)return true;
   const api=_segmentedStorageApi();if(!api||typeof api.updateMetaPatch!=='function')return false;
   _tkpTopLevelMetaPersistQueued=true;
   const run=async()=>{
     const payload={..._tkpTopLevelMetaPatch};_tkpTopLevelMetaPatch={};
+    let succeeded=false;
     try{
       const generation=String(db?.__segmented_storage?.baseGeneration||persistenceStatus().generation||'');
-      await api.updateMetaPatch(payload,{expectedGeneration:generation,timeoutMs:30000});return true;
+      const result=await api.updateMetaPatch(payload,{expectedGeneration:generation,timeoutMs:30000,returnManifest:false});
+      if(!result?.ok)throw new Error('Metadata yazımı doğrulanamadı.');
+      succeeded=true;_tkpTopLevelMetaRetries=0;return true;
     }catch(_e){_tkpTopLevelMetaPatch={...payload,..._tkpTopLevelMetaPatch};return false;}
-    finally{_tkpTopLevelMetaPersistQueued=false;}
+    finally{
+      _tkpTopLevelMetaPersistQueued=false;
+      if(succeeded&&Object.keys(_tkpTopLevelMetaPatch).length)tkpPersistTopLevelMetaSoon({},taskKey);
+      else if(!succeeded&&_tkpTopLevelMetaRetries<2){const delay=3000*(++_tkpTopLevelMetaRetries);setTimeout(()=>{if(!_tkpTopLevelMetaPersistQueued&&Object.keys(_tkpTopLevelMetaPatch).length)tkpPersistTopLevelMetaSoon({},taskKey,true);},delay);}
+    }
   };
   if(typeof tkpQueueTask==='function')tkpQueueTask(String(taskKey||'top-level-meta-persist'),run,{priority:'background',replace:true,minIdleMs:900});
   else setTimeout(run,250);
@@ -663,7 +705,7 @@ async function tkpPersistCollections(names,{metaPatch=null,label='collection-pat
   if(hasColdSelected)return tkpPersistCollectionsFallback();
   const generation=String(db?.__segmented_storage?.baseGeneration||persistenceStatus().generation||'');
   try{
-    const result=await api.updateCollections(db,selected,{expectedGeneration:generation,metaPatch,targetBytes:512*1024,writeBatch:8,timeoutMs:300000});
+    const result=await api.updateCollections(db,selected,{expectedGeneration:generation,metaPatch,targetBytes:512*1024,writeBatch:8,timeoutMs:50000,returnManifest:false});
     if(!result?.ok)throw new Error('Kısmi IndexedDB yazımı doğrulanamadı.');
     persistMode='indexeddb-segmented-patch';_persistVerified=true;_persistLastError='';
     _tkpSerializedBytes=Number(result?.stats?.bytes)||_tkpSerializedBytes;
@@ -788,7 +830,7 @@ async function _saveSegmentedSnapshot(sourceDb,label='normal'){
     // hızlı tutarken açılış/geri çağırma sırasında kısa olay-kuyruğu dilimleri verir.
     targetBytes:512*1024,
     writeBatch:8,
-    timeoutMs:300000
+    timeoutMs:50000
   });
   if(!result?.ok) throw new Error('Parçalı IndexedDB yazımı doğrulanamadı.');
   persistMode='indexeddb-segmented';
@@ -805,7 +847,7 @@ async function tkpCreateStorageCheckpoint(label='manual'){
 async function tkpRestoreStorageCheckpoint(key,{render=true}={}){
   const api=_segmentedStorageApi();
   if(!api||typeof api.restoreCheckpoint!=='function') throw new Error('Checkpoint geri alma motoru hazır değil.');
-  const restored=await api.restoreCheckpoint(key,{timeoutMs:300000});
+  const restored=await api.restoreCheckpoint(key,{timeoutMs:50000});
   if(!restored?.ok||!restored.db) throw new Error('Checkpoint geri alınamadı.');
   setDb(restored.db,true);
   invalidateActiveRacesCache();
@@ -872,7 +914,7 @@ function _normalizeLegacySecondAlti(out,sourceVersion){
     const horses=(race.horses||[]).map(h=>String(h?.horse_no||'')).filter(Boolean).sort((a,b)=>TKP_TR_COLLATOR_NUM.compare(a,b)).join(',');
     race.race_uid=[race.meeting_uid,absolute,tkpHashString(horses)].join('|'); raceCount++;
   }
-  for(const key of ['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','surprise_cohort_tracking_log','bets']) for(const row of (out[key]||[])){
+  for(const key of ['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','surprise_cohort_tracking_log','surprise_condition_shadow_log','deep_surprise_tracking_log','bets']) for(const row of (out[key]||[])){
     const linked=fileMap.get(String(row?.file_id));
     const direct=_legacySecondAltiInfo(row?.hippodrome);
     const legacy=legacyKeys.get(`${String(row?.race_date||'')}|${String(row?.hippodrome||'')}`);
@@ -1095,11 +1137,11 @@ function _tkpChronologyLockSignature(lock){
     _tkpChronologyEndpointSignature(lock?.newest)
   ].join('|');
 }
-function _tkpBuildChronologyLock(fileCount,oldest,newest,maxFileId){
+function _tkpBuildChronologyLock(fileCount,oldest,newest,maxFileId,sequenceMax=fileCount){
   const lock={
     version:TKP_CHRONOLOGY_LOCK_VERSION,
     file_count:Number(fileCount)||0,
-    sequence_max:Number(fileCount)||0,
+    sequence_max:Number(sequenceMax)||0,
     max_file_id:Number(maxFileId)||0,
     sort_policy:TKP_CHRONOLOGY_SORT_POLICY,
     oldest:_tkpChronologyEndpoint(oldest),
@@ -1123,7 +1165,7 @@ function tkpChronologyLockIsValid(target,options={}){
   const expected=Number.isFinite(Number(options.expectedFileCount)) ? Number(options.expectedFileCount) : files.length;
   const lock=out?.chronology_lock;
   if(!lock || Number(lock.version)!==TKP_CHRONOLOGY_LOCK_VERSION) return false;
-  if(Number(lock.file_count)!==expected || Number(lock.sequence_max)!==expected) return false;
+  if(Number(lock.file_count)!==expected || Number(lock.sequence_max)<expected) return false;
   if(String(lock.sort_policy||'')!==TKP_CHRONOLOGY_SORT_POLICY) return false;
   if(!lock.oldest || !lock.newest) return expected===0 && String(lock.order_signature||'')===_tkpChronologyLockSignature(lock);
   return String(lock.order_signature||'')===_tkpChronologyLockSignature(lock);
@@ -1262,7 +1304,7 @@ function _tkpRekeyIdentityReferences(out,meetingMap,raceMap){
     }
     for(const child of Object.values(value)) visit(child);
   };
-  for(const key of ['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','bets','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log']){
+  for(const key of ['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','bets','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','surprise_condition_shadow_log']){
     for(const row of (Array.isArray(out?.[key])?out[key]:[])) visit(row);
   }
   return changed;
@@ -1340,7 +1382,7 @@ function _tkpApplyChronologyLinkedRows(rows,file,seq,filename){
 function tkpChronologyNextSequence(target){
   const out=target&&typeof target==='object'?target:db;
   const files=Array.isArray(out?.files)?out.files:[];
-  if(tkpChronologyLockIsValid(out)) return files.length+1;
+  if(tkpChronologyLockIsValid(out)) return Number(out.chronology_lock.sequence_max)+1;
   let max=0;
   for(const f of files) max=Math.max(max,Number(f?.sequence_no)||0);
   return max+1;
@@ -1391,13 +1433,13 @@ function tkpApplyChronologyForIncomingFile(target,file,options={}){
     }
   }
 
-  const seq=previousFileCount+1;
+  const seq=previousFileCount>0 ? Number(out.chronology_lock.sequence_max)+1 : Math.max(1,oldSeq);
   const fileUpdate=_tkpApplyChronologyFileMetadata(file,seq);
   const linkedRows=_tkpApplyChronologyLinkedRows(options.linkedRows,file,seq,fileUpdate.filename);
   const oldLock=out.chronology_lock;
   const oldest=previousFileCount>0 ? oldLock.oldest : file;
   const maxFileId=Math.max(previousFileCount>0?(Number(oldLock.max_file_id)||0):0,Number(file.id)||0);
-  const nextLock=_tkpBuildChronologyLock(files.length,oldest,file,maxFileId);
+  const nextLock=_tkpBuildChronologyLock(files.length,oldest,file,maxFileId,seq);
   out.chronology_lock=nextLock;
   // Yalnız bu importun altı yarışında UID üret; tüm arşivi açılışta yeniden
   // dolaşmaya gerek kalmasın. Aynı noktada diğer açılış hijyen marker'ları da
@@ -1410,12 +1452,24 @@ function tkpApplyChronologyForIncomingFile(target,file,options={}){
 
 // Tam yol: yalnız açık nedenlerle çağrılır. Bu fonksiyon bağlı geçmiş/snapshot
 // satırlarını da günceller; aksi halde eski sequence_no kopyaları bırakılmaz.
+function tkpArchiveSequencePlan(out,ordered){
+  const continuous=out?.archive_numbering_mode==='CONTINUOUS';
+  let max=continuous?Number(out?.chronology_lock?.sequence_max)||0:ordered.length;
+  if(continuous)for(const f of ordered)max=Math.max(max,Number(f.sequence_no)||0);
+  const used=new Set();
+  const sequences=ordered.map((f,i)=>{
+    let seq=continuous?Number(f.sequence_no):i+1;
+    if(!Number.isSafeInteger(seq)||seq<1||used.has(seq))seq=++max;
+    used.add(seq);return seq;
+  });
+  return {sequences,max};
+}
 function tkpResequenceFilesChronologically(target, options={}){
   const out=target&&typeof target==='object'?target:db;
   const files=Array.isArray(out?.files)?out.files:[];
   const races=Array.isArray(out?.races)?out.races:[];
   if(!files.length){
-    const nextLock=_tkpBuildChronologyLock(0,{}, {},0);
+    const nextLock=_tkpBuildChronologyLock(0,{}, {},Number(out?.chronology_lock?.max_file_id)||0,out?.archive_numbering_mode==='CONTINUOUS'?Number(out?.chronology_lock?.sequence_max)||0:0);
     const markerChanged=!_tkpChronologyLocksEqual(out?.chronology_lock,nextLock);
     if(out) out.chronology_lock=nextLock;
     // Silme/geri yükleme/düzeltme sonrası önceki kapsam mühürleri aynı sayıda
@@ -1426,10 +1480,11 @@ function tkpResequenceFilesChronologically(target, options={}){
     return {changed:markerChanged||epoch>0,mode:'full',resequenced:0,renamed:0,linkedRows:0,total:0,scannedLogCollections:0};
   }
   const ordered=files.slice().sort(_tkpCompareChronologyFiles);
-  let resequenced=0,renamed=0,linkedRows=0,metadataChanged=0,maxFileId=0;
+  const archivePlan=tkpArchiveSequencePlan(out,ordered);
+  let resequenced=0,renamed=0,linkedRows=0,metadataChanged=0,maxFileId=Number(out?.chronology_lock?.max_file_id)||0;
   const byId=new Map();
   for(let i=0;i<ordered.length;i++){
-    const f=ordered[i],seq=i+1,oldSeq=Number(f.sequence_no)||0;
+    const f=ordered[i],seq=archivePlan.sequences[i],oldSeq=Number(f.sequence_no)||0;
     maxFileId=Math.max(maxFileId,Number(f?.id)||0);
     const update=_tkpApplyChronologyFileMetadata(f,seq);
     if(oldSeq!==seq)resequenced++;
@@ -1446,14 +1501,14 @@ function tkpResequenceFilesChronologically(target, options={}){
   }
   // file_id taşıyan geçmiş/snapshot kayıtlarında meeting sıra numarası da aynı
   // kronolojik kimliği izlesin. Sonuç/tahmin içeriğine dokunulmaz.
-  const linkedLogKeys=['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','bets'];
+  const linkedLogKeys=['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','surprise_condition_shadow_log','deep_surprise_tracking_log','bets'];
   for(const key of linkedLogKeys){
     for(const row of (Array.isArray(out?.[key])?out[key]:[])){
       const hit=byId.get(String(row?.file_id));if(!hit)continue;
       if(Object.prototype.hasOwnProperty.call(row,'sequence_no')&&Number(row.sequence_no)!==hit.seq){row.sequence_no=hit.seq;linkedRows++;}
     }
   }
-  const nextLock=_tkpBuildChronologyLock(ordered.length,ordered[0],ordered[ordered.length-1],maxFileId);
+  const nextLock=_tkpBuildChronologyLock(ordered.length,ordered[0],ordered[ordered.length-1],maxFileId,archivePlan.max);
   const markerChanged=!_tkpChronologyLocksEqual(out.chronology_lock,nextLock);
   out.chronology_lock=nextLock;
   // Tam kronoloji yolu yalnız bilinçli düzeltme/geri yüklemede çağrılır. İç
@@ -1476,10 +1531,11 @@ async function tkpResequenceFilesChronologicallyAsync(target,options={}){
   // Sıralama 509 dosyada küçüktür; ağır olan bağlı koleksiyon güncellemesidir. Haritayı
   // tek kez kurup bütün koleksiyonları chunk/checkpoint ile dolaşırız.
   const ordered=files.slice().sort(_tkpCompareChronologyFiles),byId=new Map();
-  let resequenced=0,renamed=0,linkedRows=0,metadataChanged=0,maxFileId=0;
+  const archivePlan=tkpArchiveSequencePlan(out,ordered);
+  let resequenced=0,renamed=0,linkedRows=0,metadataChanged=0,maxFileId=Number(out?.chronology_lock?.max_file_id)||0;
   const job=typeof tkpStartJob==='function'?tkpStartJob('Kronolojik dosya sırası',{budgetMs:6,total:ordered.length+races.length}):null;
   for(let i=0;i<ordered.length;i++){
-    const f=ordered[i],seq=i+1,oldSeq=Number(f.sequence_no)||0;maxFileId=Math.max(maxFileId,Number(f?.id)||0);
+    const f=ordered[i],seq=archivePlan.sequences[i],oldSeq=Number(f.sequence_no)||0;maxFileId=Math.max(maxFileId,Number(f?.id)||0);
     const update=_tkpApplyChronologyFileMetadata(f,seq);if(oldSeq!==seq)resequenced++;renamed+=update.renamed;metadataChanged+=update.metadataChanged;byId.set(String(f.id),{seq,filename:update.filename});
     if(job&&typeof tkpJobCheckpoint==='function')await tkpJobCheckpoint(job,i+1,job.total);
   }
@@ -1487,7 +1543,7 @@ async function tkpResequenceFilesChronologicallyAsync(target,options={}){
     const r=races[i],hit=byId.get(String(r?.file_id));if(hit){let touched=false;if(Number(r.sequence_no)!==hit.seq){r.sequence_no=hit.seq;touched=true;}if(hit.filename&&r.filename!==hit.filename){r.filename=hit.filename;touched=true;}if(touched)linkedRows++;}
     if(job&&typeof tkpJobCheckpoint==='function')await tkpJobCheckpoint(job,ordered.length+i+1,job.total);
   }
-  const linkedLogKeys=['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','bets'];
+  const linkedLogKeys=['prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','surprise_condition_shadow_log','deep_surprise_tracking_log','bets'];
   for(const key of linkedLogKeys){
     const rows=Array.isArray(out?.[key])?out[key]:[];
     for(let i=0;i<rows.length;i++){
@@ -1495,7 +1551,7 @@ async function tkpResequenceFilesChronologicallyAsync(target,options={}){
       if((i&255)===255){if(typeof tkpYieldToUi==='function')await tkpYieldToUi();else await new Promise(r=>setTimeout(r,0));}
     }
   }
-  const nextLock=_tkpBuildChronologyLock(ordered.length,ordered[0],ordered[ordered.length-1],maxFileId);out.chronology_lock=nextLock;tkpBumpStartupHygieneEpoch(out);_dbMigrationDirty=true;
+  const nextLock=_tkpBuildChronologyLock(ordered.length,ordered[0],ordered[ordered.length-1],maxFileId,archivePlan.max);out.chronology_lock=nextLock;tkpBumpStartupHygieneEpoch(out);_dbMigrationDirty=true;
   if(job&&typeof tkpFinishJob==='function')tkpFinishJob(job);
   return {changed:true,mode:'async-full',resequenced,renamed,linkedRows,total:ordered.length,oldest:ordered[0]?.race_date||'',newest:ordered[ordered.length-1]?.race_date||'',scannedLogCollections:linkedLogKeys.length};
 }
@@ -1528,7 +1584,7 @@ function migrateDbPayload(raw,options={}){
     ?'restore'
     :requestedChronologyMode;
   const out=raw;
-  for(const key of ['files','races','bets','changelog','prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','bomb_hunter_shadow_log']) if(!Array.isArray(out[key])) out[key]=[];
+  for(const key of ['files','races','bets','changelog','prediction_log','auto_coupon_log','forward_tracking_log','weekly_model_log','v55_diagnostic_log','sidebet_ticket_log','commentator_evidence_log','surprise_cohort_tracking_log','bomb_hunter_shadow_log','surprise_condition_shadow_log','deep_surprise_tracking_log']) if(!Array.isArray(out[key])) out[key]=[];
   out.settings={...clone(SEED.settings),...(out.settings&&typeof out.settings==='object'?out.settings:{})};
   tkpApplyUserSettingsGuard(out);
   if(!out.learning_state || typeof out.learning_state!=='object') out.learning_state={};
@@ -1555,6 +1611,9 @@ function migrateDbPayload(raw,options={}){
     return out;
   }
   _normalizeLegacySecondAlti(out,sourceVersion);
+  if(out.archive_numbering_mode!=='CONTINUOUS'){
+    out.archive_numbering_mode='CONTINUOUS';_dbMigrationDirty=true;
+  }
   // Temiz, uygulamanın kendi kalıcı veritabanından açılan kilitli veri için bu
   // O(1) no-op'tur: marker + files.length doğrulanır, races/log/bets taranmaz.
   // Geri yükleme, eski şema ve marker'ı eksik/bozuk kayıtlar ise açıkça tam
@@ -1693,6 +1752,7 @@ function _dbRecordScore(x){
     + (Array.isArray(x.auto_coupon_log)?x.auto_coupon_log.length:0)
     + (Array.isArray(x.forward_tracking_log)?x.forward_tracking_log.length:0)
     + (Array.isArray(x.weekly_model_log)?x.weekly_model_log.length:0)
+    + (Array.isArray(x.deep_surprise_tracking_log)?x.deep_surprise_tracking_log.length:0)
     + (Array.isArray(x.v55_diagnostic_log)?x.v55_diagnostic_log.length:0)
     + (Array.isArray(x.sidebet_ticket_log)?x.sidebet_ticket_log.length:0)
     + (Array.isArray(x.commentator_evidence_log)?x.commentator_evidence_log.length:0)
@@ -1752,7 +1812,7 @@ async function loadDB(){
       // edildi.
       const segStageStart=typeof performance!=='undefined'&&performance.now?performance.now():Date.now();
       const loaded = await segmentedApi.loadDb({
-        timeoutMs:300000,
+        timeoutMs:50000,
         // KÖK ÇÖZÜM (R16.4): Gerçek 509 dosya/3.054 koşuluk arşiv ~163 MB'a
         // ulaştı (races koleksiyonu tek başına ~119 MB -- her koşuda onlarca
         // at x onlarca alan). Eski 48 MB/120.000 kayıt tavanı bu GERÇEK
@@ -1936,6 +1996,9 @@ function tkpScheduleIncrementalOutcomeLearning(previousSignature,nextSignature){
   const run=async()=>{
     const started=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
     try{
+      // Outcome-driven position learning is independent from heavy table cache.
+      // Register it first, so a table failure cannot discard a verified result.
+      try{globalThis.tkpContinuousLearning?.onOutcomeChange(previousSignature,nextSignature);}catch(error){console.warn('Konum öğrenmesi planlanamadı:',error);}
       if(typeof tkpWaitForBackgroundSafeWindow==='function')await tkpWaitForBackgroundSafeWindow({minIdleMs:1600,retryMs:150});
       if(typeof setRulesDirty==='function')setRulesDirty(true);
       if(typeof getCurrentRulesAsync==='function')await getCurrentRulesAsync();
@@ -1977,9 +2040,11 @@ async function _flushSaveQueue(){
   // çıkıyordu; render yolundaki bir saveDB() (varsayılan render=true) ise döngüyü
   // SONSUZA kadar döndürüp sekmeyi tamamen kilitliyordu.
   // Artık render, kayıt döngüsü TAMAMEN bittikten sonra bir kez yapılır.
-  let _renderAfterSave=false;
+  let _renderAfterSave=false,passWaiters=[];
   try{
     do{
+      // Later save requests belong to the next commit, not this pass's callers.
+      passWaiters=_saveResolvers.splice(0);
       _saveNeedsAnotherPass=false;globalThis.__tkpTrace?.('save','pass');
       if(_saveRenderRequested){ _renderAfterSave=true; }
       _saveRenderRequested=false;
@@ -1988,6 +2053,7 @@ async function _flushSaveQueue(){
 
       globalThis.__tkpTrace?.('save','signatures');const nextLearningSignature=await learningDatasetSignatureAsync(db);
       const learningChanged=nextLearningSignature!==_lastLearningDatasetSignature;
+      if(learningChanged)db.__archiveDataRevision=(Number(db.__archiveDataRevision)||0)+1;
       const previousOutcomeSignature=_lastOutcomeLearningSignature;
       const nextOutcomeSignature=await tkpOutcomeLearningSignatureAsync(db,true);
       const outcomeChanged=Boolean(previousOutcomeSignature&&nextOutcomeSignature!==previousOutcomeSignature);
@@ -2065,9 +2131,18 @@ async function _flushSaveQueue(){
         }}));
       }
       globalThis.__tkpTrace?.('save','after-dispatch');if(outcomeChanged)tkpScheduleIncrementalOutcomeLearning(previousOutcomeSignature,nextOutcomeSignature);
+      for(const resolve of passWaiters)resolve(finalOk);
+      passWaiters=[];
     }while(_saveNeedsAnotherPass);
+  }catch(error){
+    finalOk=false;
+    _persistVerified=false;
+    _persistLastError=String(error?.message||error);
+    console.error('Database save failed:',error);
   }finally{
     _saveRunning=false;globalThis.__tkpTrace?.('save','finally');
+    for(const resolve of passWaiters)resolve(finalOk);
+    _resolveSaveWaiters(finalOk);
     // Render sırasında tetiklenen saveDB() çağrıları YENİ BİR RENDER İSTEYEMEZ.
     // Bu olmadan döngü yalnızca yer değiştirirdi: render -> saveDB(true) -> kayıt ->
     // render -> ... (mikrogörev kuyruğunda sonsuz). Veri yine kaydedilir; sadece
@@ -2078,7 +2153,7 @@ async function _flushSaveQueue(){
         try{globalThis.__tkpTrace?.('save','render-all'); renderAll();globalThis.__tkpTrace?.('save','render-done'); } finally { _renderInProgress=false; }
       }
     }catch(e){ _renderInProgress=false; console.error('renderAll hatası:',e); }
-    globalThis.__tkpTrace?.('save','resolve-waiters');_resolveSaveWaiters(finalOk);globalThis.__tkpTrace?.('save','resolved');
+    globalThis.__tkpTrace?.('save','resolved');
   }
 }
 

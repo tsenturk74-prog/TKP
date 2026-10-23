@@ -649,6 +649,8 @@
   };
   global.tkpVerifiedStrategyComparison=verifiedStrategyComparison;
   global.tkpPretrainOnlinePositionsAsync=async function(race,positions=[1],options={}){
+    if(global.TKPDegreeHistory)await global.TKPDegreeHistory.prepare({pause:options.yieldToUi});
+    if(global.tkpPrepareHistoricalBandAsync)await global.tkpPrepareHistoricalBandAsync({pause:options.yieldToUi});
     const raceModel=currentModel(race),rows=resultRaces(race);
     const trainingOptions={...options,preparedVectors:new Map()};
     let changed=false;
@@ -696,9 +698,9 @@
     };
     trainingJobs.set(jobKey,true);
     global.__tkpOnlineBackgroundTraining={status:'queued',signature:raceModel.signature,positions:wanted,at:new Date().toISOString()};
-    if(typeof global.tkpQueueTask==='function')global.tkpQueueTask(`online-rank:${jobKey}`,run,{priority:'background',replace:false,minIdleMs:1800});
-    else if(typeof global.tkpRunWhenUserIdle==='function')global.tkpRunWhenUserIdle(run,{minIdleMs:1800,retryMs:250,maxWaitMs:0});
-    else setTimeout(()=>{void run();},1200);
+    if(typeof global.tkpQueueTask==='function')global.tkpQueueTask(`online-rank:${jobKey}`,run,{priority:'background',replace:false,minIdleMs:8000});
+    else if(typeof global.tkpRunWhenUserIdle==='function')global.tkpRunWhenUserIdle(run,{minIdleMs:8000,retryMs:350,maxWaitMs:0});
+    else setTimeout(()=>{void run();},8000);
     return true;
   };
   // Haftalık challenger takipçisi aynı doğrulanmış %30 katmanı gerçek fonksiyonuyla

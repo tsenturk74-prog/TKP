@@ -424,7 +424,7 @@ async function exportBackup(portable={}){
   const counts={};
   for(const [name,info] of Object.entries(manifest.collections||{})){
     const refs=Array.isArray(info?.refs)?info.refs:[];
-    collections.push({name,chunks:refs.length,count:Number(info?.count)||0});
+    collections.push({name,chunks:refs.reduce((n,ref)=>n+Math.ceil(Number(ref.count)/50000),0),count:Number(info?.count)||0});
     counts[name]=Number(info?.count)||0;
   }
   for(const name of TKP_SEGMENTED_BACKUP_COLLECTIONS)if(!Object.prototype.hasOwnProperty.call(counts,name))counts[name]=0;
@@ -441,21 +441,16 @@ async function exportBackup(portable={}){
     yield tkpU32(envBytes.length);
     yield envBytes;
     for(const descriptor of collections){
-      const info=manifest.collections?.[descriptor.name]||{};
-      const refs=Array.isArray(info.refs)?info.refs:[];
-      let exported=0;
-      for(let i=0;i<refs.length;i++){
-        const ref=refs[i];
-        const page=await TKPSegmentedIDB.loadCollectionPageFromManifest(manifest,descriptor.name,{offset:Number(ref.start)||0,limit:Number(ref.count)||0});
+      let exported=0,index=0;
+      for await(const page of TKPSegmentedIDB.iterateCollectionPages(descriptor.name,{manifest,limit:50000,verifyHashes:true})){
         const rows=Array.isArray(page?.rows)?page.rows:[];
-        if(rows.length!==Number(ref.count||0))throw new Error(`${descriptor.name} export parçası eksik (${rows.length}/${ref.count}).`);
         const segBytes=encoder.encode(JSON.stringify(rows));
         if(segBytes.length>128*1024*1024)throw new Error(`${descriptor.name} export parçası güvenli sınırı aşıyor.`);
         jsonBytesTotal+=segBytes.length+4;
         yield tkpU32(segBytes.length);
         yield segBytes;
         exported+=rows.length;
-        postMessage({type:'phase',phase:'export-segment',name:descriptor.name,index:i+1,total:refs.length,count:exported,collectionTotal:descriptor.count});
+        postMessage({type:'phase',phase:'export-segment',name:descriptor.name,index:++index,total:descriptor.chunks,count:exported,collectionTotal:descriptor.count});
       }
       if(exported!==descriptor.count)throw new Error(`${descriptor.name} export sayımı uyuşmuyor (${exported}/${descriptor.count}).`);
     }

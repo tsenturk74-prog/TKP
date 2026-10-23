@@ -14,7 +14,7 @@
   const LIVE_CLASS='LIVE_PRE_RACE_LOCKED';
   const RESEARCH_CLASS='HISTORICAL_RESEARCH';
   const MAX_LOOKBACK=8192;
-  const MAX_BH=2;
+  const MAX_BH=6;
   const MAX_BMB=6;
   const MAX_ODB=6;
   const MAX_AGF_6_8=6;
@@ -268,6 +268,20 @@
     rec.resolved_at=nowIso(now);rec.integrity='OK';
     return true;
   }
+  // Aynı koşu için yarış öncesi kayıt başka bir anahtarla (race_uid / eski satır) alınmış, sonuç ise
+  // yeniden yazılan satırda gelmiş olabilir; bu durumda ikinci kayıt sonsuza dek "Bekliyor" kalıyordu.
+  // Sonuç, aynı tarih|hipodrom|altılı|ayak taşıyan tüm çözülmemiş kayıtlara da uygulanır.
+  function compositeKey(x){return [cleanText(x?.race_date||x?.date),canonicalTrack(x?.hippodrome),Number(x?.altili_no)||1,Number(x?.leg)||Number(x?.sequence_no)||Number(x?.race_no)||0].join('|');}
+  const _pendingIdx=new WeakMap();
+  function pendingIndex(log){
+    let c=_pendingIdx.get(log);
+    if(!c||c.len!==log.length){
+      const map=new Map();
+      for(const row of log){if(!row||row.outcome||!row.race_date)continue;const k=compositeKey(row);let a=map.get(k);if(!a){a=[];map.set(k,a);}a.push(row);}
+      c={len:log.length,map};_pendingIdx.set(log,c);
+    }
+    return c.map;
+  }
   function resolveBatch(races,options={}){
     const target=options.db||currentDb();if(!target)return false;
     const log=logFor(target);let changed=false;
@@ -275,6 +289,8 @@
       const race=item?.r||item;if(!race||!hasResult(race))continue;
       const rec=lookup(log,raceKey(race));
       if(rec&&resolveRecord(rec,race,options.now))changed=true;
+      const twins=pendingIndex(log).get(compositeKey(race));
+      if(twins)for(const twin of twins){if(twin!==rec&&!twin.outcome&&resolveRecord(twin,race,options.now))changed=true;}
     }
     if(changed)queuePersistence();
     return changed;
@@ -368,7 +384,21 @@
       top5+=values.reduce((sum,value)=>sum+(Number(value?.top5)||0),0);
       if(kind==='AGF_6_8'&&(row?.agf_movement?.sharp_candidates||[]).length)sharp++;
     }
-    return {events:relevant.length,resolved_events:done.length,candidates,wins,top3,top5,sharp_movement_events:sharp};
+    const by_rank = kind==='BH' ? Array.from({length:MAX_BH},(_,idx)=>{
+      const rank=idx+1;
+      let samples=0,win_count=0,top3_count=0;
+      for(const rec of done){
+        const frozen=rec?.candidates?.BH||[];
+        const outcomes=rec?.outcome?.candidate_sets?.BH||[];
+        const horse=frozen.find((c,j)=>Number(c?.rank||j+1)===rank);
+        if(!horse)continue;
+        const matched=outcomes.find(o=>sameHorse(o?.horse_no,horse?.horse_no));
+        if(!matched)continue;
+        samples++; win_count+=Number(matched?.win)||0;top3_count+=Number(matched?.top3)||0;
+      }
+      return {rank,samples,wins:win_count,top3:top3_count};
+    }) : [];
+    return {events:relevant.length,resolved_events:done.length,candidates,wins,top3,top5,sharp_movement_events:sharp,by_rank};
   }
   function stats(target){
     const rows=logFor(target),kinds=['BH','BMB','ODB','AGF_6_8'];
@@ -386,10 +416,19 @@
   function esc(value){
     try{return typeof global.esc==='function'?global.esc(value):String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}catch(_e){return String(value??'');}
   }
+  // Ekran açıldığında, sonucu DB'de zaten bulunan ama kaydı hâlâ "Bekliyor" olan canlı kayıtları çöz.
+  function resolvePendingFromDb(target){
+    const log=logFor(target),pending=new Set();
+    for(const row of log){if(row&&!row.outcome&&row.race_date&&row.event_class===LIVE_CLASS)pending.add(compositeKey(row));}
+    if(!pending.size)return false;
+    const hit=(Array.isArray(target?.races)?target.races:[]).filter(r=>pending.has(compositeKey(r))&&hasResult(r));
+    return hit.length?resolveBatch(hit,{db:target}):false;
+  }
   function trackingHtml(target){
+    try{resolvePendingFromDb(target||currentDb());}catch(_e){}
     ensureAutomaticHistoricalResearch(target);
     const archiveCount=archiveMeetingCount(target);
-    const data=stats(target);const labels={BH:'BH1–BH2',BMB:'BMB',ODB:'ODB',AGF_6_8:'AGF sıra 6–8'};
+    const data=stats(target);const labels={BH:'BH1–BH6',BMB:'BMB',ODB:'ODB',AGF_6_8:'AGF sıra 6–8'};
     const row=(kind)=>{
       const live=data.live[kind],research=data.research[kind],gate=data.gates[kind];
       const liveRate=live.candidates?pct(live.wins,live.candidates):'-';

@@ -1,0 +1,13 @@
+TKP KAPSAM KAYBI DENETIMI — 19.10.2026
+
+Bu sürüm YALNIZCA tanılama kaydı ekler. Algoritma, kupon seçimleri, BH/ATR puanları, bütçe veya Santa Anita geçmiş kayıtlarını değiştirmez.
+
+Kontrol:
+1. Uygulamayı aç ve gelecekteki bir toplantıda normal şekilde 3 kupon oluştur.
+2. Tarayıcı geliştirici konsolunda (F12) şunu çalıştır:
+   copy(JSON.stringify(window.TKP_COVERAGE_AUDIT||[], null, 2))
+3. Panoya kopyalanan JSON'u dosyaya kaydet veya sohbete yapıştır.
+4. budget-before / budget-after kayıtlarında ilgili ayakta kac at önerildiği ve kac at kaldığı görülebilir.
+5. canonical-final-main/alt/surprise kayıtlarında son kupon atları ve dışarıda kalan BH adayları listelenir.
+
+Dikkat: Audit yalnızca bu sayfada yapılan kupon hesaplarında dolar; eski arşiv kuponunu yalnız görüntülemek hesaplama kaydı üretmez. BH etiketleri tek alanla sınırlı olduğundan bazı atlarda BH sinyali bulunmayabilir; yanlış negatif risklidir. Yarış sonrası tekrar hesaplanan kuponlar geçmiş başarı delili sayılmaz.

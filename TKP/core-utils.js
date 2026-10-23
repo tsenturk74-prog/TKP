@@ -51,9 +51,23 @@ function tkpRound2(v){ return Math.round((Number(v)||0)*100)/100; }
 // .horses yeni bir diziyle değiştirildiğinde (veri yenileme/import) önbellek
 // otomatik geçersiz olur çünkü kaynak dizi referansı karşılaştırılır. Mevcut
 // _accurateFieldAvgCache düzenindeki gibi koşu nesnesi üzerinde saklanır.
+// V1.1.336 FIX (Claude): Önbellek artık koşu nesnesine iliştirilmez, WeakMap'te
+// tutulur. Eski kod __tkpLiveHorsesCache/__tkpLiveHorsesSrc alanlarını r üzerine
+// yazıyordu; bu alanlar kayıtta serileştirilip races'i ~300 MB şişiriyor ve her
+// veri/X toplamada 9+ sn donmaya yol açıyordu. WeakMap kaydı diske HİÇ yazılmaz,
+// bellekte ikinci bir kopya tutmaz ve koşu nesnesi GC olunca kendiliğinden silinir.
+const _tkpLiveHorsesWM=(typeof WeakMap!=='undefined')?new WeakMap():null;
 function tkpLiveHorses(r){
   if(!r) return [];
   const horses=r.horses||[];
+  if(_tkpLiveHorsesWM){
+    const c=_tkpLiveHorsesWM.get(r);
+    if(c && c.src===horses) return c.live;
+    const live=horses.filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+    try{ _tkpLiveHorsesWM.set(r,{src:horses,live}); }catch(_e){}
+    return live;
+  }
+  // WeakMap desteklenmeyen çok eski ortamda eski davranışa düş.
   if(r.__tkpLiveHorsesSrc===horses && r.__tkpLiveHorsesCache) return r.__tkpLiveHorsesCache;
   const live=horses.filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
   try{ r.__tkpLiveHorsesCache=live; r.__tkpLiveHorsesSrc=horses; }catch(_e){}
@@ -200,6 +214,24 @@ function tkpLastSixStats(h){
 
 function tkpLastSixFormValue(h){ return tkpLastSixStats(h).form; }
 
+// Aynı dosyada aynı ayak için birden fazla kayıt bulunabilir (ör. program kaydı active:0 + sonuç sonrası
+// yeniden yazılan kayıt active:1; Keeneland gibi yabancı toplantılarda LAST_SIX_FALLBACK -> PROGRAM_RACE_NUMBERS).
+// Dosya durumu hesabı yalnız ayak başına tek kayıt sayar: önce kazananı belli olan, sonra aktif, sonra en yeni.
+function tkpEffectiveFileRaces(rows){
+  const list=Array.isArray(rows)?rows:[];
+  if(list.length<2)return list;
+  const winnerKnown=r=>(Array.isArray(r?.horses)?r.horses:[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
+  const best=new Map();
+  list.forEach((r,i)=>{
+    const leg=Number(r?.leg)||0,key=leg>0?`${Number(r?.altili_no)||0}|${leg}`:`#${i}`;
+    const score=(winnerKnown(r)?4:0)+(r?.active===0?0:2)+(Number(r?.id)||0)/1e9;
+    const cur=best.get(key);
+    if(!cur||score>cur.score)best.set(key,{r,score});
+  });
+  return [...best.values()].map(x=>x.r);
+}
+if(typeof globalThis!=='undefined')globalThis.tkpEffectiveFileRaces=tkpEffectiveFileRaces;
+
 // Dosya durumu mümkün olduğunda qc_status metninden değil gerçek kayıtlı sonuçtan türetilir.
 // Canlı arşivde bazı eski kayıtların qc_status alanı "SONUÇ KISMİ GÜNCELLENDİ" kalabiliyor;
 // örneğin tüm 6 koşunun kazananı/ikramiyesi mevcutken bir koşuda yalnız ilk 3 derece gelmiş olabilir.
@@ -213,6 +245,7 @@ function tkpDurumBadge(f){
       rows=typeof tkpRowsByFileId==='function'
         ? tkpRowsByFileId(f?.id)
         : db.races.filter(r=>String(r?.file_id)===String(f?.id));
+      rows=tkpEffectiveFileRaces(rows);
     }
   } catch(_) {}
 
@@ -625,6 +658,10 @@ function tkpEstimatedRaceTimeSeconds(r,h){
     // başına BİR KEZ çıkarılıp önbelleğe alınıyor (hiçbir tavan/kısıtlama
     // YOK -- tüm veri taranıyor, sonuç eski koddan bire bir aynı, sadece
     // ~800× daha hızlı; 12.600 kayıtla doğrulandı, 0 fark).
+    let speeds;
+    if(globalThis.TKPDegreeHistory){
+      speeds=globalThis.TKPDegreeHistory.getSpeeds({surface:todaySurface,breed:todayBreed,date:String(r?.race_date||r?.date||''),distance:dist});
+    }else{
     const targetDate=String(r?.race_date||r?.date||'');
     const poolKey=todaySurface+'|'+todayBreed+'|'+targetDate;
     if(!globalThis.__tkpSimilarFieldPoolCache) globalThis.__tkpSimilarFieldPoolCache=new Map();
@@ -675,7 +712,7 @@ function tkpEstimatedRaceTimeSeconds(r,h){
       const speedsCacheKey=poolKey+'|'+dist;
       if(!globalThis.__tkpSimilarFieldSpeedsCache) globalThis.__tkpSimilarFieldSpeedsCache=new Map();
       const speedsCache=globalThis.__tkpSimilarFieldSpeedsCache;
-      let speeds=speedsCache.get(speedsCacheKey);
+      speeds=speedsCache.get(speedsCacheKey);
       if(speeds===undefined){
         const candidates=pool.map(p=>({speed:p.speed, score:Math.abs(p.rd-dist)/1000}));
         candidates.sort((a,b)=>a.score-b.score);
@@ -690,6 +727,9 @@ function tkpEstimatedRaceTimeSeconds(r,h){
         speeds=candidates.slice(0,sampleSize).map(x=>x.speed).sort((a,b)=>a-b);
         speedsCache.set(speedsCacheKey, speeds);
       }
+    }
+    }
+    if(speeds&&speeds.length>=3){
       let mid=speeds[Math.floor(speeds.length/2)];
       const fieldHorses=(r?.horses||[]).filter(x=>!isNonRunner(x));
       if(fieldHorses.length>=2 && speeds.length>=2){

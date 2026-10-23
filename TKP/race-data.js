@@ -57,7 +57,7 @@ function broadConditionKey(text){
   let x = fold(raw);
   if (!x) return 'BİLİNMİYOR';
   const out=/HAND[İI]KAP/.test(x)?'HANDİKAP'
-    :/MAIDEN/.test(x)?'MAIDEN'
+    :/MA[İI]DEN/.test(x)?'MAIDEN'
     :/ŞARTLI|SARTLI/.test(x)?'ŞARTLI'
     :/SAT[İI]Ş|SATIS/.test(x)?'SATIŞ'
     :/\bKV[- ]?\d/.test(x)?'KV'
@@ -210,9 +210,12 @@ function finishMarkTitle(h){
 
 function raceHasConfirmedResult(raceHorses){
   if (!Array.isArray(raceHorses) || !raceHorses.length) return false;
-  // Sonuç girilmemiş koşularda eski/boş derece alanları yanlışlıkla sonuç gibi görünmesin.
-  // Gerçek sonuç görünümü ancak koşuda açıkça bir 1. mevcutsa açılır.
-  return raceHorses.some(h => Number(h.winner) === 1 || Number(h.finish_position) === 1);
+  // Analysis/statistics use the same canonical fallback order for migrated
+  // TJK results whose finish_position was stored under a legacy field name.
+  return raceHorses.some(h => [h?.finish_position,h?.result_position,h?.official_position,h?.place].some(value=>{
+    const position=Number(value);
+    return Number.isFinite(position)&&position===1;
+  }) || Number(h?.winner)===1);
 }
 
 function finishMarkClassByHorseNo(no, raceHorses){
@@ -266,14 +269,17 @@ function tkpTjkRowIsExplicitNonRunner(tr,nameCell,nameLink){
 const _tkpNonRunnerCache=new WeakMap();
 function isNonRunner(h){
   if(!h||typeof h!=='object')return false;
-  const signature=[h.non_runner,h.is_non_runner,h.scratched,h.usa_scratched,h.atr_non_runner,h.horse_name].join('|');
-  const cached=_tkpNonRunnerCache.get(h);if(cached?.signature===signature)return cached.value;
+  // Sıralama/skor döngülerinde milyonlarca kez çağrılır; her çağrıda 6 alanı string'e
+  // birleştirmek yerine alanları doğrudan karşılaştırarak önbelleği doğrular.
+  const c=_tkpNonRunnerCache.get(h);
+  if(c&&c.a===h.non_runner&&c.b===h.is_non_runner&&c.c===h.scratched&&c.d===h.usa_scratched&&c.e===h.atr_non_runner&&c.n===h.horse_name)return c.value;
+  const a=h.non_runner,b=h.is_non_runner,cc=h.scratched,d=h.usa_scratched,e=h.atr_non_runner,n=h.horse_name;
   // E1/E2/E3 eküri bilgisidir; koşmama işareti değildir ve tahminde kalır.
-  if(Number(h?.non_runner)===1 || Number(h?.is_non_runner)===1 || Number(h?.scratched)===1 || Number(h?.usa_scratched)===1 || Number(h?.atr_non_runner)===1){_tkpNonRunnerCache.set(h,{signature,value:true});return true;}
+  if(Number(a)===1 || Number(b)===1 || Number(cc)===1 || Number(d)===1 || Number(e)===1){_tkpNonRunnerCache.set(h,{a,b,c:cc,d,e,n,value:true});return true;}
   // Yalnız açık durum etiketi. "TÜMÇIKMAZ" gibi gerçek at adları ASLA koşmaz sayılmaz.
-  const name=fold(h?.horse_name||'').replace(/\s+/g,' ').trim();
+  const name=fold(n||'').replace(/\s+/g,' ').trim();
   const value=/(?:^|[\s(])(?:KOŞMAZ|KOSMAZ|START ALMADI|START ALMAZ|SCRATCHED|WITHDRAWN|DEKLARE DIŞI|DEKLARE DISI)(?:$|[\s)])/u.test(name);
-  _tkpNonRunnerCache.set(h,{signature,value});return value;
+  _tkpNonRunnerCache.set(h,{a,b,c:cc,d,e,n,value});return value;
 }
 
 function isPastWinningBmb(h){
@@ -293,65 +299,17 @@ function isPastWinningExtra(r, h){
 
 function isOdbCandidate(h, r){
   if(!h) return false;
-
-  // V1.1.91 — ODB = 2. sürpriz sinyali / ODS DIŞI BOMBA.
-  // KESİN DIŞLAMA ŞARTLARI (kullanıcı tanımı):
-  //   1) BMB olmayacak,
-  //   2) SONUÇ sırası ilk 6'da olmayacak,
-  //   3) AGF sırası ilk 6'da olmayacak.
-  // Y.PUAN ODB'yi ne kurar ne de engeller. ODB ayrıca geçmiş veride kazanabilir
-  // olduğuna dair pozitif kanıt ister; salt "ilk 6 dışında" olmak yeterli değildir.
-  if (Number(h.bmb)===1) return false;
-
-  const resultRank=Number(h.result_rank);
-  if (Number.isFinite(resultRank) && resultRank<=6) return false;
-
-  const agfRank=Number(h.agf_rank);
-  if (Number.isFinite(agfRank) && agfRank<=6) return false;
-
-  const wonBefore = (Number(h.priorWins)||0)>0 || (Number(h.condWinWins)||0)>0;
-  const surpriseEvidence = (Number(h.priorSurpriseHits)||0)>0 || (Number(h.condSurpriseHits)||0)>0;
-
-  // KÖK FIX (Tommy talebi): "0 geçmiş koşu" olan şartlarda condWinWins/priorWins
-  // yapısal olarak boş kalır (bu şartta henüz hiç veri toplanmamıştır) -- bu da
-  // ODB'nin tam da en değerli olacağı, benzeri görülmemiş şart durumunda hiç
-  // tetiklenmemesine yol açıyordu. Yalnız GERÇEKTEN şart geçmişi YOKSA (bu koşu
-  // şartı için hiç kayıtlı sonuç yok), pozitif galibiyet kanıtı yerine bağımsız
-  // Profil Gücü / TR PUAN sinyaliyle de ODB tetiklenebilir. Şart geçmişi VARSA
-  // eski katı kural (gerçek galibiyet/sürpriz kanıtı) aynen korunur -- mevcut
-  // yanlış pozitif koruması bozulmaz.
-  let noConditionHistory=false;
-  try{
-    if(typeof statsByConditionForTarget==='function'&&typeof broadConditionKey==='function'){
-      const cond=broadConditionKey(r?.condition_family);
-      const st=statsByConditionForTarget('result_rank',r)?.[cond];
-      noConditionHistory=!st||!st.total;
-    }
-  }catch(_){ noConditionHistory=false; }
-  const independentEvidence = noConditionHistory && (
-    (typeof profileStrengthPct==='function' && Number(profileStrengthPct(r,h))>=35) ||
-    (typeof tkpPredictionGcTrValue==='function' && Number.isFinite(tkpPredictionGcTrValue(h)) && Number(tkpPredictionGcTrValue(h))>=50)
-  );
-
-  // Eski yarış tablosu yalnız kayıtlı snapshot alanlarını okur. Bu satırda
-  // historicalSurpriseProfileMatch() çağrısı yapılırsa soğuk açılışta bütün
-  // geçmiş profil havuzu yeniden taranır; arşivde mevcut pozitif kanıt alanları
-  // ODB kararı için yeterlidir. Canlı yol aşağıdaki tam profile eşleşmesini korur.
-  if(typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(r)){
-    // R18.6.1: Arşivde salt historyStrength>0 artık ODB üretmez. Bu değer tek bir
-    // zayıf geçmiş işaretten pozitif olabildiği için kalabalık ayaklarda 4-5 ODB
-    // çıkarabiliyordu. ODB için kayıtlı ODB etiketi, gerçek geçmiş galibiyet veya
-    // doğrulanmış sürpriz isabet kanıtı gerekir.
-    return !!(wonBefore||surpriseEvidence||independentEvidence||Number(h?.odb)===1);
-  }
-  const profileMatch = r && typeof historicalSurpriseProfileMatch==='function'
-    ? !!historicalSurpriseProfileMatch(r,h)?.matched
-    : false;
-  // Canlıda da historyStrength tek başına yeterli değildir; gerçek galibiyet,
-  // sürpriz isabet veya doğrulanmış benzer-profil eşleşmesi gerekir.
-  if (!wonBefore && !surpriseEvidence && !independentEvidence && !profileMatch) return false;
-
-  return true;
+  // R19.35: ODB kota doldurmak için türetilmez. Yalnız yarış-öncesi gerçek kayıt
+  // veya doğrulanmış geçmiş/sürpriz kanıtı ODB üretebilir.
+  if(Number(h.bmb)===1) return false;
+  const resultRank=Number(h.result_rank); if(Number.isFinite(resultRank)&&resultRank<=6)return false;
+  const agfRank=Number(h.agf_rank); if(Number.isFinite(agfRank)&&agfRank<=6)return false;
+  const stored=Number(h?.odb)===1 || h?.bmb_source==='ŞABLON KURALI';
+  const wonBefore=(Number(h.priorWins)||0)>0 || (Number(h.condWinWins)||0)>0;
+  const surpriseEvidence=(Number(h.priorSurpriseHits)||0)>0 || (Number(h.condSurpriseHits)||0)>0;
+  if(typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(r)) return !!(stored||wonBefore||surpriseEvidence);
+  const profileMatch=r&&typeof historicalSurpriseProfileMatch==='function'?!!historicalSurpriseProfileMatch(r,h)?.matched:false;
+  return !!(stored||wonBefore||surpriseEvidence||profileMatch);
 }
 
 function isExtraBadgeSignal(r, h){
@@ -467,6 +425,30 @@ function resultRaceQuality(r){
     complete:required>0 && winners.length>=1 && Array.from({length:required},(_,i)=>i+1).every(pos=>positions.has(pos))};
 }
 
+function tkpApplyOfficialFinish(targetHorse,incomingHorse,{verified=false,repairExisting=false,maxRank=null}={}){
+  if(!targetHorse||!verified)return false;
+  const raw=Number(incomingHorse?.finish_position);
+  const incomingPosition=Number.isInteger(raw)&&raw>0&&(maxRank==null||raw<=maxRank)?raw:null;
+  const currentRaw=Number(targetHorse.finish_position);
+  const currentPosition=Number.isInteger(currentRaw)&&currentRaw>0?currentRaw:null;
+  if(!repairExisting&&currentPosition!=null&&currentPosition!==incomingPosition)return false;
+  if(!repairExisting&&incomingPosition==null)return false;
+  const winner=incomingPosition===1?1:0;
+  const changed=currentPosition!==incomingPosition||Number(targetHorse.winner)!==winner;
+  if(!changed)return false;
+  targetHorse.finish_position=incomingPosition;
+  targetHorse.winner=winner;
+  targetHorse.result_time='';
+  targetHorse.official_time='';
+  return true;
+}
+
+function tkpVerifiedOutcomeRaceCount(races){
+  return (Array.isArray(races)?races:[]).filter(r=>
+    String(r?.result_integrity_status||'')==='VERIFIED'&&Number(r?.result_verified_depth)>0
+  ).length;
+}
+
 function resultPayloadQuality(p){
   const races=(p?.races||[]);
   const details=races.map(resultRaceQuality);
@@ -556,22 +538,34 @@ function tkpOfficialOrderedPayoutEvidence(race){
 // 1'den başlayan kesintisiz, tekrarsız ve at numarası bulunan bir sıra olarak
 // doğrulanır; rastgele tablo/kolon sayıları sonuç kabul edilmez.
 function tkpOfficialResultRowEvidence(race){
-  const byPosition=new Map(),usedHorseNos=new Set();
+  const rows=[];
+  const usedHorseNos=new Set();
   for(const h of (race?.horses||[])){
     const pos=Number(h?.finish_position),no=String(ekuriBase(h?.horse_no||'')).trim();
     if(!no||!Number.isInteger(pos)||pos<1||pos>6)continue;
-    if(byPosition.has(pos)||usedHorseNos.has(no))return {status:'AMBIGUOUS_RESULT_ROWS',depth:0,seq:null};
-    byPosition.set(pos,no);usedHorseNos.add(no);
+    if(usedHorseNos.has(no))return {status:'AMBIGUOUS_RESULT_ROWS',depth:0,seq:null};
+    usedHorseNos.add(no);
+    rows.push({pos,no});
   }
-  if(!byPosition.has(1))return {status:'NO_RESULT_ROWS',depth:0,seq:null};
-  let depth=0;
-  for(let pos=1;pos<=6;pos++){
-    if(!byPosition.has(pos))break;
-    depth=pos;
+  if(!rows.length || rows[0].pos!==1)return {status:'NO_RESULT_ROWS',depth:0,seq:null};
+  let nonDecreasing=true, hasTieLikeGap=false, hasExactTie=false;
+  for(let i=1;i<rows.length;i++){
+    if(rows[i].pos<rows[i-1].pos){nonDecreasing=false;break;}
+    if(rows[i].pos===rows[i-1].pos)hasExactTie=true;
+    if(rows[i].pos<(i+1))hasExactTie=true;
+    if(rows[i].pos>(i+1))hasTieLikeGap=true;
+    // Güvenlik: normalleştirilebilir dead-heat dışında büyük boşluk kabul edilmez.
+    // Örn. 1,2,4 dizisi gerçek 3.lük satırı eksik demektir; 1,2,3,3,5 ise kabul.
+    if(rows[i].pos>(i+1)) return {status:'AMBIGUOUS_RESULT_ROWS',depth:0,seq:null};
   }
+  if(!nonDecreasing)return {status:'AMBIGUOUS_RESULT_ROWS',depth:0,seq:null};
+  const depth=Math.min(6,rows.length);
   // Tek başına bir 1, yanlış sütun yakalama riskini yeterince azaltmaz.
   if(depth<2)return {status:'INSUFFICIENT_RESULT_ROWS',depth:0,seq:null};
-  return {status:'VERIFIED_TJK_RESULT_ROWS',depth,seq:Array.from({length:depth},(_,i)=>byPosition.get(i+1))};
+  const seq=rows.slice(0,depth).map(r=>r.no);
+  const winnerNos=rows.filter(r=>r.pos===1).map(r=>r.no);
+  const officialPositions=Object.fromEntries(rows.slice(0,depth).map(r=>[String(r.no),Number(r.pos)]));
+  return {status:(hasExactTie||hasTieLikeGap)?'VERIFIED_TJK_RESULT_ROWS_DEADHEAT_NORMALIZED':'VERIFIED_TJK_RESULT_ROWS',depth,seq,winnerNos,officialPositions};
 }
 function tkpApplyVerifiedOfficialResultOrder(race){
   if(!race)return {status:'NO_RACE',depth:0,seq:null,evidence:[]};
@@ -583,23 +577,29 @@ function tkpApplyVerifiedOfficialResultOrder(race){
     &&ev.seq.every((no,index)=>String(no)===String(rowEvidence.seq[index]));
   const verified=matchingPrefix?{...rowEvidence,evidence:ev.evidence,corroboratedDepth:ev.depth}
     :ev.depth>0?ev:rowEvidence;
-  for(const h of (race.horses||[])){h.finish_position=null;h.winner=0;h.result_time='';h.official_time='';}
+  for(const h of (race.horses||[])){h.finish_position=null;h.official_finish_position=null;h.winner=0;h.result_time='';h.official_time='';}
   race.result_verified_depth=0;race.result_integrity_source='';race.result_integrity_status=verified?.status||ev.status;
   if(!verified||verified.depth<1)return verified||ev;
   const posByNo=new Map(verified.seq.map((no,index)=>[String(no),index+1]));
+  const verifiedWinnerNos=new Set((Array.isArray(verified.winnerNos)&&verified.winnerNos.length?verified.winnerNos:[verified.seq[0]]).map(String));
   for(const h of (race.horses||[])){
-    const pos=posByNo.get(String(ekuriBase(h?.horse_no||'')));
-    if(pos){h.finish_position=pos;h.winner=pos===1?1:0;}
+    const baseNo=String(ekuriBase(h?.horse_no||''));
+    const pos=posByNo.get(baseNo);
+    if(pos){h.finish_position=pos;h.official_finish_position=Number(verified?.officialPositions?.[baseNo])||pos;h.winner=verifiedWinnerNos.has(baseNo)?1:0;}
   }
+  race.result_winner_nos=[...verifiedWinnerNos];
+  race.result_official_finish_positions=Object.fromEntries((race.horses||[]).filter(h=>Number(h.official_finish_position)>0).map(h=>[String(ekuriBase(h.horse_no||'')),Number(h.official_finish_position)]));
+  race.result_deadheat_winner_count=verifiedWinnerNos.size;
   race.result_verified_depth=verified.depth;
   const isPayoutSourced=verified.status==='VERIFIED_TJK_PAYOUT'||verified.status==='VERIFIED_TJK_PAYOUT_PARTIAL_DEADHEAT';
+  const isRowDeadheatNormalized=verified.status==='VERIFIED_TJK_RESULT_ROWS_DEADHEAT_NORMALIZED';
   race.result_integrity_source=isPayoutSourced?'TJK_OFFICIAL_ORDERED_PAYOUT':'TJK_OFFICIAL_RESULT_ROWS';
   // Fotokafa/ölü heat nedeniyle yalnız ortak önek doğrulandıysa genel durum
   // yine de VERIFIED sayılır (gösterilen sıra kesin doğru) ama hangi derinliğe
   // kadar güvenilir olduğunu kaybetmemek için ayrı bir işaret bırakılır --
   // berabere kalan sıralardan sonrası SONUÇ rozetinde hâlâ görünmez.
   race.result_integrity_status='VERIFIED';
-  race.result_deadheat_partial=verified.status==='VERIFIED_TJK_PAYOUT_PARTIAL_DEADHEAT'?1:0;
+  race.result_deadheat_partial=(verified.status==='VERIFIED_TJK_PAYOUT_PARTIAL_DEADHEAT'||isRowDeadheatNormalized)?1:0;
   return verified;
 }
 function tkpLegacyStartNoLooksSafe(race){
@@ -681,7 +681,7 @@ async function tkpRepairArchiveResultIntegrityOnce(sourceDb){
     if(++processed%96===0){if(typeof tkpYield==='function')await tkpYield();else if(typeof tkpYieldToBrowser==='function')await tkpYieldToBrowser();}
   }
   for(const f of (sourceDb.files||[])){
-    const rows=byFile.get(String(f.id))||[];
+    const rows=tkpEffectiveFileRaces(byFile.get(String(f.id))||[]);
     const ok=rows.filter(r=>Number(r.result_verified_depth)>0).length;
     const bad=rows.length-ok;
     f.result_quality={...(f.result_quality||{}),verified_races:ok,quarantined_races:bad,race_count:rows.length,integrity_version:'R15.3_TJK_PAYOUT_FAIL_CLOSED'};
@@ -871,7 +871,7 @@ async function sanitizeRealBmbFlags(x,options={}){
     if(++processed%24===0)await yieldToUi();
   }
   for(const f of x.files){
-    const rows=racesByFileId.get(f.id)||[];
+    const rows=tkpEffectiveFileRaces(racesByFileId.get(f.id)||[]);
     const hasIntegrityEvidence=rows.some(r=>r?.result_integrity_status!=null||Number(r?.result_verified_depth)>0);
     if(hasIntegrityEvidence){
       const verified=rows.filter(r=>String(r?.result_integrity_status||'')==='VERIFIED'&&Number(r?.result_verified_depth)>0).length;
@@ -1207,11 +1207,11 @@ function ensureRaceJBygFromTeamRates(r){
 }
 
 function tkpTrustedJBygRank(h){
-  if(!/^(?:GANYAN_CANAVARI_JBYG|YENIBEYGIR_JBYG_FALLBACK)$/i.test(String(h?.jbyg_source||'')))return null;
+  if(!/^(?:GANYAN_CANAVARI_JBYG|YENIBEYGIR_JBYG_FALLBACK|ODS_IMPORT)$/i.test(String(h?.jbyg_source||'')))return null;
   return ['jbyg','j_byg','jbyg_rank','j_byg_rank','team_strength_rank'].map(k=>Number(h?.[k])).find(v=>Number.isFinite(v)&&v>=1&&v<=7)??null;
 }
 function tkpTrustedGlpRank(h){
-  if(!/^(?:GANYAN_CANAVARI_GALOPLAR_OZET|YENIBEYGIR_GLP_FALLBACK)$/i.test(String(h?.glp_source||'')))return null;
+  if(!/^(?:GANYAN_CANAVARI_GALOPLAR_OZET|YENIBEYGIR_GLP_FALLBACK|ODS_IMPORT)$/i.test(String(h?.glp_source||'')))return null;
   return ['g800','g800_rank','galop_rank','glp_rank'].map(k=>Number(h?.[k])).find(v=>Number.isFinite(v)&&v>=1&&v<=6)??null;
 }
 function tkpTrustedTrValue(h){
@@ -1228,7 +1228,8 @@ function tkpTrustedTrValue(h){
   return null;
 }
 function tkpSanitizeHistoricalSupportProvenance(r){
-  const liveToday=tkpIsCurrentLocalRaceDate(r?.race_date);
+  const raceDate=String(r?.race_date||'');
+  const sameRaceDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(raceDate)&&String(value||'')===raceDate;
   // R16.46 KÖK TR RESTORE: Eski, gerçekten Ganyan Canavarı'ndan içe aktarılmış
   // toplantılarda at üzerindeki tr_ganyan değeri saklanmış, fakat sonraki sürümlerde
   // eklenen per-horse tr_ganyan_source alanı henüz yoktu. Buna rağmen yarış düzeyinde
@@ -1251,13 +1252,14 @@ function tkpSanitizeHistoricalSupportProvenance(r){
       }
     }
     const gcJbyg=/^GANYAN_CANAVARI_JBYG$/i.test(String(h?.jbyg_source||''));
-    const liveTjkJbyg=liveToday&&/^TJK_PROGRAM_JBYG$/i.test(String(h?.jbyg_source||''));
+    // Race-day snapshots do not expire merely because the calendar day changed.
+    const liveTjkJbyg=sameRaceDate(h?.jbyg_asof_date)&&/^TJK_PROGRAM_JBYG$/i.test(String(h?.jbyg_source||''));
     const realGcZero=gcJbyg&&Number(h?.jbyg)===0;
     const j=tkpTrustedJBygRank(h);if(j==null&&!realGcZero&&!liveTjkJbyg){
       for(const k of ['jbyg','j_byg','jbyg_rank','j_byg_rank','team_strength_rank','team_rank','jockey_trainer_rank','jokey_antrenor_rank','jbyg_rate','team_strength_pct'])if(h?.[k]!=null)h[k]=null;
       if(/^TJK_PROGRAM_JBYG$/i.test(String(h?.jbyg_source||''))){h.jbyg_source=null;h.jbyg_asof_date=null;}
     }
-    const liveTjkGlp=liveToday&&/^TJK_PROGRAM_GALOP$/i.test(String(h?.glp_source||''));
+    const liveTjkGlp=sameRaceDate(h?.glp_asof_date)&&/^TJK_PROGRAM_GALOP$/i.test(String(h?.glp_source||''));
     const g=tkpTrustedGlpRank(h);if(g==null&&!liveTjkGlp){
       for(const k of ['g800','g800_rank','galop_rank','glp_rank'])if(h?.[k]!=null)h[k]=null;
       if(/^TJK_PROGRAM_GALOP$/i.test(String(h?.glp_source||''))){h.workout_800='';h.workout_600='';h.workout_400='';h.glp_source=null;h.glp_asof_date=null;}
@@ -1822,7 +1824,10 @@ function tkpTjkLiveEntity(data,type,raceCode,horse){
   if(!hit&&type==='horse'&&name)hit=scoped.find(e=>tkpTjkLiveNameKey(e?.name)===name);
   return hit||null;
 }
-function tkpTjkLivePct(value){const n=Number(value);return Number.isFinite(n)&&n>=0&&n<=100?n:null;}
+function tkpTjkLivePct(value){
+  if((typeof value!=='number'&&typeof value!=='string')||String(value).trim()==='')return null;
+  const n=Number(value);return Number.isFinite(n)&&n>=0&&n<=100?n:null;
+}
 function tkpTjkWorkoutSeconds(value){
   const raw=String(value??'').trim().replace(',','.');if(!raw)return null;
   const nums=raw.match(/\d+(?:\.\d+)?/g);if(!nums?.length)return null;
@@ -1883,6 +1888,23 @@ function tkpApplyLiveTjkProgramEnrichment(race,raceCode,data,date){
 // İLK SÜRÜM: Tek bir örnek dosyayla test edildi (Del Mar ABD, 26.07.2026). Kaynak
 // sitenin başka bir güne/şehre/koşu tipine (ör. çekilen at gösterimi) farklı bir HTML
 // varyantı çıkarması hâlinde ince ayar gerekebilir.
+
+// R19.38 — Tek aktif ürün: resmi 2. Altılı; resmi ikinci başlangıç yoksa son 6 koşu.
+// selection_mode veri/snapshot/öğrenmede bu iki kaynağı birbirine karıştırmaz.
+function tkpSelectSixWindow(totalRaces, markerStarts, requestedAlt=2){
+  const total=Math.max(0,Number(totalRaces)||0);
+  const clean=[...new Set((Array.isArray(markerStarts)?markerStarts:[])
+    .map(Number).filter(x=>Number.isInteger(x)&&x>=0&&x<total))].sort((a,b)=>a-b);
+  const wanted=Math.max(1,Number(requestedAlt)||2);
+  if(total<6) return {startIdx:0,selection_mode:'INSUFFICIENT_RACES',official_altili_no:null,official_altili_count:clean.length};
+  if(wanted===2 && clean.length>=2){
+    return {startIdx:clean[1],selection_mode:'SECOND_SIX_OFFICIAL',official_altili_no:2,official_altili_count:clean.length};
+  }
+  if(wanted!==2 && clean.length>=wanted){
+    return {startIdx:clean[wanted-1],selection_mode:'OFFICIAL_SIX',official_altili_no:wanted,official_altili_count:clean.length};
+  }
+  return {startIdx:Math.max(0,total-6),selection_mode:'LAST_SIX_FALLBACK',official_altili_no:null,official_altili_count:clean.length};
+}
 function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
   let doc = new DOMParser().parseFromString(htmlText, 'text/html');
   // Günlük kullanımda kolektörün TJK koşu-içi İdman/Jokey/Antrenör kanıtını oku.
@@ -1937,10 +1959,8 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
       if(found) markerStarts.push(i);
     }
   }
-  const fallbackStarts = raceDivs.length>6 ? [0,Math.max(0,raceDivs.length-6)] : [0];
-  const starts=[...new Set((markerStarts.length?markerStarts:fallbackStarts))].sort((a,b)=>a-b);
-  const selectedIndex=Math.min(Math.max(1,Number(altiliNo)||1),starts.length)-1;
-  const startIdx=starts[selectedIndex] ?? 0;
+  const sixWindow=tkpSelectSixWindow(raceDivs.length,markerStarts,altiliNo);
+  const startIdx=sixWindow.startIdx;
   const raceSlice = raceDivs.slice(startIdx, startIdx + 6);
   if (raceSlice.length < 6) throw new Error(`Altılı Ganyan başlangıcından itibaren 6 koşu yok (sadece ${raceSlice.length} koşu bulundu).`);
 
@@ -2176,7 +2196,7 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
 
   const dayName=tkpDayNameFromISO(date);
   const displayFilename=hip ? `${hip==='DEL MAR'?'DELMAR':hip} HTML` : 'HTML';
-  return { file:{sequence_no:null, filename: displayFilename, race_date:date, hippodrome:canonicalHippodrome(hip), altili_no:selectedIndex+1, altili_count:starts.length}, races };
+  return { file:{sequence_no:null, filename: displayFilename, race_date:date, hippodrome:canonicalHippodrome(hip), altili_no:2, altili_count:Math.max(1,sixWindow.official_altili_count), selection_mode:sixWindow.selection_mode, selection_start_race:startIdx+1, official_altili_no:sixWindow.official_altili_no, official_altili_count:sixWindow.official_altili_count}, races:races.map(r=>({...r,altili_no:2,selection_mode:sixWindow.selection_mode,selection_start_race:startIdx+1})) };
 }
 
 // --- TJK (tjk.org) "Yarış Sonuçları" sayfası ayrıştırıcısı ---
@@ -2201,8 +2221,19 @@ function tkpOfficialResultHorseIdentity(rawName,fallbackNo=''){
   return {no:match?match[1]:String(fallbackNo||'').trim(),
     name:match?(text.slice(0,match.index)+text.slice(match.index+match[0].length)).replace(/\s+/g,' ').trim():text};
 }
-function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
+function parseTjkResultsHTML(htmlText, filename, altiliNo=1, scope={}){
   let doc = new DOMParser().parseFromString(htmlText, 'text/html');
+  const statusRoot=doc.body.cloneNode(true);
+  statusRoot.querySelectorAll('script,style,template').forEach(node=>node.remove());
+  const statusNodes=doc.createTreeWalker(statusRoot,NodeFilter.SHOW_TEXT);
+  const statusParts=[];
+  while(statusNodes.nextNode())statusParts.push(statusNodes.currentNode.textContent);
+  const statusText=statusParts.join(' ').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/ı/g,'i').toLowerCase();
+  if(/\bgayri[\s\u200b-\u200d\ufeff-]*resmi\b/.test(statusText)){
+    const error=new Error('TJK sonuçları henüz resmileşmedi (GAYRİRESMİ). Sonuç ve ikramiye kaydedilmedi; resmileşince yeniden kontrol edin.');
+    error.code='TJK_RESULT_PENDING';
+    throw error;
+  }
 
   const titleEl = [...doc.querySelectorAll('h2')].find(el => /Yarış Sonuçları/i.test(el.textContent));
   const titleText = titleEl ? titleEl.textContent : doc.body.textContent;
@@ -2220,22 +2251,36 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
   const date = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : resultLinkDates.size===1?[...resultLinkDates][0]:null;
   if (!date) throw new Error('TJK Yarış Sonuçları sayfasında tarih bulunamadı.');
 
-  const programEl = _v25TjkCurrentProgramRoot(doc);
+  const programEl = _v25TjkCurrentProgramRoot(doc,scope?.hippodrome||'');
   const currentCityEl = doc.querySelector('ul.gunluk-tabs a.current[id]');
   const sehirEl = programEl.querySelector ? programEl.querySelector('[sehir]') : doc.querySelector('[sehir]');
-  const hipRaw = currentCityEl?.getAttribute('id') || programEl?.getAttribute?.('id') || sehirEl?.getAttribute('sehir') || '';
+  const hipRaw = sehirEl?.getAttribute('sehir') || programEl?.getAttribute?.('id') || currentCityEl?.getAttribute('id') || '';
   const hip = canonicalHippodrome(String(hipRaw || '').trim());
   if (!hip) throw new Error('TJK Yarış Sonuçları sayfasında hipodrom/şehir bulunamadı.');
 
   const raceRoot = (programEl && programEl.querySelector) ? programEl : doc;
-  const raceDivs = [...raceRoot.querySelectorAll('div[id^="kosubilgisi-"]')];
-  if (!raceDivs.length) throw new Error('TJK sayfasında koşu tablosu (kosubilgisi) bulunamadı.');
+  const resultDivs = [...raceRoot.querySelectorAll('div[id^="kosubilgisi-"]')];
+  // R19.35 KÖK FIX: henüz sonuçlanmamış son koşu için kosubilgisi div'i oluşmaz.
+  // Yalnız sonuç div'lerini saymak 8 koşuluk günde 7 koşu var sanıp 2. Altılıyı
+  // bir ayak sola kaydırıyordu. Üst yarış sekmeleri resmi tam koşu sırasıdır.
+  const tabAnchors=[...raceRoot.querySelectorAll('ul.races-tabs a[id^="anc"]')];
+  const tabEntries=tabAnchors.map((a,index)=>{
+    const id=String(a.getAttribute('id')||'').replace(/^anc/,'') || String(a.getAttribute('href')||'').match(/#(\d+)/)?.[1] || '';
+    const txt=String(a.textContent||'').replace(/\s+/g,' ').trim();
+    const raceNo=Number(txt.match(/(\d+)\s*\.\s*Koşu/i)?.[1])||index+1;
+    const raceDiv=id ? raceRoot.querySelector(`#kosubilgisi-${id}`) : null;
+    return {id,raceNo,anchor:a,raceDiv};
+  });
+  const raceEntries=tabEntries.length?tabEntries:resultDivs.map((raceDiv,index)=>({id:String(raceDiv.id||'').replace(/^kosubilgisi-/,''),raceNo:index+1,anchor:null,raceDiv}));
+  if (!raceEntries.length) throw new Error('TJK sayfasında koşu sırası bulunamadı.');
 
   // Sonuç sayfasında işaret DOM'u günlere göre değişebiliyor. Birden fazla
   // Altılı varsa hem işaret başlangıçları hem ilk/son altılı adayları üretilir.
   const markerStarts=[];
-  for(let i=0;i<raceDivs.length;i++){
-    let cur=raceDivs[i].previousElementSibling, guard=0, found=false;
+  for(let i=0;i<raceEntries.length;i++){
+    const entry=raceEntries[i];
+    if(!entry.raceDiv) continue;
+    let cur=entry.raceDiv.previousElementSibling, guard=0, found=false;
     while(cur && guard++<12){
       if(cur.matches && cur.matches('div[id^="kosubilgisi-"]')) break;
       const txt=fold(cur.textContent||'');
@@ -2244,12 +2289,28 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
     }
     if(found) markerStarts.push(i);
   }
-  const fallbackStarts=raceDivs.length>6 ? [0,Math.max(0,raceDivs.length-6)] : [0];
-  const starts=[...new Set(markerStarts.length ? markerStarts : fallbackStarts)].sort((a,b)=>a-b);
-  const selectedStart=starts[Math.min(Math.max(1,Number(altiliNo)||1),starts.length)-1] ?? starts[0] ?? 0;
-  const startIdx=selectedStart;
-  const raceSlice=raceDivs.slice(startIdx,startIdx+6);
-  if(raceSlice.length<6) throw new Error(`Altılı Ganyan başlangıcından itibaren 6 koşu yok (sadece ${raceSlice.length} koşu bulundu).`);
+  let raceFrom=Number(scope?.raceFrom),raceTo=Number(scope?.raceTo);
+  if(!(raceFrom>0&&raceTo-raceFrom===5)&&typeof db!=='undefined'){
+    const files=(db.files||[]).filter(f=>String(f.race_date)===date&&canonicalHippodrome(f.hippodrome)===hip
+      &&(!scope.targetFileId||String(f.id)===String(scope.targetFileId)));
+    const ranges=[];
+    for(const file of files){
+      const nums=[...new Set((db.races||[]).filter(r=>String(r.file_id)===String(file.id)).map(r=>Number(r._absRaceNo)).filter(n=>n>0))].sort((a,b)=>a-b);
+      if(nums.length===6&&nums[5]-nums[0]===5)ranges.push(nums[0]);
+    }
+    if(new Set(ranges).size===1){raceFrom=ranges[0];raceTo=raceFrom+5;}
+  }
+  if(!(raceFrom>0&&raceTo-raceFrom===5)){
+    const marker=markerStarts[Math.max(0,Number(altiliNo)-1)];
+    if(marker!=null){raceFrom=raceEntries[marker].raceNo;raceTo=raceFrom+5;}
+  }
+  if(!(Number.isInteger(raceFrom)&&raceFrom>0&&raceTo-raceFrom===5&&raceTo<=30)){
+    const error=new Error('Son altı koşunun kapsamı için tam TJK programı veya kayıtlı gerçek koşu numaraları gerekli.');
+    error.code='TJK_RESULT_SCOPE_REQUIRED';throw error;
+  }
+  const startIdx=raceFrom-1;
+  const sixWindow={selection_mode:'PROGRAM_RACE_NUMBERS',official_altili_count:Math.max(1,markerStarts.length),official_altili_no:Number(altiliNo)||2};
+  const raceSlice=Array.from({length:6},(_,i)=>raceEntries.find(e=>e.raceNo===raceFrom+i)||{raceNo:raceFrom+i,raceDiv:null});
 
   function parseAgfCell(cell){
     if (!cell) return null;
@@ -2330,19 +2391,38 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
   }
 
   let races = [];
-  raceSlice.forEach((raceDiv, idx) => {
+  raceSlice.forEach((raceEntry, idx) => {
     const leg = idx + 1;
+    const raceDiv=raceEntry?.raceDiv||null;
+    // Sonuç henüz yayımlanmamışsa ayağı koru fakat kazanan üretme: UI BEKLİYOR kalır.
+    if(!raceDiv){
+      races.push(normalizeRaceObj({id:Date.now()+leg,file_id:null,sequence_no:null,filename,race_date:date,hippodrome:hip,leg,distance:null,surface:'',breed:'',condition_text:'',horses:[],active:1,_absRaceNo:Number(raceEntry?.raceNo)||startIdx+idx+1,payouts:[],available_bets:[],_officialResultPending:1}));
+      return;
+    }
     const {condition, distance, surface, breed} = parseConfig(raceDiv);
-    const payouts = parsePayoutCardsFromDiv(raceDiv);
+    const payouts = parsePayoutCardsFromDiv(raceDiv).filter(p=>p.key!=='altili'||Number(raceEntry.raceNo)===raceTo);
     const availableBets=[...new Set(parseTjkAvailableBetsForRace(raceDiv).concat((payouts||[]).map(p=>p.key).filter(Boolean)))];
+    const resultTable=raceDiv.querySelector('table.tablesorter');
     const trs = [...raceDiv.querySelectorAll('table.tablesorter tbody tr')];
+    // TJK sonuç tablosunda sınıf adları zaman içinde değişebildiği için ST/KG/HP
+    // hücrelerini yalnız CSS suffix'ine bağlama. Başlık metni/title ile kolon indeksini
+    // bir kez çıkar; class seçicileri sadece geriye dönük fallback olsun.
+    const headerCells=[...(resultTable?.querySelectorAll('thead th')||[])];
+    const headerNorm=el=>String((el?.getAttribute?.('title')||'')+' '+(el?.textContent||''))
+      .replace(/İ/g,'I').replace(/ı/g,'i').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();
+    const colIndex=(tests)=>headerCells.findIndex(el=>tests.some(re=>re.test(headerNorm(el))));
+    const stCol=colIndex([/^ST$/,/START NO/,/KULVAR/]);
+    const kgCol=colIndex([/^KG$/,/KILO/,/KILOGRAM/]);
+    const hpCol=colIndex([/^HP$/,/HNDKP/,/HANDIKAP/,/^HC$/]);
     const horses = [];
     for (const tr of trs){
+      const cells=[...tr.querySelectorAll('td')];
       const noCell = tr.querySelector('[class*="GunlukYarisSonuclari-StartId"]');
       const nameCell = tr.querySelector('[class*="GunlukYarisSonuclari-AtAdi"]');
-      const hcCell = tr.querySelector('[class*="GunlukYarisSonuclari-Hc"]');
+      const hcCell = (hpCol>=0?cells[hpCol]:null) || tr.querySelector('[class*="GunlukYarisSonuclari-Hc"],[class*="GunlukYarisSonuclari-Hp"],[class*="GunlukYarisSonuclari-HNDKP"]');
+      const startCell = (stCol>=0?cells[stCol]:null) || tr.querySelector('[title*="Start No" i],[class*="GunlukYarisSonuclari-St"],[class*="GunlukYarisSonuclari-Kulvar"]');
+      const weightCell = (kgCol>=0?cells[kgCol]:null) || tr.querySelector('[class*="GunlukYarisSonuclari-Kilo"],[class*="GunlukYarisSonuclari-Kg"]');
       const agfCell = tr.querySelector('[class*="GunlukYarisSonuclari-AGFORAN"]');
-      const cells=[...tr.querySelectorAll('td')];
       const sonucCell = tr.querySelector('[class*="GunlukYarisSonuclari-SONUCNO"]')
         || cells.find(c=>/SONUCNO|SONUÇNO|DERECE/i.test(String(c.className||'')))
         || cells.find(c=>finishPositionFromResultCell(c)!=null);
@@ -2360,9 +2440,16 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
       // KULVAR/START NO: "St" sütununun (title="Start No") başlığı bunu doğruluyor --
       // at/program numarasından bağımsız, gerçek kulvar bilgisi. Sadece bilgi amaçlı
       // ayrı bir alanda saklanır; yukarıdaki "no" (at numarası) tespitini etkilemez.
-      // Sonuç sayfasındaki StartId geçmişte ST diye yanlış kullanıldı. ST yalnız TJK Program
-      // title="Start No" sütununun sahibidir; sonuç parserı bu alanı taşımaz.
-      const kulvar = null;
+      // ST yalnız resmi sonuç tablosundaki 'St / Start No / Kulvar' başlıklı kolondan alınır.
+      // StartId program numarası/kimlik fallback'i olarak ST'ye kesinlikle kullanılmaz.
+      const startRaw=String(startCell?.textContent||'').trim();
+      const startVal=Number(startRaw.match(/\d{1,2}/)?.[0]);
+      const resultStartNo=Number.isInteger(startVal)&&startVal>=1&&startVal<=30?startVal:null;
+      const weightRaw=String(weightCell?.textContent||'').replace(/\u00a0/g,' ').trim();
+      const weightMatch=weightRaw.match(/^(\d{2}(?:[.,]\d)?)/);
+      const weightVal=weightMatch?Number(weightMatch[1].replace(',','.')):NaN;
+      const resultWeightKg=Number.isFinite(weightVal)&&weightVal>=30&&weightVal<=80?weightVal:null;
+      const kulvar = resultStartNo;
       // At ismi hücresinde isimden hemen sonra kendi program no'su "(N)" olarak
       // tekrar yazılır -- bu Program sayfasındaki finish-position span'ından farklı;
       // burada sadece düz metin olarak isme yapışık gelir, bu yüzden regex ile
@@ -2372,9 +2459,8 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
       const explicitNonRunner = tkpTjkRowIsExplicitNonRunner(tr,nameCell,nameLink);
       if (explicitNonRunner && !tkpExplicitNonRunnerText(name)) name = (name + ' (KOŞMAZ)').trim();
       const hnd = n(hcCell ? hcCell.textContent : '');
-      // TJK Sonuç sayfasında kulvar/start bilgisi doğrudan StartId hücresindedir.
-      // Eski kod burada tanımsız `startCell` değişkenine eriştiği için parser
-      // ReferenceError ile duruyor, sonuç önizlemesi oluşmuyor ve kayıt BEKLİYOR kalıyordu.
+      // ST/KG/HP resmi TJK sonuç tablosunun başlık-eşlemeli kolonlarından okunur;
+      // şema değişirse yanlış kolonu sessizce kullanmak yerine alan boş bırakılır.
       const agf = standardAgfValue(parseAgfCell(agfCell));
       const finishPos = finishPositionFromResultCell(sonucCell);
       // TJK sonuç sayfasında bazı şablonlarda at/koşu derecesi ayrı bir hücrede gelir.
@@ -2385,7 +2471,7 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
       // Legacy sonuç zamanı sütun eşleşmesi güvenilir değildi. Doğrulanmış ayrı bir
       // şema gelene kadar geçmiş/gelecek sonuçtan zaman taşınmaz; best_time korunur.
       const resultTime = '';
-      horses.push({no, name, agf, hnd: (hnd==null?null:hnd), finishPos, resultTime, kulvar});
+      horses.push({no, name, agf, hnd: (hnd==null?null:hnd), finishPos, resultTime, kulvar, resultStartNo, resultWeightKg});
     }
 
     // Sonuç sayfasındaki aynı footer bilgisi de etiketlenir. Böylece kazanan
@@ -2405,13 +2491,14 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
       winner: h.finishPos === 1 ? 1 : 0,
       result_time: '',
       official_time: '',
-      start_no: null
+      start_no: h.resultStartNo, start_no_source: h.resultStartNo!=null?'TJK_RESULT':'',
+      weight_kg: h.resultWeightKg, weight_kg_source: h.resultWeightKg!=null?'TJK_RESULT':''
     }));
 
     const parsedRace=normalizeRaceObj({
       id: Date.now()+leg, file_id:null, sequence_no:null, filename, race_date:date, hippodrome:hip,
       leg, distance, surface, breed, condition_text: condition, horses: horseObjs, active:1,
-      _absRaceNo: startIdx + idx + 1, payouts, available_bets: availableBets, ekuri_groups: ekuriGroupsForRace
+      _absRaceNo: Number(raceEntry?.raceNo)||startIdx + idx + 1, payouts, available_bets: availableBets, ekuri_groups: ekuriGroupsForRace
     });
     tkpApplyVerifiedOfficialResultOrder(parsedRace);
     races.push(parsedRace);
@@ -2419,7 +2506,7 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1){
 
   const dayName=tkpDayNameFromISO(date);
   const displayFilename=hip ? `${hip==='DEL MAR'?'DELMAR':hip} HTML` : 'HTML';
-  return { file:{sequence_no:null, filename: displayFilename, race_date:date, hippodrome:canonicalHippodrome(hip), altili_no:Math.min(Math.max(1,Number(altiliNo)||1),starts.length), altili_count:starts.length}, races };
+  return { file:{sequence_no:null, filename: displayFilename, race_date:date, hippodrome:canonicalHippodrome(hip), altili_no:2, altili_count:Math.max(1,sixWindow.official_altili_count), selection_mode:sixWindow.selection_mode, selection_start_race:startIdx+1, official_altili_no:sixWindow.official_altili_no, official_altili_count:sixWindow.official_altili_count}, races:races.map(r=>({...r,altili_no:2,selection_mode:sixWindow.selection_mode,selection_start_race:startIdx+1})) };
 }
 
 // Bir at isminin başındaki temiz ismi döndürür (ekipman kodlarını -KG,K,DB,SK,SKG,BB,GKR,*- atar).
@@ -2488,7 +2575,7 @@ function nearestRaceNoForTable(table, doc){
   const titleText = (doc.querySelector('title')?.textContent || '').trim();
   return raceNoFromLooseText(titleText);
 }
-function parseJockeyTableRecord(table, fallbackRaceNo){
+function parseJockeyTableRecord(table, fallbackRaceNo, options={}){
   const trs = [...table.querySelectorAll('tr')].filter(tr => [...tr.querySelectorAll('th,td')].length);
   if (!trs.length) return null;
 
@@ -2564,6 +2651,9 @@ function parseJockeyTableRecord(table, fallbackRaceNo){
     pctIdx = best >= 0 ? best : Math.max(0, colCount-1);
   }
 
+  const jockeyIdx=headers.findIndex(h=>/^(?:JOKEY|JKY)(?:\s+(?:ADI|ISMI))?$/.test(h));
+  const trainerIdx=headers.findIndex(h=>/^(?:ANTRENOR|ANTRENÖR|ANT)(?:\s+(?:ADI|ISMI))?$/.test(h));
+  const identityRows=[];
   let entries = [];
   for (const tr of dataRows){
     const cells = [...tr.querySelectorAll('th,td')];
@@ -2594,6 +2684,7 @@ function parseJockeyTableRecord(table, fallbackRaceNo){
     }
     const name = baseHorseName(rawName);
     const pct = parseJockeyRateNumber(cells[pctIdx]?.textContent || '');
+    if(options.includeIdentity&&no&&name)identityRows.push({no,name,jockey_name:String(cells[jockeyIdx]?.textContent||'').trim(),trainer_name:String(cells[trainerIdx]?.textContent||'').trim()});
     if ((!no && !name) || pct === null) continue;
     entries.push({no, name, pct});
   }
@@ -2603,7 +2694,7 @@ function parseJockeyTableRecord(table, fallbackRaceNo){
   // Yüzde büyükten küçüğe sıralanır; yazılacak değer en fazla 7'dir.
   // Yani 1,2,3,4,5,6,7; 8 ve sonrası yazılmaz.
   entries = entries.filter(e => Number(e.pct) > 8.50);
-  if (!entries.length) return null;
+  if (!entries.length&&!identityRows.length) return null;
   entries.sort((a,b) => (b.pct - a.pct) || (Number(a.no || 999) - Number(b.no || 999)) || TKP_TR_COLLATOR.compare(String(a.name||''),String(b.name||'')));
   const ranks = {}, ranksByName = {};
   entries.slice(0,7).forEach((e,i) => {
@@ -2611,9 +2702,9 @@ function parseJockeyTableRecord(table, fallbackRaceNo){
     if (e.no && ranks[e.no] == null) ranks[e.no] = rank;
     if (e.name && ranksByName[e.name] == null) ranksByName[e.name] = rank;
   });
-  return {raceNo:fallbackRaceNo || null, ranks, ranksByName, entries: entries.slice(0,7)};
+  return {raceNo:fallbackRaceNo || null, ranks, ranksByName, entries: entries.slice(0,7),...(options.includeIdentity?{identity_rows:identityRows}:{})};
 }
-function parseJockeyPerformanceRecords(htmlText){
+function parseJockeyPerformanceRecords(htmlText, options={}){
   const doc = new DOMParser().parseFromString(htmlText, 'text/html');
   const titleText = (doc.querySelector('title')?.textContent) || doc.body.textContent || '';
   const titleRaceNo = raceNoFromLooseText(titleText);
@@ -2631,7 +2722,7 @@ function parseJockeyPerformanceRecords(htmlText){
   const seen = new Set();
   for (const table of tryTables){
     const rn = nearestRaceNoForTable(table, doc) || titleRaceNo;
-    const rec = parseJockeyTableRecord(table, rn);
+    const rec = parseJockeyTableRecord(table, rn, options);
     if (!rec) continue;
     const sig = `${rec.raceNo || ''}|${rec.entries.map(e=>`${e.no}:${e.name}:${e.pct}`).join(';')}`;
     if (seen.has(sig)) continue;
@@ -3057,7 +3148,7 @@ function readyCouponScope(card){
   const scope=readyCouponFold(card?.readyScope||card?.scope||card?.ppsct||'');
   return scope?`${base}|${scope}`:base;
 }
-function dedupeReadyCouponCards(cards){const chosen=new Map();for(const [index,card] of (cards||[]).entries()){if(!card||!Array.isArray(card.legs)||!card.legs.length)continue;const source=readyCouponFold(card.source||card.kind||'ready'),author=readyCouponFold(card.author||`${source}:site_feed`),meeting=readyCouponFold(card.meeting||card.hippodrome||'meeting'),key=[source,author,meeting,readyCouponScope(card)].join('|'),candidate={card,index,variantRank:readyCouponVariantRank(card.variant)},previous=chosen.get(key);if(!previous||candidate.variantRank>previous.variantRank)chosen.set(key,candidate);}return [...chosen.values()].sort((a,b)=>a.index-b.index).map(x=>x.card);}
+function dedupeReadyCouponCards(cards){const chosen=new Map();for(const [index,card] of (cards||[]).entries()){if(!card||!Array.isArray(card.legs)||!card.legs.length)continue;const source=readyCouponFold(card.source||card.kind||'ready'),author=readyCouponFold(card.author||`${source}:site_feed`),meeting=readyCouponMeetingKey(card.meeting||card.hippodrome||'meeting'),key=[source,author,meeting,readyCouponScope(card)].join('|'),candidate={card,index,variantRank:readyCouponVariantRank(card.variant)},previous=chosen.get(key);if(!previous||candidate.variantRank>previous.variantRank)chosen.set(key,candidate);}return [...chosen.values()].sort((a,b)=>a.index-b.index).map(x=>x.card);}
 function parseReadyCouponSnapshot(jsonText,expectedSource='misli'){
   const root=readyCouponJson(jsonText),declaredSource=root?.source||root?._tkp?.source||'',source=String(declaredSource||expectedSource||'ready_coupon').trim().toLowerCase();if(expectedSource&&declaredSource&&source!==String(expectedSource).trim().toLowerCase())throw new Error(`Hazır kupon kaynağı uyuşmuyor: ${source}`);
   const canonical=Array.isArray(root?.coupons),rows=canonical?root.coupons:readyCouponRawNodes(root?.raw?.data??root?.data??root),fallbackMeeting=readyCouponScalar(root?.meeting??root?._tkp?.meeting,['hippodrome','hpd']),cards=[];
@@ -3168,11 +3259,51 @@ function parseLiderformExpertHTML(htmlText){
 // Kullanıcı tercihi: eski ODS/VALUE kurallarıyla aynı toplam puan ölçeği.
 // Yorumcu tercih puanları toplanır; kaynak sayısına bölünmez. Aynı kartın
 // kopyaları ve aynı yazarın geniş kuponu önceden tekilleştirilir.
-const TKP_YPUAN_POLICY='R16.83_INDEPENDENT_TOTAL';
+const TKP_YPUAN_POLICY='R19.42_IDENTITY_INDEPENDENT_TOTAL';
+
+// Yerli yarışların tarihsel Y.PUAN ölçeğini değiştirmeden yabancı yorumcu
+// toplamını ayır: yabancı kaynak sayısı az olduğu için ham toplam 2/2,5/3'e
+// bölünmez. Hipodrom bilinmiyorsa ATR kaynağı yabancı yarış kanıtıdır.
+function tkpForeignYpuanRace(race){
+  const city=String(race?.hippodrome||race?.race_city||race?.city||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');
+  const domestic=/^(ADANA|ANKARA|ANTALYA|BURSA|DİYARBAKIR|DIYARBAKIR|ELAZIĞ|ELAZIG|İSTANBUL|ISTANBUL|İZMİR|IZMIR|İZMİT|IZMIT|KOCAELİ|KOCAELI|ŞANLIURFA|SANLIURFA|VAN|ESKİŞEHİR|ESKISEHIR)$/;
+  if(city)return !domestic.test(city);
+  return Array.isArray(race?.horses)&&race.horses.some(h=>h?.atr_source==='At The Races');
+}
+// Yabancı: ham toplam puan, kaynak sayısına ve sabit 3'e bölünmez.
+// Yerli: orijinal kademeli ölçek korunur.
+function tkpYpuanScaleFromRaw(rawVal,race){
+  const x=Number(rawVal);
+  if(!Number.isFinite(x))return null;
+  if(tkpForeignYpuanRace(race))return Math.max(0,x);
+  return x<=100?x/2:(x<=200?50+(x-100)/2.5:90+(x-200)/3);
+}
+// Eski içe aktarımlar (ör. R16.83 ara sürümü, dosya 510-517) ham toplamı ölçeksiz yazmıştı:
+// ypuan_raw boş, ypuan=ham toplam (örn. 336). Güncel mantıkla aynı ölçek uygulanır; ham değer
+// ypuan_raw'a taşınır. İdempotent: ypuan_raw dolu atlar atlanır. ODS gömülü/ elle Y.PUAN'a dokunmaz.
+function tkpBackfillYpuanScale(dbLike){
+  const x=dbLike||(typeof db!=='undefined'?db:null);
+  if(!x||!Array.isArray(x.races))return false;
+  let changed=false,horses=0,races=0;
+  for(const r of x.races){
+    let touched=false;
+    for(const h of (r?.horses||[])){
+      if(!h||h.ypuan_raw!=null)continue;
+      if(!String(h.ypuan_source||'').startsWith('COMMENTATOR'))continue;
+      const raw=Number(h.ypuan);
+      if(!Number.isFinite(raw)||raw<=0)continue;
+      h.ypuan_raw=raw;h.ypuan=tkpYpuanScaleFromRaw(raw,r);horses++;touched=true;
+    }
+    if(touched){r.ypuan_policy=TKP_YPUAN_POLICY;races++;changed=true;}
+  }
+  if(changed&&x.settings){x.settings.ypuan_scale_backfill_last={at:new Date().toISOString(),races,horses};}
+  return changed;
+}
+if(typeof globalThis!=='undefined'){globalThis.tkpBackfillYpuanScale=tkpBackfillYpuanScale;globalThis.tkpYpuanScaleFromRaw=tkpYpuanScaleFromRaw;}
 
 function readyCouponAuthorRaceRows(cardsList,{liveOnly=false}={}){
   const rows=new Map(),ready=(cardsList||[]).filter(c=>(c?.readyCoupon===true||READY_COUPON_SOURCES.has(String(c?.source||c?.kind||'').toLowerCase()))&&(!liveOnly||c?._tkp_live_pre_race===true));
-  for(const card of dedupeReadyCouponCards(ready)){const source=String(card.source||card.kind||'ready').trim().toLowerCase(),author=String(card.author||`${source}:site_feed`).replace(/\s+/g,' ').trim(),meeting=readyCouponFold(card.meeting||card.hippodrome||'meeting'),scope=readyCouponScope(card);for(const leg of card.legs||[]){const raceNo=Number(leg?.raceNo);if(!Number.isFinite(raceNo))continue;const picks=[...new Set((leg?.picks||[]).map(x=>String(x).match(/^\s*0*(\d{1,3})(?:\D|$)/)?.[1]).filter(Boolean))];if(!picks.length)continue;const key=[source,readyCouponFold(author),meeting,raceNo].join('|');if(!rows.has(key)||(card._tkp_selected_scope===true&&rows.get(key).card._tkp_selected_scope!==true))rows.set(key,{source,author,meeting,scope,raceNo,picks,card});}}return [...rows.values()];
+  for(const card of dedupeReadyCouponCards(ready)){const source=String(card.source||card.kind||'ready').trim().toLowerCase(),author=String(card.author||`${source}:site_feed`).replace(/\s+/g,' ').trim(),meeting=readyCouponMeetingKey(card.meeting||card.hippodrome||'meeting'),scope=readyCouponScope(card);for(const leg of card.legs||[]){const raceNo=Number(leg?.raceNo);if(!Number.isFinite(raceNo))continue;const picks=[...new Set((leg?.picks||[]).map(x=>String(x).match(/^\s*0*(\d{1,3})(?:\D|$)/)?.[1]).filter(Boolean))];if(!picks.length)continue;const key=[source,readyCouponFold(author),meeting,raceNo].join('|');if(!rows.has(key)||(card._tkp_selected_scope===true&&rows.get(key).card._tkp_selected_scope!==true))rows.set(key,{source,author,meeting,scope,raceNo,picks,card});}}return [...rows.values()];
 }
 function commentatorHistoryWeight(source,author,picks=[]){
   try{
@@ -3259,7 +3390,16 @@ function aggregateIndependentExpertVotes(cardsList){
 }
 
 function aggregateReadyCouponSingleConsensus(cardsList){const races={};for(const row of readyCouponAuthorRaceRows(cardsList,{liveOnly:true})){if(row.picks.length!==1)continue;const race=races[row.raceNo]||(races[row.raceNo]={sites:new Set(),byHorse:{}});race.sites.add(row.source);const no=row.picks[0],horse=race.byHorse[no]||(race.byHorse[no]={sources:new Set(),authors:new Set()});horse.sources.add(row.source);horse.authors.add(`${row.source}:${row.author}`);}const out={};for(const [raceNo,race] of Object.entries(races)){const byHorse={};for(const [no,horse] of Object.entries(race.byHorse)){const sources=[...horse.sources].sort(),authors=[...horse.authors].sort();byHorse[no]={siteCount:sources.length,sources,authorCount:authors.length,authors,actionable:sources.length>=2};}out[raceNo]={liveSingleSites:[...race.sites].sort(),byHorse};}return out;}
-function readyCouponMeetingMatches(card,targetMeeting){const a=readyCouponFold(card?.meeting||card?.hippodrome).replace(/\bhipodromu?\b/g,'').trim(),b=readyCouponFold(targetMeeting).replace(/\bhipodromu?\b/g,'').trim();return !a||!b||a===b||a.includes(b)||b.includes(a);}
+function readyCouponMeetingKey(value){
+  // Collector API removes spaces; HTML cards keep spaces, accents and country
+  // labels. Compare canonical identities, never substrings (York != New York).
+  const key=readyCouponFold(value).replace(/\bhipodromu?\b/g,'')
+    .replace(/\s+(?:abd|usa|amerika|united states|kanada|canada|fransa|france|ingiltere|england|uk|birlesik krallik|irlanda|ireland|almanya|germany|italya|italy|avustralya|australia|guney afrika|south africa|japonya|japan|arjantin|argentina|hong kong|sili|chile)\s*$/,'')
+    .replace(/\s+/g,'');
+  const venues={adanayesiloba:'adana',istanbulveliefendi:'istanbul'};
+  return venues[key]||key;
+}
+function readyCouponMeetingMatches(card,targetMeeting){const a=readyCouponMeetingKey(card?.meeting||card?.hippodrome),b=readyCouponMeetingKey(targetMeeting);return !a||!b||a===b;}
 function readyCouponMatchesAltili(card,selectedAbs){const wanted=[...selectedAbs].filter(Number.isFinite).sort((a,b)=>a-b),seen=[...new Set((card?.legs||[]).map(x=>Number(x?.raceNo)).filter(Number.isFinite))].sort((a,b)=>a-b);return wanted.length>0&&seen.length===wanted.length&&seen.every((no,index)=>no===wanted[index]);}
 // R16.23 / 213 davranışı: yorumcu kartları altılı ürün adına göre değil MUTLAK koşu
 // numarasına göre bağlanır. 1. Altılı 1-6 ve 2. Altılı 4-9 ise 4-5-6 aynı gerçek
@@ -3390,6 +3530,26 @@ function tkpParseAtrDate(text, filename){
   const mons={january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
   return `${m[3]}-${String(mons[m[2].toLowerCase()]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
 }
+// Accept only explicit market-odds signals; OR/official rating is NOT a price.
+function tkpAtrParseDecimalOdds(raw){
+  let s=String(raw??'').trim();
+  if(!s)return null;
+  const fractional=s.match(/^(\d{1,3})\s*\/\s*(\d{1,3})$/);
+  if(fractional){const den=Number(fractional[2]);return den>0?1+Number(fractional[1])/den:null;}
+  const m=s.match(/^(?:odds?\s*[:=]\s*)?(\d{1,3}(?:[.,]\d{1,2})?)$/i);
+  if(!m)return null;
+  const n=Number(m[1].replace(',','.'));
+  return n>1&&n<1000?n:null;
+}
+function tkpAtrOddsFromElement(entry){
+  if(!entry)return null;
+  const el=entry.querySelector('[data-odds], [data-decimal-odds], [class*="odds" i] [data-price], [class*="odds" i]');
+  if(!el)return null;
+  for(const value of [el.getAttribute('data-decimal-odds'),el.getAttribute('data-odds'),el.getAttribute('data-price'),el.textContent]){
+    const n=tkpAtrParseDecimalOdds(value);if(n!=null)return n;
+  }
+  return null;
+}
 function tkpParseAtTheRacesSingleHTML(text, filename, forcedUrl=''){
   const doc=new DOMParser().parseFromString(String(text||''),'text/html');
   const title=tkpAtrText(doc.title||'');
@@ -3399,29 +3559,39 @@ function tkpParseAtTheRacesSingleHTML(text, filename, forcedUrl=''){
   const hip=(title.match(/(?:^|\|)\s*([^|]+?)(?:\s*\(USA\))?\s*\|?\s*(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/i)?.[1]||
     (title.match(/(?:^|\s)([A-Za-z][A-Za-z .'-]+?)\s*\(USA\)\s+\d{1,2}\s+[A-Z][a-z]+\s+20\d{2}/)?.[1]||'')).trim();
   const date=tkpParseAtrDate(title+' '+desc+' '+urlHint,filename);
+  // ATR's saved bookmaker odds grid is separate from runner cards. Match by
+  // the horse-name token in the odds cell id, NEVER by displayed row position.
+  const atrOddsByName=new Map();
+  doc.querySelectorAll('.odds-grid__row--horse[data-bestprice]').forEach(gridRow=>{
+    const price=Number(gridRow.getAttribute('data-bestprice'));
+    if(!(price>1 && Number.isFinite(price)))return;
+    const horseCell=[...gridRow.querySelectorAll('[id]')].find(el=>/^[A-Za-z][A-Za-z0-9]*-1$/.test(el.id||''));
+    const key=tkpAtrNormName((horseCell?.id||'').replace(/-1$/,'')).replace(/[^A-Z0-9]/gi,'').toUpperCase();
+    if(key)atrOddsByName.set(key,price);
+  });
   const rows=[]; const seen=new Set();
   const anchors=[...doc.querySelectorAll('a.horse__link, a[href*="horse-form" i], a[href*="/horse/" i], a[href*="historical-data" i]')];
   const addRow=(entry,a)=>{
     const name=tkpAtrText(a?.textContent||'').replace(/\s*historical\s+data\/form\s*$/i,'').replace(/\s*\([A-Z]{2,3}\)\s*$/i,'');
     if(!name||name.length<2||name.length>80)return;
     const key=tkpAtrNormName(name); if(!key||seen.has(key))return;
+    const oddsNameKey=tkpAtrNormName(name.replace(/\s*\([A-Z]{2,3}\)\s*$/i,'')).replace(/[^A-Z0-9]/gi,'').toUpperCase();
     const block=entry||a.closest('.card-entry,[data-number],article,li,tr,section,div');
     const blockText=tkpAtrText(block?.textContent||'');
     const no=String(block?.getAttribute?.('data-number')||blockText.match(/^\s*(\d{1,2})(?:\s|\(|$)/)?.[1]||'').trim();
-    const form=tkpAtrText(block?.querySelector?.('.card-form__stats,[class*="form" i]')?.textContent||'') || (blockText.match(/\b([0-9\/-]{2,12})\b/)?.[1]||'');
+    const formRaw=tkpAtrText(block?.querySelector?.('.card-form__stats,[class*="form" i]')?.textContent||'');
+    const form=formRaw.match(/^[0-9\/-]{2,16}/)?.[0] || (blockText.match(/\b([0-9\/-]{2,12})\b/)?.[1]||'');
     const orText=tkpAtrText(block?.querySelector?.('.card-stats__or,[class*="rating" i],[class*="official" i]')?.textContent||'');
     let officialRating=Number(orText.match(/\b\d{1,3}\b/)?.[0]);
-    if(!Number.isFinite(officialRating)){
-      const nums=[...blockText.matchAll(/\b(\d{2,3})\b/g)].map(m=>Number(m[1])).filter(n=>n>=20&&n<=140);
-      officialRating=nums.length?nums[nums.length-1]:NaN;
-    }
+    // No OR element: do not infer an official handicap rating from distances, odds or years.
+    if(!Number.isFinite(officialRating)) officialRating=NaN;
     let comment=tkpAtrText(block?.querySelector?.('[data-id="card-core"] .card-cell-pinsticker p,.card-cell-pinsticker p,[class*="comment" i] p')?.textContent||'');
     if(!comment){
       const cm=blockText.match(/(?:Strong contender|Leading contender|Major player|Big player|Should go well|Could go well|Capable of better|Likely to be competitive|Difficult to assess|May benefit|Best to avoid|Stands chance)[^.]*\.?/i);
       comment=cm?tkpAtrText(cm[0]):'';
     }
-    const nonRunner=/non.?runner|withdrawn|scratched/i.test(blockText);
-    rows.push({no,name,nameKey:key,form,officialRating:Number.isFinite(officialRating)?officialRating:null,comment,nonRunner}); seen.add(key);
+    const nonRunner=!!block?.querySelector?.('.non-runner, .card-entry--non-runner, .card-entry--nonrunner') || /\b(?:non.?runner|withdrawn|scratched)\b/i.test(blockText);
+    rows.push({no,name,nameKey:key,form,officialRating:Number.isFinite(officialRating)?officialRating:null,comment,nonRunner,atrGanyan:atrOddsByName.get(oddsNameKey)??tkpAtrOddsFromElement(block)}); seen.add(key);
   };
   doc.querySelectorAll('.card-entry[data-number]').forEach(entry=>addRow(entry,entry.querySelector('a.horse__link, a[href*="horse-form" i], a[href*="/horse/" i]')));
   if(!rows.length) anchors.forEach(a=>addRow(a.closest('.card-entry,[data-number],article,li,tr,section,div'),a));
@@ -3442,8 +3612,8 @@ function tkpAtrRowFromStructured(raw){
   let comment='';
   const cm=blockText.match(/(?:Strong contender|Strong claims|Leading contender|Major player|Big player|Should go well|Could go well|Capable of better|Likely to be competitive|Worthy of consideration|Recent winner worth consideration|Stands chance|Has shown ability|Has potential|Likely to appreciate|Best to avoid|Difficult to fancy|Difficult to recommend|Unlikely to trouble|Needs improvement|Disappointing recent efforts|Hard to assess)[^.]*\.?/i);
   if(cm)comment=tkpAtrText(cm[0]);
-  const nonRunner=/non.?runner|withdrawn|scratched/i.test(blockText);
-  return {no,name,nameKey:key,form,officialRating:Number.isFinite(officialRating)?officialRating:null,comment,nonRunner};
+  const nonRunner=Boolean(raw?.nonRunner ?? raw?.non_runner) || /\b(?:non.?runner|withdrawn|scratched)\b/i.test(blockText);
+  return {no,name,nameKey:key,form,officialRating:Number.isFinite(officialRating)?officialRating:null,comment,nonRunner,atrGanyan:tkpAtrParseDecimalOdds(raw?.odds??raw?.decimalOdds??raw?.price??raw?.ganyan)};
 }
 function tkpAtrRaceMetaFromBundlePage(p,filename){
   const title=tkpAtrText(p?.title||''); const txt=tkpAtrText(p?.text||''); const url=String(p?.url||'');
@@ -3701,10 +3871,76 @@ function tkpBuildFromAtrRecords(atrRecords){
   return {file:{sequence_no:null,filename:'ATR DELMAR HTML',race_date:meetingDate,hippodrome:hip,altili_no:1,altili_count:1},races};
 }
 
+// Foreign-only ATR evidence score; never replaces TJK AGF or domestic TKP points.
+// Missing indicators are omitted and remaining weights are renormalized.
+function tkpAtrForeignEvidenceScore(race){
+  const horses=(race?.horses||[]).filter(h=>!h.non_runner&&!h.atr_non_runner);
+  const ors=horses.map(h=>Number(h.atr_or)).filter(v=>Number.isFinite(v)&&v>0&&v<150);
+  const minOR=ors.length?Math.min(...ors):null,maxOR=ors.length?Math.max(...ors):null;
+  const priced=horses.filter(h=>Number(h.atr_ganyan)>1&&Number.isFinite(Number(h.atr_ganyan)));
+  const marketDen=priced.reduce((a,h)=>a+1/Number(h.atr_ganyan),0);
+  for(const h of race?.horses||[]){
+    h.atr_foreign_score=null; h.atr_foreign_confidence=0;
+    if(h.non_runner||h.atr_non_runner)continue;
+    const parts=[];
+    if(marketDen>0&&priced.length>=2&&Number(h.atr_ganyan)>1){
+      const raw=(1/Number(h.atr_ganyan))/marketDen;
+      const highest=Math.max(...priced.map(x=>(1/Number(x.atr_ganyan))/marketDen));
+      parts.push([0.35,highest?raw/highest:0]);
+      h.atr_synthetic_agf=Number((100*raw).toFixed(2));
+    }else h.atr_synthetic_agf=null;
+    if(h.atr_form&&Number.isFinite(Number(h.atr_form_score)))parts.push([0.30,Math.max(0,Math.min(1,Number(h.atr_form_score)))]);
+    if(Number(h.atr_or)>0&&minOR!==null&&maxOR>minOR)parts.push([0.20,(Number(h.atr_or)-minOR)/(maxOR-minOR)]);
+    if(String(h.atr_comment||'').trim())parts.push([0.15,(Math.max(-1,Math.min(1,Number(h.atr_comment_score)||0))+1)/2]);
+    // ATR expert commentary provides a foreign-only Y.PUAN signal on the same
+    // 0..20 scale. Keep provenance; never overwrite a genuine commentator Y.PUAN.
+    // Neutral language maps to 10, supportive to >10, adverse to <10.
+    if(String(h.atr_comment||'').trim()){
+      const cs=Math.max(-1,Math.min(1,Number(h.atr_comment_score)||0));
+      h.atr_ypuan=Number((10+10*cs).toFixed(2));
+      h.atr_ypuan_source='ATR_COMMENT_MANUAL';
+      if(h.ypuan_source==='ATR_COMMENT_MANUAL' || h.ypuan==null || h.ypuan===''){
+        h.ypuan=h.atr_ypuan;
+        h.ypuan_source='ATR_COMMENT_MANUAL';
+      }
+    }else{
+      delete h.atr_ypuan;
+      delete h.atr_ypuan_source;
+      if(h.ypuan_source==='ATR_COMMENT_MANUAL'){
+        h.ypuan=null;
+        h.ypuan_source='';
+      }
+    }
+    const den=parts.reduce((a,x)=>a+x[0],0);
+    if(parts.length>=2&&den>=0.35){
+      h.atr_foreign_score=Number((100*parts.reduce((a,x)=>a+x[0]*x[1],0)/den).toFixed(2));
+      h.atr_foreign_confidence=Number(den.toFixed(2));
+    }
+  }
+}
 function tkpApplyAtrRecords(p, atrRecords){
   const logs=[];
   for(const rec of atrRecords||[]){
-    let candidates=(p.races||[]).filter(r=>!rec.raceNo || Number(r._absRaceNo)===Number(rec.raceNo));
+    // ATR tek koşu kartıdır; ana TJK bülteninin yerini almaz.
+    // Tarih ve pist farklıysa başka toplantıya veri yazmak yerine açıklamalı reddet.
+    const dateText=String(rec.date||'').slice(0,10);
+    const meetingDate=String(p?.file?.race_date||'').slice(0,10);
+    const dayAfter=(day)=>{const d=new Date(day+'T12:00:00Z');if(!Number.isFinite(d.getTime()))return '';d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10);};
+    // ATR's midnight cards are dated by displayed clock day; TJK uses the meeting day.
+    // Do not relax the check for afternoon/evening races or non-adjacent dates.
+    // The runner-name overlap is independently verified below before anything is written.
+    const cardTime=String(rec.filename||'').match(/(?:^|\D)(\d{2})[_:.](\d{2})(?:\D|$)/);
+    const hour=cardTime?Number(cardTime[1]):NaN;
+    const minute=cardTime?Number(cardTime[2]):NaN;
+    const midnightCarry=!!dateText&&!!meetingDate&&dayAfter(meetingDate)===dateText&&Number.isFinite(hour)&&hour>=0&&hour<=5&&Number.isFinite(minute)&&minute<60;
+    const sameDate=!dateText||!meetingDate||dateText===meetingDate||midnightCarry;
+    const canonHip=x=>String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/SANTA\s*ANITA\s*PARK/g,'SANTA ANITA').replace(/\b(?:PARK|ABD|USA|US)\b/g,'').replace(/\s+[12]\s*$/g,'').replace(/[^A-Z0-9]/g,'');
+    const sameHip=!rec.hippodrome||!p?.file?.hippodrome||canonHip(rec.hippodrome)===canonHip(p.file.hippodrome);
+    if(!sameDate||!sameHip){logs.push(`⚠️ ${rec.filename}: ATR toplantısı TJK kaydıyla uyuşmuyor (ATR ${rec.date} ${rec.hippodrome}; TJK ${p?.file?.race_date||'?'} ${p?.file?.hippodrome||'?'}). Kayıt yapılmadı.`);continue;}
+    if(!Number(rec.raceNo) || !rec.date || !rec.hippodrome){
+      logs.push(`⚠️ ${rec.filename}: ATR dosyasında tarih/pist/mutlak koşu numarası doğrulanamadı; yanlış toplantıya yazılmadı.`); continue;
+    }
+    let candidates=(p.races||[]).filter(r=>Number(r._absRaceNo)===Number(rec.raceNo));
     if(!candidates.length) candidates=(p.races||[]).filter(r=>Number(r.leg)===Number(rec.raceNo));
     // ATR raceNo ile TJK'nin mutlak koşu no'su bazı simulcast/2. Altılı kartlarında
     // farklı numaralanabiliyor. Önce numarayı deneriz; isim/no eşleşmesi zayıfsa tüm
@@ -3724,16 +3960,31 @@ function tkpApplyAtrRecords(p, atrRecords){
     if(!best || (bestDetail?.nameHits||0)<2){
       for(const r of (p.races||[])){ const d=scoreRace(r); if(d.hits>bestHits){bestHits=d.hits;best=r;bestDetail=d;} }
     }
-    if(!best || bestHits<Math.min(2,Math.max(1,Math.ceil((rec.rows||[]).length*.25)))){ logs.push(`⚠️ ${rec.filename}: ATR koşusu güvenli eşleşmedi.`); continue; }
+    if(!best || (bestDetail?.nameHits||0)<2){ logs.push(`⚠️ ${rec.filename}: ATR ${rec.raceNo||'?'}. koşusunda en az iki at adı eşleşmedi; seçili altılı bu koşuyu içermiyor olabilir. Kayıt yapılmadı.`); continue; }
     const byName=new Map((best.horses||[]).map(h=>[tkpAtrNormName(h.horse_name),h]));
     const byNo=new Map(); for(const h of (best.horses||[])){const no=String(h.horse_no||'').match(/^\d+/)?.[0];if(no&&!byNo.has(no))byNo.set(no,h);else if(no)byNo.set(no,null);}
-    let applied=0;
+    let applied=0,formCount=0,orCount=0,commentCount=0,oddsCount=0;
     for(const x of rec.rows||[]){
-      const h=byName.get(x.nameKey) || (x.no?byNo.get(String(x.no)):null); if(!h) continue;
-      h.atr_source='At The Races'; h.atr_or=x.officialRating; h.atr_form=x.form; h.atr_form_score=tkpAtrFormScore(x.form); h.atr_comment=x.comment; h.atr_comment_score=tkpAtrCommentScore(x.comment); h.atr_non_runner=x.nonRunner?1:0; h.atr_race_no=rec.raceNo; h.atr_date=rec.date; applied++;
+      const h=byName.get(x.nameKey); if(!h) continue;
+      h.atr_source='At The Races'; h.atr_or=x.officialRating; h.atr_form=x.form; h.atr_form_score=tkpAtrFormScore(x.form); h.atr_comment=x.comment; h.atr_comment_score=tkpAtrCommentScore(x.comment); h.atr_non_runner=x.nonRunner?1:0; h.atr_race_no=rec.raceNo; h.atr_date=rec.date; if(x.form)formCount++; if(Number.isFinite(x.officialRating))orCount++; if(x.comment)commentCount++; if(Number(x.atrGanyan)>1){oddsCount++;h.atr_ganyan=Number(x.atrGanyan);h.atr_ganyan_source='AT_THE_RACES_MANUAL';h.atr_ganyan_asof=new Date().toISOString();} applied++;
       if(x.nonRunner) h.non_runner=1;
     }
-    logs.push(`✅ ${rec.filename}: ${best.leg}. ayağa ${applied} at için yüksek ağırlıklı ATR verisi işlendi.`);
+    // Synthetic AGF is a market-implied share, not official TJK AGF.
+    // Only calculate from a complete active-runner set; otherwise null means unknown.
+    const active=(best.horses||[]).filter(h=>!h.non_runner&&!h.atr_non_runner);
+    const priced=active.filter(h=>Number(h.atr_ganyan)>1 && h.atr_source==='At The Races');
+    if(applied>=2 && active.length>=2 && priced.length===active.length){
+      const denom=priced.reduce((sum,h)=>sum+1/Number(h.atr_ganyan),0);
+      if(denom>0) priced.forEach(h=>{
+        h.atr_synthetic_agf=100*(1/Number(h.atr_ganyan))/denom;
+        h.atr_synthetic_agf_source='ATR_BEST_PRICE_NORMALIZED';
+        h.atr_synthetic_agf_asof=h.atr_ganyan_asof;
+      });
+    } else {
+      (best.horses||[]).forEach(h=>{delete h.atr_synthetic_agf;delete h.atr_synthetic_agf_source;});
+    }
+    if(applied>=2) tkpAtrForeignEvidenceScore(best);
+    logs.push(applied>=2 ? `✅ ATR ${rec.raceNo}. koşu (${best.leg}. ayak): ${applied}/${rec.rows.length} at eşleşti; form ${formCount}, OR ${orCount}, yorum ${commentCount}, ganyan ${oddsCount}.` : `⚠️ ${rec.filename}: yalnız ${applied} at eşleşti; ATR veri kapsamını doğrulayın.`);
   }
   return logs;
 }
@@ -3748,12 +3999,14 @@ function tkpParseGanyanCanavariTR(htmlText, fallbackMeta={}){
     if(json?._tkp?.kind!=='ganyan_canavari_tr'||!Array.isArray(json?.Kosular))throw new Error('Ganyan Canavarı TR JSON şeması doğrulanamadı.');
     const date=String(json?._tkp?.meeting?.date||fallbackMeta.date||''),hip=String(json?._tkp?.meeting?.hippodrome||fallbackMeta.hip||'');
     const localeNumber=value=>{if(value===null||value===undefined||String(value).trim()==='')return null;const parsed=Number(String(value).trim().replace(',','.'));return Number.isFinite(parsed)?parsed:null;};
-    return json.Kosular.map(kosu=>({raceNo:Number(kosu?.Kosu_No)||null,date,hip,metric:'GANYAN_CANAVARI_PROGRAM_P_COLUMN',rows:(kosu?.Atlar||[]).map(at=>({
+    return json.Kosular.map(kosu=>({raceNo:Number(kosu?.Kosu_No)||null,date,hip,metric:'GANYAN_CANAVARI_PROGRAM_P_COLUMN',identity_rows:(kosu?.Atlar||[]).map(at=>({
+      no:String(at?.At_No??'').match(/\d+/)?.[0]||'',name:String(at?.At_Unvan_Orjinsiz||at?.At_Unvan||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(),jockey_name:String(at?.Jokey_Unvan||'').trim(),trainer_name:String(at?.At_Antrenor||'').trim()
+    })).filter(x=>x.no&&x.name),rows:(kosu?.Atlar||[]).map(at=>({
       no:String(at?.At_No??'').match(/\d+/)?.[0]||'',name:String(at?.At_Unvan_Orjinsiz||at?.At_Unvan||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim(),
       // show_bulten.php içindeki At_Puan, yarış programında jokey formasının
       // hemen sağındaki "p" sütununun API alanıdır. Başka puan/AGF okunmaz.
       tr:localeNumber(at?.At_Puan),start_no:null,jockey_name:String(at?.Jokey_Unvan||'').trim(),trainer_name:String(at?.At_Antrenor||'').trim()
-    })).filter(x=>(x.no||x.name)&&Number.isFinite(x.tr))})).filter(x=>x.rows.length);
+    })).filter(x=>(x.no||x.name)&&Number.isFinite(x.tr))})).filter(x=>x.rows.length||x.identity_rows.length);
   }
   const doc=new DOMParser().parseFromString(raw,'text/html');
   const out=[];
@@ -4010,7 +4263,7 @@ function tkpYeniBeygirFallbackRaceNo(meta={}){
 }
 function tkpParseYeniBeygirJByg(htmlText,fallbackMeta={}){
   const fallbackRaceNo=tkpYeniBeygirFallbackRaceNo(fallbackMeta);
-  return parseJockeyPerformanceRecords(htmlText).map(rec=>({
+  return parseJockeyPerformanceRecords(htmlText,{includeIdentity:true}).map(rec=>({
     ...rec,
     raceNo:Number(rec?.raceNo)||fallbackRaceNo||null,
     date:fallbackMeta?.date||'',
@@ -4126,7 +4379,85 @@ function tkpApplyYeniBeygirGlp(payload,records,meta={}){
   return {log,applied:appliedTotal};
 }
 
-async function classifyAndMergeFiles(fileList, altiliNo=1){
+function tkpMeetingHipKey(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  // Normalize provider country annotations without changing persisted historical keys.
+  // Strip only known standalone country labels; unknown venue words are retained.
+  const countries=/\b(?:IRLANDA|IRELAND|IRISH|KANADA|CANADA|ABD|USA|UNITED STATES|UNITED STATES OF AMERICA|AMERIKA|AMERICA|INGILTERE|ENGLAND|UNITED KINGDOM|GREAT BRITAIN|BRITAIN|UK|FRANSA|FRANCE|ALMANYA|GERMANY|ITALYA|ITALY|AVUSTRALYA|AUSTRALIA|JAPONYA|JAPAN|GUNEY AFRIKA|SOUTH AFRICA|YENI ZELANDA|NEW ZEALAND|HONG KONG|SILI|CHILE|ARJANTIN|ARGENTINA|BREZILYA|BRAZIL|URUGUAY|BAE|UAE)\b/g;
+  const ascii=raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/ı/g,'i').toUpperCase().replace(/İ/g,'I')
+    .replace(/Ş/g,'S').replace(/Ğ/g,'G').replace(/Ü/g,'U').replace(/Ö/g,'O').replace(/Ç/g,'C');
+  const clean=ascii.replace(/[()[\],]/g,' ').replace(countries,' ').replace(/\s+/g,' ').trim();
+  if(!clean)return '';
+  // Source headers and selector values may drop spaces or retain PARK.
+  // Keep this normalization limited to the meeting identity check only.
+  // Do not rewrite stored hippodrome keys or allow unrelated venues to match.
+  const compact=clean.replace(/[^A-Z0-9]/g,'');
+  // TJK meeting selector: CONCEPCION 2; bulletin: CLUB HİPİCO DE CONCEPCİON ŞİLİ.
+  // The trailing 2 is a meeting/session label, NOT a different racecourse.
+  // Date, six-race scope and altili number are checked independently below.
+  if(/^(?:CONCEPCION|CLUBHIPICODECONCEPCION|CLUBHIPICOCONCEPCION)(?:[12])?$/.test(compact))return 'CONCEPCION';
+  if(compact==='SANTAANITA'||compact==='SANTAANITAPARK')return 'SANTAANITA';
+  const canonical=canonicalHippodrome(clean);
+  if(!canonical||canonical==='BİLİNMİYOR')return '';
+  return String(canonical).normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/ı/g,'i').toUpperCase().replace(/[^A-Z0-9]/g,'');
+}
+function tkpMeetingDateKey(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  const iso=raw.match(/^(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if(iso)return `${iso[1]}-${iso[2].padStart(2,'0')}-${iso[3].padStart(2,'0')}`;
+  const tr=raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})/);
+  if(tr)return `${tr[3]}-${tr[2].padStart(2,'0')}-${tr[1].padStart(2,'0')}`;
+  return raw.slice(0,10);
+}
+function tkpAssertImportMeeting(payload, meeting){
+  if(!meeting)return;
+  const file=payload?.file;
+  const races=payload?.races;
+  const date=tkpMeetingDateKey(meeting.date||meeting.race_date);
+  const hip=tkpMeetingHipKey(meeting.hippodrome);
+  const alt=Number(meeting.altiliNo??meeting.altili_no);
+  const expectedAlt=Number.isInteger(alt)&&alt>0?alt:null;
+  const mismatch=(reason)=>{
+    const error=new Error(`Toplantı uyuşmazlığı: ${date} ${meeting.hippodrome||''} ${expectedAlt||'?'} — ${reason}. Başka toplantının verisi kaydedilmedi.`);
+    error.code='TKP_IMPORT_MEETING_MISMATCH';throw error;
+  };
+  if(!date||!hip||!Array.isArray(races)||!races.length||!file) mismatch('geçerli toplantı veya yarış verisi eksik');
+  if(races.length>6)mismatch('altılı kapsamında altıdan fazla yarış');
+  const headerDate=tkpMeetingDateKey(file.race_date);
+  const headerHip=tkpMeetingHipKey(file.hippodrome);
+  if(headerDate&&headerDate!==date)mismatch(`bülten tarihi ${headerDate}`);
+  if(headerHip&&headerHip!==hip)mismatch(`bülten hipodromu ${file.hippodrome}`);
+  // Race rows may lack identity fields. They inherit VERIFIED file/selection identity.
+  // Do not coerce a contradictory explicit date or venue into another meeting.
+  for(let i=0;i<races.length;i++){
+    const row=races[i];if(!row||typeof row!=='object')mismatch(`${i+1}. yarış bozuk`);
+    const rd=tkpMeetingDateKey(row.race_date),rh=tkpMeetingHipKey(row.hippodrome);
+    if(rd&&rd!==date)mismatch(`${i+1}. yarış tarihi ${rd}`);
+    if(rh&&rh!==hip)mismatch(`${i+1}. yarış hipodromu ${row.hippodrome}`);
+  }
+  // Program parsers can label every foreign race as altili 2 by default;
+  // trust the explicit selected altili only if all race rows agree with file header.
+  const fileAlt=Number(file.altili_no);
+  const racesAlt=new Set(races.map(r=>Number(r.altili_no)).filter(n=>Number.isInteger(n)&&n>0));
+  if(racesAlt.size>1)mismatch('yarışlarda birden fazla altılı numarası');
+  if(fileAlt>0&&racesAlt.size&&![...racesAlt].includes(fileAlt))mismatch('bülten/yarış altılıları farklı');
+  if(expectedAlt&&fileAlt>0&&fileAlt!==expectedAlt)mismatch(`bülten ${fileAlt}. Altılı`);
+  if(expectedAlt&&racesAlt.size&&![...racesAlt].includes(expectedAlt))mismatch('yarış altılı numarası farklı');
+  file.race_date=file.race_date||date;
+  file.hippodrome=file.hippodrome||meeting.hippodrome;
+  if(expectedAlt&&!fileAlt)file.altili_no=expectedAlt;
+  for(const row of races){
+    if(!tkpMeetingDateKey(row.race_date))row.race_date=file.race_date;
+    if(!tkpMeetingHipKey(row.hippodrome))row.hippodrome=file.hippodrome;
+    if(!Number(row.altili_no))row.altili_no=Number(file.altili_no)||expectedAlt||1;
+  }
+}
+
+async function classifyAndMergeFiles(fileList, altiliNo=1, meeting=null){
   altiliNo=Math.max(1,Number(altiliNo)||1);
   const normalizedFiles=Array.from(fileList||[]);
   await tkpPrefetchFiles(normalizedFiles,8);
@@ -4167,7 +4498,7 @@ async function classifyAndMergeFiles(fileList, altiliNo=1){
     // önce güçlü TJK Program/Sonuç imzası (gunluk-GunlukYarisProgrami/Sonuclari, kosubilgisi-)
     // kontrol edilir; sadece TJK sayfası DEĞİLSE jokey-performans yedeği devreye girer. Aksi
     // halde ana bülten/sonuç dosyası yanlışlıkla J-BYG kaynağı sanılıp bülten hiç bulunamıyordu.
-    const looksAtr=/ATTHERACES_/i.test(String(f?.name||'')) || /id=["']tkp-atr-bundle["']/i.test(text) || /attheraces\.com\/racecards?\//i.test(text) || (/At The Races/i.test(title+' '+text.slice(0,80000)) && (/Race\s+\d+/i.test(text)||/card-entry|horse__link|card-cell-pinsticker/i.test(text)));
+    const looksAtr=/\bAt The Races\b/i.test(String(f?.name||'')) || /\/racecard\/[^\s"']+\/\d{1,2}-[A-Za-z]+-20\d{2}\//i.test(text.slice(0,150000)) || /ATTHERACES_/i.test(String(f?.name||'')) || /id=["']tkp-atr-bundle["']/i.test(text) || /attheraces\.com\/racecards?\//i.test(text) || (/At The Races/i.test(title+' '+text.slice(0,80000)) && (/Race\s+\d+/i.test(text)||/card-entry|horse__link|card-cell-pinsticker/i.test(text)));
     const looksNyraWorkout=/NYRA_WORKOUTS_/i.test(String(f?.name||'')) || /nyra\.com\/saratoga\/racing\/workouts/i.test(text);
     const looksNyra=/NYRA_ENTRIES_/i.test(String(f?.name||'')) || /nyra\.com\/saratoga\/racing\/entries/i.test(text) || (/New York Racing Association/i.test(text)&&/Saratoga/i.test(text)&&/Entries/i.test(title+' '+text.slice(0,12000)));
     const looksDmtcWorkout=/DMTC_WORKOUTS_/i.test(String(f?.name||'')) || /dmtc\.com\/racing\/workouts/i.test(text);
@@ -4483,14 +4814,15 @@ async function classifyAndMergeFiles(fileList, altiliNo=1){
     }
   }
 
-  const atrPreferredHip = atrFiles.some(x=>/del[\s_-]*mar/i.test(x.file?.name||'') || /\/Del-Mar\//i.test(x.text||'')) ? 'DEL MAR' : '';
+  const atrPreferredHip = meeting?.hippodrome || (atrFiles.some(x=>/del[\s_-]*mar/i.test(x.file?.name||'') || /\/Del-Mar\//i.test(x.text||'')) ? 'DEL MAR' : '');
   const atrRecordsPre=[];
   for(const x of atrFiles){ try{ atrRecordsPre.push(...tkpParseAtTheRacesRecords(x.text,x.file.name)); }catch(_e){} }
 
   let p = bulletinKind==='ods' || bulletinKind==='manual-layer' ? bulletinFile.payload
     : bulletinKind==='tjk' ? parseTjkProgramHTML(bulletinFile.text, bulletinFile.file.name, altiliNo, atrPreferredHip)
-    : bulletinKind==='tjk-results' ? parseTjkResultsHTML(bulletinFile.text, bulletinFile.file.name, altiliNo)
+    : bulletinKind==='tjk-results' ? parseTjkResultsHTML(bulletinFile.text, bulletinFile.file.name, altiliNo,meeting||{})
     : parseBulletinHTML(bulletinFile.text, bulletinFile.file.name, altiliNo);
+  tkpAssertImportMeeting(p,meeting);
   if(atrRecordsPre.length>=6){
     const baseNames=new Set((p.races||[]).flatMap(r=>(r.horses||[]).map(h=>tkpAtrNormName(h.horse_name))));
     const atrHits=atrRecordsPre.reduce((n,r)=>n+(r.rows||[]).filter(x=>baseNames.has(x.nameKey)).length,0);
@@ -4546,7 +4878,10 @@ async function classifyAndMergeFiles(fileList, altiliNo=1){
       if(records.some(r=>r.filename===x.file.name)) continue;
       try{ const parsed=tkpParseAtTheRacesRecords(x.text,x.file.name); if(parsed.length) records.push(...parsed); else unknown.push(`${x.file.name} (ATR at satırı bulunamadı)`); }catch(e){ unknown.push(`${x.file.name} (ATR okunamadı: ${e.message})`); }
     }
-    atrLog=tkpApplyAtrRecords(p,records);
+    atrLog=records.length ? tkpApplyAtrRecords(p,records) : [`⚠️ ATR dosyası tanındı (${atrFiles.length} dosya) ancak içinden koşu/at verisi okunamadı; kayıt yapılmadı.`];
+    if(records.length && !atrLog.some(x=>String(x).startsWith('✅ ATR '))){
+      atrLog.unshift(`⚠️ ATR: ${records.length} koşu dosyası okundu ancak seçili TJK yarışında doğrulanmış at kaydı yok. Yanlış koşuya yazılmadı.`);
+    }
   }
 
   let usaLog=[];
@@ -4972,7 +5307,7 @@ async function classifyAndMergeFiles(fileList, altiliNo=1){
         const ypuanSourceDivisor=1;
         race.ypuan_source_counts=sourceCounts;
         race.ypuan_contributor_count=selectedContributorRows.length;
-        race.ypuan_policy=TKP_YPUAN_POLICY;
+        race.ypuan_policy=tkpForeignYpuanRace(race)?'R19.43_FOREIGN_RAW_YPUAN_TOTAL':TKP_YPUAN_POLICY;
         importReport.races.push({leg:race.leg,raceNo:race._absRaceNo,contributors:selectedContributorRows.length,sourceCounts});
         const ypuanSource=ypuanSources.length?`COMMENTATOR:${ypuanSources.join('+')}`:'COMMENTATOR';
         let applied = 0;
@@ -4988,7 +5323,7 @@ async function classifyAndMergeFiles(fileList, altiliNo=1){
           // aşırı yüksek ham toplamının ekranda diğer tüm sinyalleri ezmesini
           // engelleyen monoton kademeli bir ölçektir. Ham değer h.ypuan_raw'da
           // kaybolmadan saklanır.
-          const val = rawVal==null ? null : (x=>x<=100 ? x/2 : (x<=200 ? 50+(x-100)/2.5 : 90+(x-200)/3))(rawVal);
+          const val = rawVal==null ? null : tkpYpuanScaleFromRaw(rawVal,race);
           h.ypuan = val;
           h.ypuan_raw = rawVal;
           h.ypuan_source_divisor = val != null ? ypuanSourceDivisor : 0;
@@ -5024,11 +5359,13 @@ async function classifyAndMergeFiles(fileList, altiliNo=1){
     ['ST/Kulvar',['start_no','st','start','kulvar','start_box']],
     ['KG',['weight_kg','kg','weight']],
     ['HNDKP',['hndkp','handicap','hp','hndkp_rank']],
-    ['DERECE',['best_time']],
+    ['DERECE',['best_time','degree','drc']],
     ['GALOP',['g800','g800_rank','galop_rank','workout_800','workout_400','workout_600']],
     ['TR PUAN',['tr_ganyan','tr_puan']],
     ['Y.PUAN',['ypuan']],
-    ['J-BYG',['jbyg','j_byg','jbyg_rank','j_byg_rank','team_strength_rank']]
+    ['J-BYG',['jbyg','j_byg','jbyg_rank','j_byg_rank','team_strength_rank']],
+    ['JOKEY',['jockey_name','jokey_name','jockey']],
+    ['ANTRENÖR',['trainer_name','antrenor_name','trainer']]
   ];
   const present=value=>value!==null&&value!==undefined&&String(value).trim()!==''&&String(value).trim()!=='-';
   const baseSource=bulletinKind==='tjk'||bulletinKind==='tjk-results'?'TJK_PROGRAM':(bulletinKind==='ods'?'ODS':'MANUEL');
@@ -5075,6 +5412,18 @@ function inferAltiliNoFromFilename(filename){
     || raw.match(/(?:ALTILI|6 LI|6LI)\s*([12])(?:\s|$)/)
     || raw.match(/(?:^|\s)([12])\s*ALT(?:\s|$)/);
   return m ? Number(m[1]) : null;
+}
+
+function tkpOdsSupportFields(jbyg,g800,date,filename){
+  const rank=(value,limit)=>{
+    if(typeof value!=='number'&&typeof value!=='string')return null;
+    const n=Number(value);return Number.isInteger(n)&&n>=1&&n<=limit?n:null;
+  };
+  const j=rank(jbyg,7),g=rank(g800,6),out={jbyg:j,g800:g};
+  // ODS supplies ranks, not the original percentages or website provenance.
+  if(j!==null)Object.assign(out,{jbyg_rank:j,jbyg_source:'ODS_IMPORT',jbyg_asof_date:date,jbyg_source_file:filename});
+  if(g!==null)Object.assign(out,{g800_rank:g,glp_source:'ODS_IMPORT',glp_asof_date:date,glp_source_file:filename});
+  return out;
 }
 
 function parseODSxml(xml, filename){
@@ -5243,7 +5592,7 @@ function parseODSxml(xml, filename){
         // V1.1.329: ODS'deki fiziksel satır sırası ayrı bir sinyaldir. Mevcut
         // TR/AGF/VALUE vb. alanların yerine geçmez ve eski kayıtlarda null kalabilir.
         ods_row_order: horses.length + 1,
-        agf: agfValue, jbyg:(()=>{ const _j=n(row[jbygCol]); return Number.isFinite(Number(_j)) && Number(_j)>=1 && Number(_j)<=7 ? Math.round(Number(_j)) : null; })(), g800: n(row[g800]), hndkp: n(row[hnd]), s_value: n(row[sv]),
+        agf: agfValue, ...tkpOdsSupportFields(n(row[jbygCol]),n(row[g800]),date,filename), hndkp: n(row[hnd]), s_value: n(row[sv]),
         // ODS düzeni değişmez. Bu sütun yalnız ODS'nin kendi `tr` alanıdır;
         // Ganyan Canavarı program-p katmanı ayrı dosyadan birleştirilir.
         tr: trValue,
@@ -5282,8 +5631,32 @@ function _v25ClampJbyg850Top7Payload(p){
 }
 
 
+function tkpReconcilePendingOfficialResults(targetRaces,incomingRaces,capturedAt,raceDate,today){
+  const stamp=Date.parse(capturedAt);
+  if(!Number.isFinite(stamp)||raceDate!==today)return 0;
+  let changed=0;
+  for(const incoming of incomingRaces||[]){
+    const target=(targetRaces||[]).find(r=>Number(r._absRaceNo)>0&&Number(r._absRaceNo)===Number(incoming._absRaceNo));
+    if(!target||Date.parse(target.result_updated_at||'')>stamp)continue;
+    if(!incoming._officialResultPending){if(target._officialResultPending){delete target._officialResultPending;changed++;}continue;}
+    if(target._officialResultPending)continue;
+    target.result_repair_previous={capturedAt,payouts:target.payouts||[],horses:(target.horses||[]).map(h=>({horse_no:h.horse_no,finish_position:h.finish_position,winner:h.winner}))};
+    for(const h of target.horses||[]){
+      for(const field of ['finish_position','official_finish_position','result_position','official_position','place'])h[field]=null;
+      h.winner=0;
+    }
+    target._officialResultPending=1;target.payouts=[];target.result_winner_nos=[];
+    target.result_official_finish_positions={};target.result_verified_depth=0;
+    target.result_integrity_status='PENDING';target.result_integrity_source='';
+    target.result_updated_at=capturedAt;changed++;
+  }
+  return changed;
+}
+
 function tkpResultRaceAlignmentEvidence(incoming,target){
   if(!incoming||!target)return {score:-1e9,nameHits:0,exactHits:0,ratio:0,absMatch:false,legMatch:false,trustworthy:false};
+  if(Number(incoming._absRaceNo)>0&&Number(target._absRaceNo)>0&&Number(incoming._absRaceNo)!==Number(target._absRaceNo))
+    return {score:-1e9,nameHits:0,exactHits:0,ratio:0,absMatch:false,legMatch:false,trustworthy:false,identityConflict:true};
   const incomingHorses=(incoming.horses||[]).filter(Boolean);
   const targetHorses=(target.horses||[]).filter(Boolean);
   const byName=new Map();
@@ -5312,6 +5685,15 @@ function tkpResultRaceAlignmentEvidence(incoming,target){
     ? Boolean(absMatch||legMatch)
     : Boolean(nameHits>=2||ratio>=0.30||(nameHits>=1&&absMatch&&legMatch));
   return {score,nameHits,exactHits,ratio,absMatch,legMatch,trustworthy};
+}
+
+function tkpMergeIncomingEkuriIdentity(targetHorse,incomingEkuri){
+  if(!targetHorse||!incomingEkuri)return false;
+  if(String(targetHorse.ekuri_group||'').trim())return false;
+  // horse_no is the stable program identity. Result imports may add ekuri metadata,
+  // but must never rewrite the key after pre-race coupon snapshots were saved.
+  targetHorse.ekuri_group=String(incomingEkuri).trim();
+  return true;
 }
 
 function tkpResultRaceSortValue(race,index){
@@ -5354,11 +5736,13 @@ function tkpAlignIncomingResultRaces(incomingRaces,targetRaces,options={}){
     const incoming=unmatchedIncoming[0];
     const targetIndex=[...unusedTargets][0];
     const target=targetList[targetIndex];
+    if(!tkpResultRaceAlignmentEvidence(incoming,target).identityConflict){
     out.set(incoming,target);
     evidenceByIncoming.set(incoming,{...tkpResultRaceAlignmentEvidence(incoming,target),ordinalFallback:true,trustworthy:true,residualPair:true});
     ordinalFallback.add(incoming);
     unusedTargets.delete(targetIndex);
     unmatchedIncoming.length=0;
+    }
   }
   // Collector hedef file_id'yi açıkça verdiğinde toplantı kimliği zaten kanıtlanmıştır.
   // Eski arşivlerde leg/_absRaceNo kaymış, at adları ise kaynak karakter farklarıyla
@@ -5370,7 +5754,7 @@ function tkpAlignIncomingResultRaces(incomingRaces,targetRaces,options={}){
     const orderedTargets=[...unusedTargets].map((index,order)=>({index,race:targetList[index],order})).sort((a,b)=>tkpResultRaceSortValue(a.race,a.order)-tkpResultRaceSortValue(b.race,b.order));
     for(let i=0;i<orderedIncoming.length;i++){
       const incoming=orderedIncoming[i].race,target=orderedTargets[i]?.race;
-      if(!target)continue;
+      if(!target||tkpResultRaceAlignmentEvidence(incoming,target).identityConflict)continue;
       out.set(incoming,target);
       evidenceByIncoming.set(incoming,{...tkpResultRaceAlignmentEvidence(incoming,target),ordinalFallback:true,trustworthy:true});
       ordinalFallback.add(incoming);
@@ -5485,6 +5869,15 @@ async function confirmImport(){
         obj[key]=value; changedFields++; return true;
       };
 
+      // HNDKP: DB'de 0 hem "handikapsız koşu" hem "eksik" olabiliyor (3843 at). Sonuçtaki HP > 0 ise
+      // ve hedefte boş/0 ise doldurulur; dolu pozitif program değeri asla ezilmez.
+      const fillHndkp=(obj,incoming)=>{
+        const v=Number(incoming?.hndkp);
+        if(!obj||!Number.isFinite(v)||v<=0) return false;
+        const cur=Number(obj.hndkp);
+        if(Number.isFinite(cur)&&cur>0) return false;
+        obj.hndkp=v; if(!obj.hndkp_source)obj.hndkp_source='TJK_RESULT'; changedFields++; return true;
+      };
       for (const incomingRace of validRaces){
         const raceChangedBefore=changedFields;
         const alignedTarget=alignedResultRaces.get(incomingRace)||null;
@@ -5504,7 +5897,7 @@ async function confirmImport(){
           // Kayıtta eksik ayak varsa sonuç HTML'den eklenir; bu yeni bir DOSYA değil,
           // aynı toplantının eksik ayağıdır.
           targetRace=JSON.parse(JSON.stringify(incomingRace));
-          targetRace.id=Math.max(0,...db.races.map(r=>Number(r.id)||0))+1;
+          targetRace.id=(()=>{let m=0;for(const rr of (db.races||[])){const id=Number(rr?.id)||0;if(id>m)m=id;}return m+1;})();
           targetRace.file_id=targetFile.id;
           targetRace.filename=targetFile.filename;
           targetRace.active=1;
@@ -5547,27 +5940,24 @@ async function confirmImport(){
         }
         targetRace.active=resultRaceQuality(targetRace).winnerCount>0 ? 1 : (targetRace.active||0);
 
-        // V1.1.292: otomatik/arka plan sonuç bakımı tamamen incremental'dır.
-        // Mevcut dolu resmi derece/kazanan alanları silinmez veya yeniden yazılmaz;
-        // yalnız gerçekten eksik İlk-5/sonuç alanları tamamlanır.
+        // Otomatik sonuç bakımı yalnız güvenilir TJK kanıtı aynı derinlikte veya
+        // daha güçlüyse mevcut sıralamayı düzeltebilir; daha sığ kanıt geri yazamaz.
         const incomingRaceQuality=resultRaceQuality(incomingRace);
         const incomingDepth=Number(incomingRace?.result_verified_depth)||0;
-        const targetDepth=Number(targetRace?.result_verified_depth)||0;
+        const targetDepth=Math.min(Number(targetRace?.result_verified_depth)||0,(targetRace.horses||[]).length);
         const incomingVerified=String(incomingRace?.result_integrity_status||'')==='VERIFIED'&&incomingDepth>0;
         const targetVerified=String(targetRace?.result_integrity_status||'')==='VERIFIED'&&targetDepth>0;
         // Yeni doğrulanmış resmî sıra, eski doğrulanmamış sonucu düzeltmeye yetkilidir.
         // Daha sığ (ör. yalnız ilk 2) yeni kanıt, mevcut ilk 5 doğrulamasını geriye götürmez.
         const authoritativeOrder=incomingVerified&&(!targetVerified||incomingDepth>=targetDepth);
-        // R19 KÖK FIX: silmeden önce eski derece/kazanan değerlerini yedekle. Eşleşme
-        // (fuzzy at eşleştirme) her zaman %100 başarılı olmayabilir; eşleşmeyen bir at
-        // için eski doğru sonuç kalıcı olarak kaybolmasın diye döngü sonunda geri yüklenir.
-        const preWipeSnapshot=authoritativeOrder ? new Map((targetRace.horses||[]).map(h=>[h,{finish_position:h.finish_position,winner:h.winner,result_time:h.result_time,official_time:h.official_time}])) : null;
         if(authoritativeOrder){
-          for(const oldHorse of (targetRace.horses||[])){oldHorse.finish_position=null;oldHorse.winner=0;oldHorse.result_time='';oldHorse.official_time='';}
-          targetRace.result_verified_depth=incomingDepth;
-          targetRace.result_integrity_source=incomingRace.result_integrity_source||'TJK_OFFICIAL_RESULT_ROWS';
-          targetRace.result_integrity_status='VERIFIED';
-          changedFields++;
+          const nextSource=incomingRace.result_integrity_source||'TJK_OFFICIAL_RESULT_ROWS';
+          if(Number(targetRace.result_verified_depth)!==incomingDepth||targetRace.result_integrity_status!=='VERIFIED'||targetRace.result_integrity_source!==nextSource){
+            targetRace.result_verified_depth=incomingDepth;
+            targetRace.result_integrity_source=nextSource;
+            targetRace.result_integrity_status='VERIFIED';
+            changedFields++;
+          }
         }else if(!targetVerified&&!incomingVerified){
           targetRace.result_verified_depth=0;
           targetRace.result_integrity_source='';
@@ -5624,42 +6014,41 @@ async function confirmImport(){
           // toplantıda sonuç güncellemesi sonrası eküri bağı korunur; resmi kazanan bayrağı yalnız gerçek 1. ata aittir.
           const incomingEkuri=typeof ekuriGroup==='function' ? ekuriGroup(incomingHorse.horse_no) : null;
           if(incomingEkuri&&!historicalTop5Only){
-            if(isMissingResultValue(targetHorse.ekuri_group)){ targetHorse.horse_no=String(ekuriBase(targetHorse.horse_no))+'-'+incomingEkuri; targetHorse.ekuri_group=incomingEkuri; changedFields++; }
+            if(tkpMergeIncomingEkuriIdentity(targetHorse,incomingEkuri)) changedFields++;
           }
 
           if(historicalTop5Only){
-            const fp=Number(incomingHorse.finish_position);
-            if(incomingVerified&&Number.isInteger(fp)&&fp>=1&&fp<=5 && isMissingResultValue(targetHorse.finish_position)){ targetHorse.finish_position=fp; targetHorse.winner=fp===1?1:0; changedFields+=2; }
+            if(tkpApplyOfficialFinish(targetHorse,incomingHorse,{verified:incomingVerified&&incomingRaceQuality.winnerCount>0,repairExisting:authoritativeOrder,maxRank:5}))changedFields+=2;
+            // ST ve KG resmi TJK Sonuç satırından yalnız hedef alan boşsa tamamlanır.
+            setIfMissing(targetHorse,'start_no',incomingHorse.start_no);
+            setIfMissing(targetHorse,'weight_kg',incomingHorse.weight_kg);
+            // Sonuç sayfasındaki HP sütunu program sayfasındaki Hc ile birebir aynıdır (5 toplantı/422 atta
+            // doğrulandı); yalnız hedef alan boşsa tamamlanır, dolu program değeri ezilmez.
+            fillHndkp(targetHorse,incomingHorse);
+            if(targetHorse.start_no!=null&&!targetHorse.start_no_source)targetHorse.start_no_source='TJK_RESULT';
+            if(targetHorse.weight_kg!=null&&!targetHorse.weight_kg_source)targetHorse.weight_kg_source='TJK_RESULT';
             continue;
           }
 
           // Sonuç HTML yalnız kimlik ve doğrulanmış resmî derece katmanının sahibidir.
-          // ST/Kulvar TJK Program'a, best_time/DERECE de program katmanına aittir.
+          // ST/KG resmi TJK Sonuç satırından da doğrulanır; yalnız eksik hedef alan doldurulur. best_time/DERECE program katmanında kalır.
           // Eski result_time/official_time parserı sütun kaydırdığı için fail-closed kapalıdır.
-          const safeBulletinFields=['horse_name'];
+          const safeBulletinFields=['horse_name','start_no','weight_kg'];
           for (const key of safeBulletinFields) setIfMissing(targetHorse,key,incomingHorse[key]);
-          // Derece/kazanan yalnız hedefte derece gerçekten eksikse yazılır. Mevcut
-          // dolu sonuç otomatik bakım tarafından sessizce değiştirilmez.
-          const incomingFp=Number(incomingHorse.finish_position);
-          if(incomingVerified && incomingRaceQuality.winnerCount>0 && Number.isInteger(incomingFp) && incomingFp>0 && isMissingResultValue(targetHorse.finish_position)){
-            targetHorse.finish_position=incomingFp; targetHorse.winner=incomingFp===1?1:0; changedFields+=2;
+          fillHndkp(targetHorse,incomingHorse);
+          if(tkpApplyOfficialFinish(targetHorse,incomingHorse,{verified:incomingVerified&&incomingRaceQuality.winnerCount>0,repairExisting:authoritativeOrder}))changedFields+=2;
+        }
+        if(authoritativeOrder&&incomingRaceQuality.winnerCount>0){
+          for(const oldHorse of (targetRace.horses||[])){
+            if(!usedTargets.has(oldHorse)&&tkpApplyOfficialFinish(oldHorse,null,{verified:true,repairExisting:true,maxRank:historicalTop5Only?5:null}))changedFields+=2;
           }
         }
-        // R19 KÖK FIX: wipe sonrası hiçbir gelen at ile eşleşmeyen hedef atlar için
-        // (fuzzy eşleştirme başarısız olduysa) önceden var olan doğru sonucu geri yükle.
-        // Böylece bir atın eşleşmemesi, önceden doğru kaydedilmiş derece/kazanan bilgisinin
-        // kalıcı ve sessizce kaybolmasına yol açmaz.
-        if(preWipeSnapshot){
-          for(const [h,old] of preWipeSnapshot){
-            if(usedTargets.has(h)) continue;
-            if(old.finish_position!=null || old.winner===1){
-              h.finish_position=old.finish_position;
-              h.winner=old.winner;
-              h.result_time=old.result_time;
-              h.official_time=old.official_time;
-            }
-          }
-        }
+        // Doğrulanmış yeni sıra uygulandıysa eşleşmeyen eski atların sonuçları
+        // geri taşınmaz: eski bir kazananı yeniden eklemek iki farklı 1. üretir.
+        // Program-owned ST/Kulvar sonucu güncellemesinde kaybolmuş eski arşivler için
+        // aynı toplantının doğrulanmış TJK_PROGRAM kopyasından geri yüklenir. Sonuç
+        // HTML hiçbir zaman ST sahibi değildir; başka tarih/hipodromdan veri alınmaz.
+        try{if(typeof globalThis.tkpRepairRaceStartNumbers==='function')changedFields+=globalThis.tkpRepairRaceStartNumbers(targetRace,db)||0;}catch(_e){}
         normalizeRaceObj(targetRace);
         targetRace.active=resultRaceQuality(targetRace).winnerCount>0 ? 1 : (targetRace.active||0);
         if(changedFields>raceChangedBefore && !updated.includes(targetRace)) updated.push(targetRace);

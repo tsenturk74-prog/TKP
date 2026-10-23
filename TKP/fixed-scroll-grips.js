@@ -4,10 +4,9 @@ globalThis.tkpInstallFixedScrollGrips=tkpInstallFixedScrollGrips;
 if(typeof document==='undefined'||!document.head||document.getElementById('tkp-fixed-scroll-grips-style')||typeof ResizeObserver!=='function'||typeof MutationObserver!=='function')return;
 // Native thumbs are proportional; min-height alone cannot give equal grips.
 // The content keeps native scrolling. Only its visual controls are replaced.
-// Both axes use the same compact handle so every scrollbar has a consistent
-// minimum 2 cm grip (76 CSS px), clipped only when the track is shorter.
-const LENGTH_X=76,LENGTH_Y=76,WIDTH=7,owners=new Map();let frame=0,discover=true,sequence=0;
-const selector='.tableWrap,.forwardMainScroll,.forwardTopScroll,.sideBetPoolRow,.adaptiveLearningWrap,.tkpCommentatorTableWrap,.tkpSystemFoldBody,.raceCheckWrap,.firstLookOverviewTable,.pane,#tkpRoot';
+// Three-centimetre grips at CSS's reference pixel density; shorter tracks clip.
+const LENGTH_X=114,LENGTH_Y=114,WIDTH=6,owners=new Map();let frame=0,discover=true,sequence=0;
+const selector='.tableWrap,.tkpTableScroll,.tabs,.forwardMainScroll,.forwardTopScroll,.sideBetPoolRow,.adaptiveLearningWrap,.tkpCommentatorTableWrap,.tkpSystemFoldBody,.raceCheckWrap,.firstLookOverviewTable,.pane,#tkpRoot';
 const style=document.createElement('style');style.id='tkp-fixed-scroll-grips-style';
 style.textContent=`
 html.tkpFixedScrollOwner::-webkit-scrollbar,body.tkpFixedScrollOwner::-webkit-scrollbar,

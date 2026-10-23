@@ -1,260 +1,123 @@
-// TKP marjinal-kazanç genişlik optimizörü + olasılık kalibrasyon katmanı.
-//
-// Amaç: kupon maliyetini (kolon çarpımı bütçesi) artırmadan 6/6 oranını yükseltmek.
-// 2026-09-17 arşiv analizi (480 toplantı / 1440 kupon) genişlik 8+ ayaklardaki son
-// atların neredeyse değersiz (%1,9) olduğunu, 5/6 kaçışlarının ise model sırası
-// 4-10 arasındaki gerçek sürprizlerden kaynaklandığını gösterdi. Sorun kupon
-// geometrisi değil olasılık kalibrasyonu: ham skor kuyruğu gerçek kazanma
-// oranlarını yansıtmıyor. Bu modül:
-//
-//   1) ISOTONİK (PAVA) KALİBRASYON: prediction_score_snapshot / pre_result_score
-//      ve AGF yüzdesini, yalnızca hedef yarıştan ÖNCE sonuçlanmış yarışların
-//      ampirik kazanma oranlarına eşler (walk-forward; sonuç sızıntısı yok —
-//      strict_no_result_leakage_from kuralına uygun olarak kalibrasyon fitinde
-//      yalnız geçmiş tarihli, sonucu çözülmüş yarışlar kullanılır).
-//      tkp-score-calibration.js'deki kronoloji kapısı (tkpRowIsBeforeTarget /
-//      tarih-fail-closed) ile aynı güvence burada da uygulanır.
-//   2) MARJİNAL-KAZANÇ GENİŞLİK DAĞITIMI: ayak başına kapsama olasılığı
-//      P_i(w) = ilk w atın kalibre olasılık toplamı (yarış içi normalize).
-//      Amaç max Π P_i(w_i), kısıt Π w_i ≤ bütçe kolonu. Greedy fractional
-//      knapsack: her adımda Δlog P / Δlog maliyet oranı en yüksek '+1 at' eklenir.
-//      coupon-builder-r1681-baseline-v2.js içindeki JOINT_LOG_COVERAGE_DP'nin
-//      utility girdisi olarak da kullanılabilir (bkz. utilityCoverage).
-//
-// Doğrulama (tools/tkp_marginal_gain_backtest.py, zaman-sıralı walk-forward,
-// 1440 kupon): 6/6 %8,6 -> %10,1-11,0 (Wilson alt sınır %7,3 -> %8,0-9,5),
-// ortalama maliyet sabitin altında. KÖTÜLEŞME görülmediği için kullanıcı kararıyla
-// VARSAYILAN davranış olarak etkindir (2026-09-20). Geriye dönük uyumluluk:
-//
-//   globalThis.__tkpUseMarginalGainOptimizer === false  -> opt-out; DP eski ham
-//     skor-kütlesi utility'sine döner (eski davranış birebir korunur)
-//   globalThis.__tkpMarginalGainShadow   === true       -> karar değişmez, gölge log
-//     (globalThis.__tkpMarginalGainShadowLog içine {kind:'leg-coverage', ...})
-// Kalibrasyon verisi yetersizse (ör. <200 geçmiş gözlem) ya da yarış tarihi
-// okunamazsa fail-closed: kalibre olasılık üretilmez ve DP otomatik olarak
-// eski utility ile devam eder. Maliyet tavanı (kolon çarpımı cap) aynen korunur.
-//
-(function(global){
-  'use strict';
+(function(root,factory){
+  const api=factory(root||globalThis);
+  if(typeof module!=='undefined'&&module.exports)module.exports=api;
+  if(root)Object.assign(root,api);
+})(typeof globalThis!=='undefined'?globalThis:this,function(g){
+'use strict';
 
-  const VERSION='V1.0-MARGINAL-GAIN-20260920';
-  const MAX_WIDTH=10;
-  const EPS=1e-6;
+const clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,Number(v)||0));
+const isoDate=v=>{const m=String(v||'').match(/^(20\d{2})-(\d{2})-(\d{2})/);return m?`${m[1]}-${m[2]}-${m[3]}`:'';};
+const finishKnown=h=>Number.isInteger(Number(h?.finish_position))&&Number(h.finish_position)>0;
+const calibratorCache=new Map();
+function clearMarginalGainCache(){calibratorCache.clear();}
+try{if(typeof g?.addEventListener==='function')g.addEventListener('tkp:db-changed',e=>{const d=e?.detail||{};if(d.resultsChanged||d.outcomeChanged||d.learningChanged)clearMarginalGainCache();});}catch(_e){}
+function historicalScore(h,r){
+  const candidates=[h?.prediction_score_snapshot,h?.predictionScoreSnapshot,h?.pre_race_score,h?.score_pre_result];
+  for(const value of candidates){const n=Number(value);if(Number.isFinite(n))return n;}
+  const locked=Boolean(h?.prediction_score_locked||r?.prediction_score_locked||r?.pre_race_snapshot_locked||r?.strict_no_result_leakage_from);
+  if(locked){const n=Number(h?.score);if(Number.isFinite(n))return n;}
+  return null;
+}
+function liveScore(h){
+  for(const value of [h?.score,h?.prediction_score_snapshot,h?.tkp_score,h?.model_score]){const n=Number(value);if(Number.isFinite(n))return n;}
+  return null;
+}
 
-  function num(v,fallback=0){ const n=Number(v); return Number.isFinite(n)?n:fallback; }
-  function text(v){ return String(v??'').trim(); }
-
-  // ---------- isotonic kalibrasyon (PAVA) ----------
-
-  // pairs: [[x, y], ...] -> blok listesi [{x0,x1,v}] monoton non-decreasing.
-  function fitIsotonic(pairs){
-    const pts=(pairs||[]).filter(p=>p&&Number.isFinite(p[0])&&Number.isFinite(p[1]))
-      .sort((a,b)=>a[0]-b[0]);
-    if(!pts.length) return [];
-    const agg=new Map();
-    for(const [x,y] of pts){
-      const e=agg.get(x)||{s:0,c:0};
-      e.s+=y; e.c++; agg.set(x,e);
+function pavaFit(rows){
+  const points=(rows||[]).map(r=>({score:Number(r.score),y:clamp(r.y),weight:Math.max(1e-9,Number(r.weight)||1)}))
+    .filter(r=>Number.isFinite(r.score)).sort((a,b)=>a.score-b.score);
+  if(!points.length)return [];
+  const grouped=[];
+  for(const p of points){
+    const last=grouped[grouped.length-1];
+    if(last&&last.maxScore===p.score){last.sumY+=p.y*p.weight;last.weight+=p.weight;last.p=last.sumY/last.weight;last.count++;continue;}
+    grouped.push({minScore:p.score,maxScore:p.score,sumY:p.y*p.weight,weight:p.weight,p:p.y,count:1});
+  }
+  const blocks=[];
+  for(const row of grouped){
+    blocks.push({...row});
+    while(blocks.length>=2){
+      const b=blocks[blocks.length-1],a=blocks[blocks.length-2];
+      if(a.p<=b.p+1e-15)break;
+      blocks.splice(blocks.length-2,2,{
+        minScore:a.minScore,maxScore:b.maxScore,sumY:a.sumY+b.sumY,weight:a.weight+b.weight,
+        p:(a.sumY+b.sumY)/(a.weight+b.weight),count:a.count+b.count
+      });
     }
-    const xs=[...agg.keys()].sort((a,b)=>a-b);
-    const sv=[],sw=[],sc=[];
-    for(const x of xs){
-      const e=agg.get(x);
-      sv.push(e.s/e.c); sw.push(e.c); sc.push(1);
-      while(sv.length>=2&&sv[sv.length-2]>sv[sv.length-1]){
-        const wLast=sw.pop(),wPrev=sw[sw.length-1],w2=wLast+wPrev;
-        const vLast=sv.pop(),vPrev=sv[sv.length-1];
-        sv[sv.length-1]=(vLast*wLast+vPrev*wPrev)/w2;
-        sw[sw.length-1]=w2;
-        const cLast=sc.pop(); sc[sc.length-1]+=cLast;
-      }
+  }
+  return blocks;
+}
+function pavaPredict(blocks,score){
+  const s=Number(score);if(!Number.isFinite(s)||!blocks?.length)return null;
+  if(s<=blocks[0].maxScore)return clamp(blocks[0].p,1e-6,1-1e-6);
+  for(let i=1;i<blocks.length;i++)if(s<=blocks[i].maxScore)return clamp(blocks[i].p,1e-6,1-1e-6);
+  return clamp(blocks[blocks.length-1].p,1e-6,1-1e-6);
+}
+function wilsonLowerBound(successes,total,z=1.96){
+  const n=Number(total),x=Number(successes);if(!(n>0)||!Number.isFinite(x))return 0;
+  const p=x/n,z2=z*z,den=1+z2/n;
+  return clamp((p+z2/(2*n)-z*Math.sqrt((p*(1-p)+z2/(4*n))/n))/den);
+}
+function buildWalkForwardCalibrator(targetRace,db,options={}){
+  const minObs=Math.max(1,Number(options.minObservations)||200);
+  const targetDate=isoDate(targetRace?.race_date||targetRace?.date);
+  if(!targetDate)return {fallback:true,reason:'TARGET_DATE_UNREADABLE',observations:0,predict:()=>null};
+  const races=db?.races||[];
+  const cacheKey=`${targetDate}|${minObs}|${races.length}|${db?.files?.length||0}|${db?.auto_coupon_log?.length||0}`;
+  if(options.noCache!==true&&calibratorCache.has(cacheKey))return calibratorCache.get(cacheKey);
+  const points=[];let maxTrainingDate='';
+  for(const race of races){
+    const d=isoDate(race?.race_date||race?.date);if(!d||d>=targetDate)continue;
+    if(race?.strict_no_result_leakage_from&&isoDate(race.strict_no_result_leakage_from)&&isoDate(race.strict_no_result_leakage_from)<d)continue;
+    const horses=(race?.horses||[]).filter(finishKnown);if(!horses.length)continue;
+    for(const h of horses){
+      const score=historicalScore(h,race);if(!Number.isFinite(score))continue;
+      points.push({score,y:Number(h.finish_position)===1?1:0});
+      if(d>maxTrainingDate)maxTrainingDate=d;
     }
-    const blocks=[];let xi=0;
-    for(let i=0;i<sv.length;i++){
-      const seg=xs.slice(xi,xi+sc[i]);
-      blocks.push({x0:seg[0],x1:seg[seg.length-1],v:sv[i]});
-      xi+=sc[i];
-    }
-    return blocks;
   }
-
-  function isotonicPredict(blocks,x){
-    if(!blocks||!blocks.length||!Number.isFinite(x)) return null;
-    if(x<=blocks[0].x0) return blocks[0].v;
-    if(x>=blocks[blocks.length-1].x1) return blocks[blocks.length-1].v;
-    for(const b of blocks){ if(x>=b.x0&&x<=b.x1) return b.v; }
-    for(let i=0;i<blocks.length-1;i++){
-      const a=blocks[i],b=blocks[i+1];
-      if(x>a.x1&&x<b.x0){ const t=(x-a.x1)/(b.x0-a.x1); return a.v+t*(b.v-a.v); }
-    }
-    return blocks[blocks.length-1].v;
+  if(points.length<minObs){const out={fallback:true,reason:'INSUFFICIENT_HISTORY',observations:points.length,maxTrainingDate,predict:()=>null};if(options.noCache!==true)calibratorCache.set(cacheKey,out);return out;}
+  const blocks=pavaFit(points);
+  if(!blocks.length){const out={fallback:true,reason:'PAVA_EMPTY',observations:points.length,maxTrainingDate,predict:()=>null};if(options.noCache!==true)calibratorCache.set(cacheKey,out);return out;}
+  const out={fallback:false,observations:points.length,maxTrainingDate,blocks,predict:(score)=>pavaPredict(blocks,score)};if(options.noCache!==true)calibratorCache.set(cacheKey,out);while(calibratorCache.size>32)calibratorCache.delete(calibratorCache.keys().next().value);return out;
+}
+function blendedProbability(h,cal,options={}){
+  const score=liveScore(h),pIso=cal?.predict?.(score);
+  if(!Number.isFinite(pIso))return null;
+  const r18=Number(h?.win_probability??h?.r18_win_probability??h?.winProbability);
+  const useBlend=options.blendR18!==false&&Number.isFinite(r18)&&r18>=0&&r18<=1;
+  if(!useBlend)return clamp(pIso,1e-6,1-1e-6);
+  const w=clamp(options.r18Weight==null?.35:options.r18Weight,0,0.8);
+  return clamp((1-w)*pIso+w*r18,1e-6,1-1e-6);
+}
+function coverageProbabilities(ranked,cal,options={}){
+  const rows=(ranked||[]).map((h,index)=>({h,index,p:blendedProbability(h,cal,options)}));
+  if(rows.some(r=>!Number.isFinite(r.p)))return [];
+  const sum=Math.max(1e-12,rows.reduce((s,r)=>s+r.p,0));
+  let cumulative=0;
+  return rows.map(r=>{
+    const p=r.p/sum;cumulative=Math.min(1,cumulative+p);
+    return {horse:r.h,horse_no:String(r.h?.horse_no??''),probability:p,cumulative};
+  });
+}
+function marginalGainCoverageForLeg(leg,ranked,options={}){
+  const enabled=g.__tkpUseMarginalGainOptimizer!==false;
+  const cal=buildWalkForwardCalibrator(leg?.r||{},options.db||g.db||{},options);
+  if(!enabled||cal.fallback)return {use:false,reason:enabled?cal.reason:'OPT_OUT',calibrator:cal,coverage:[]};
+  const coverage=coverageProbabilities(ranked,cal,options);
+  if(!coverage.length)return {use:false,reason:'PROBABILITY_UNAVAILABLE',calibrator:cal,coverage:[]};
+  return {use:true,reason:'PAVA',calibrator:cal,coverage};
+}
+function dpUtilityBridge(leg,ranked,legacyProbabilities,options={}){
+  const result=marginalGainCoverageForLeg(leg,ranked,options);
+  const shadow=Boolean(g.__tkpMarginalGainShadow);
+  if(shadow){
+    if(!Array.isArray(g.__tkpMarginalGainShadowLog))g.__tkpMarginalGainShadowLog=[];
+    g.__tkpMarginalGainShadowLog.push({ts:new Date().toISOString(),date:leg?.r?.race_date||'',leg:leg?.r?.leg||null,reason:result.reason,observations:result.calibrator?.observations||0,coverage:result.coverage.map(x=>x.cumulative),legacy:(legacyProbabilities||[]).slice()});
+    if(g.__tkpMarginalGainShadowLog.length>500)g.__tkpMarginalGainShadowLog.splice(0,g.__tkpMarginalGainShadowLog.length-500);
+    return {use:false,reason:'SHADOW',probabilities:legacyProbabilities||[],meta:result};
   }
-
-  // ---------- walk-forward kalibrasyon durumu ----------
-
-  let calibCache={signature:'',cutoff:'',scoreBlocks:null,agfBlocks:null,sample:0};
-
-  function rawScoreOf(h){
-    const snap=num(h?.prediction_score_snapshot,NaN);
-    if(Number.isFinite(snap)) return snap;
-    const pre=num(h?.pre_result_score,NaN);
-    return Number.isFinite(pre)?pre:NaN;
-  }
-
-  function raceDateOf(r){ return text(r?.race_date||r?.date).slice(0,10); }
-
-  // Yalnız cutoff öncesi (kesin küçük tarih) sonuçlanmış yarışlar fit edilir.
-  // cutoff boş/okunamazsa fail-closed: kalibrasyon yok sayılır (null döner).
-  function buildCalibrators(cutoffDate,opts={}){
-    const cutoff=text(cutoffDate).slice(0,10);
-    if(!cutoff) return null;
-    const races=Array.isArray(global.db?.races)?global.db.races:[];
-    const maxSample=Math.max(1000,num(opts.maxSample,40000));
-    const signature=`${races.length}|${cutoff}`;
-    if(calibCache.signature===signature&&calibCache.scoreBlocks) return calibCache;
-    const rows=[];
-    for(const r of races){
-      const d=raceDateOf(r);
-      if(!d||d>=cutoff) continue; // aynı gün ve gelecek fail-closed dışarıda
-      for(const h of (r?.horses||[])){
-        const win=(Number(h?.winner)===1||num(h?.finish_position)===1)?1:0;
-        rows.push([d,rawScoreOf(h),num(h?.agf,NaN),win]);
-      }
-    }
-    // En güncel gözlemler öncelikli: üst sınır aşılırsa en eskiler atılır.
-    rows.sort((a,b)=>b[0].localeCompare(a[0]));
-    if(rows.length>maxSample) rows.length=maxSample;
-    const scorePairs=[],agfPairs=[];
-    for(const [,s,a,w] of rows){
-      if(Number.isFinite(s)) scorePairs.push([s,w]);
-      if(Number.isFinite(a)) agfPairs.push([a,w]);
-    }
-    if(scorePairs.length<200) return null;
-    calibCache={signature,cutoff,
-      scoreBlocks:fitIsotonic(scorePairs),
-      agfBlocks:fitIsotonic(agfPairs),
-      sample:scorePairs.length};
-    return calibCache;
-  }
-
-  // At başına kazanma olasılığı: R18 win_probability varsa 0.6 ağırlıkla,
-  // yoksa yalnız isotonic harman (0.5 skor + 0.5 AGF). Yarış içi normalize.
-  function horseWinProbabilities(race,horses,opts={}){
-    const list=(horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
-    if(!list.length) return new Map();
-    const calib=opts.calibrators||buildCalibrators(raceDateOf(race),opts);
-    const raw=list.map(h=>{
-      const r18=num(h?.r18_win_probability,NaN);
-      let pIso=null;
-      if(calib&&calib.scoreBlocks){
-        const ps=isotonicPredict(calib.scoreBlocks,rawScoreOf(h));
-        const pa=isotonicPredict(calib.agfBlocks,num(h?.agf,NaN));
-        pIso=(ps!=null&&pa!=null)?0.5*ps+0.5*pa:(ps!=null?ps:pa);
-      }
-      let p;
-      if(Number.isFinite(r18)&&r18>0&&pIso!=null) p=0.6*r18+0.4*pIso;
-      else if(Number.isFinite(r18)&&r18>0) p=r18;
-      else if(pIso!=null) p=pIso;
-      else p=1/list.length;
-      return [h,Math.max(EPS,p)];
-    });
-    const total=raw.reduce((s,[,p])=>s+p,0)||1;
-    return new Map(raw.map(([h,p])=>[h,p/total]));
-  }
-
-  // ---------- marjinal-kazanç genişlik dağıtımı ----------
-
-  // legSpecs: [{ranked:[at...], min, max, keepOrder}] — ranked: ayak aday sırası.
-  // budgetCombos: Π w_i üst sınırı. probs: Map(at->p) veya null.
-  // Döner: {widths:[...], logProb, applied}
-  function optimizeWidths(legSpecs,budgetCombos,probs,opts={}){
-    const n=legSpecs.length;
-    if(!n) return {widths:[],logProb:0,applied:false};
-    const budget=Math.max(1,Math.floor(num(budgetCombos,1)));
-    const floors=legSpecs.map(s=>Math.max(1,Math.min(num(s.min,1),(s.ranked||[]).length||1)));
-    const caps=legSpecs.map((s,i)=>Math.max(floors[i],Math.min(num(s.max,MAX_WIDTH),MAX_WIDTH,(s.ranked||[]).length||1)));
-    if(floors.reduce((a,b)=>a*b,1)>budget) return {widths:floors,logProb:NaN,applied:false};
-
-    // ayak içi kapsama prefix toplamları (kalibre olasılık varsa ona göre yeniden sırala;
-    // keepOrder=true ise uygulamanın sırası korunur, yalnız genişlik optimize edilir)
-    const orders=legSpecs.map((s,i)=>{
-      const ranked=(s.ranked||[]).slice(0,caps[i]);
-      if(!probs||s.keepOrder===true) return ranked;
-      return ranked.slice().sort((a,b)=>num(probs.get(b))-num(probs.get(a)));
-    });
-    const prefix=orders.map(list=>{
-      const acc=[0];
-      for(const h of list){ acc.push(acc[acc.length-1]+(probs?num(probs.get(h),EPS):EPS)); }
-      return acc;
-    });
-    const cov=(i,w)=>Math.max(EPS,prefix[i][Math.min(w,prefix[i].length-1)]);
-
-    const widths=floors.slice();
-    let applied=false;
-    for(;;){
-      const cur=widths.reduce((a,b)=>a*b,1);
-      let bestI=-1,bestRatio=-Infinity;
-      for(let i=0;i<n;i++){
-        const w=widths[i];
-        if(w>=caps[i]||w>=orders[i].length) continue;
-        if((cur/w)*(w+1)>budget+1e-9) continue;
-        const gain=Math.log(cov(i,w+1))-Math.log(cov(i,w));
-        const cost=Math.log((w+1)/w);
-        const ratio=gain/cost;
-        if(ratio>bestRatio+1e-12){ bestRatio=ratio; bestI=i; }
-      }
-      if(bestI<0) break;
-      widths[bestI]++; applied=true;
-    }
-    const logProb=widths.reduce((s,w,i)=>s+Math.log(cov(i,w)),0);
-    return {widths,logProb,applied};
-  }
-
-  // ---------- JOINT_LOG_COVERAGE_DP utility köprüsü ----------
-
-  // coupon-builder-r1681-baseline-v2.js enforceCouponCostCap içindeki options
-  // üretimine giren kalibre olasılık kapsama serisi. ranked (uygulama sırası)
-  // korunur; döndürülen dizinin k-1. elemanı ilk k atın kalibre kapsama
-  // olasılığıdır. riskWeight/floorPenalty çağıran tarafta aynen uygulanır.
-  function utilityCoverage(race,ranked,maxCount,probs){
-    const list=(ranked||[]).slice(0,maxCount);
-    const out=[];let covered=0;
-    for(let i=0;i<list.length;i++){
-      covered+=Math.max(EPS,num(probs?.get(list[i]),EPS));
-      out.push(Math.max(EPS,Math.min(1-EPS,covered)));
-    }
-    return out;
-  }
-
-  function legProbabilitiesForDp(leg,opts={}){
-    const race=leg?.r||leg;
-    const horses=leg?.ranked||leg?.ordered||leg?.displayOrder||race?.horses||[];
-    return horseWinProbabilities(race,horses,opts);
-  }
-
-  // ---------- gölge tanı ----------
-
-  function shadowLog(entry){
-    try{
-      const log=global.__tkpMarginalGainShadowLog||(global.__tkpMarginalGainShadowLog=[]);
-      log.push({ts:new Date().toISOString(),version:VERSION,...entry});
-      if(log.length>500) log.splice(0,log.length-500);
-    }catch(_){ }
-  }
-
-  function wilsonLower(hits,total,z=1.96){
-    const n=num(total);if(n<=0)return 0;
-    const p=Math.max(0,Math.min(1,num(hits)/n)),z2=z*z;
-    return Math.max(0,(p+z2/(2*n)-z*Math.sqrt((p*(1-p)+z2/(4*n))/n))/(1+z2/n));
-  }
-
-  global.TKP_MARGINAL_GAIN_OPTIMIZER={
-    version:VERSION,fitIsotonic,isotonicPredict,buildCalibrators,
-    horseWinProbabilities,optimizeWidths,utilityCoverage,legProbabilitiesForDp,
-    wilsonLower,shadowLog,
-    // Varsayılan AÇIK (2026-09-20 kullanıcı kararı): yalnız açık false opt-out ile kapanır.
-    isEnabled(){ return global.__tkpUseMarginalGainOptimizer!==false; },
-    isShadow(){ return global.__tkpMarginalGainShadow===true; }
-  };
-  global.TKP_MARGINAL_GAIN_OPTIMIZER_VERSION=VERSION;
-})(typeof globalThis!=='undefined'?globalThis:window);
+  return result.use?{use:true,reason:'PAVA',probabilities:result.coverage.map(x=>x.cumulative),meta:result}:{use:false,reason:result.reason,probabilities:legacyProbabilities||[],meta:result};
+}
+return {pavaFit,pavaPredict,wilsonLowerBound,buildWalkForwardCalibrator,coverageProbabilities,marginalGainCoverageForLeg,dpUtilityBridge,tkpMarginalGainDpUtilityBridge:dpUtilityBridge,clearMarginalGainCache};
+});

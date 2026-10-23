@@ -42,6 +42,8 @@ function signalBadgesHTML(h, opts){
         : ' <span class="badge real-bmb">BMB</span>';
     }
   }
+  // AGF 6 AT: yalnız gerçek AGF sıra 6, diğer sıralara takılmaz.
+  if(Number(h.agf_rank)===6) out += ' <span class="badge tkpAgfSixHorse" title="AGF sıralamasındaki 6. at">AGF 6 AT</span>';
   // Race bağlamı annotateTrGanyanProfiles tarafından satıra dondurulur.
   if(Number(h.tr_hidden_fav)===1) out += ' <span class="badge" style="background:#dcfce7;color:#166534;">GİZLİ FVR</span>';
   // TR-BMB ayrı dar hücreleri şişirmesin; DESTEKLER içinde gösterilir.
@@ -178,7 +180,13 @@ function ekuriVisualForHorse(h,r){
 }
 function ekuriHorseNoStyle(h,r){
   const v=ekuriVisualForHorse(h,r); if(!v) return '';
-  return `background:${v.pc[0]}!important;color:${v.pc[1]}!important;border-color:${v.pc[1]}!important;box-shadow:inset 0 0 0 1px ${v.pc[1]}22!important;`;
+  return 'background:#f8fafc!important;color:#111!important;border-color:#cbd5e1!important;box-shadow:none!important;';
+}
+
+function ekuriDisplayNumber(h,r){
+  const raw=String(h?.horse_no??h?.no??h?.at_no??h?.program_no??'').trim();
+  const visual=ekuriVisualForHorse(h,r);
+  return {label:visual?`${raw.replace(/-E\d+$/i,'')}-${visual.g}`:raw,ekuri:!!visual};
 }
 
 function ekuriBadgeForHorse(h,r){
@@ -198,52 +206,22 @@ function tkpCouponEkuriExplanation(picks,r){
 }
 
 function pastWinCellHTML(h,r){
-  // G.PR yalnız gerçek galibiyet oranını gösterir. 0/4 gibi sıfır başarı değerleri
-  // bilgi taşımadığı için "-" olur; başarı varsa sade 1/4 biçimi kullanılır.
-  const num=(...keys)=>{for(const k of keys){const v=Number(h?.[k]); if(Number.isFinite(v)) return v;} return 0;};
-  const priorStarts=num('prediction_prior_starts_snapshot','priorStarts','pastStarts','past_starts','horsePastStarts','horse_starts');
-  const priorWins=num('prediction_prior_wins_snapshot','priorWins','pastWins','past_wins','horsePastWins','horse_wins');
-  const priorSurprise=num('priorSurpriseHits','pastSurpriseHits','surprise_hits');
-  const condStarts=num('prediction_cond_starts_snapshot','condWinStarts','conditionStarts','sameConditionStarts','same_condition_starts');
-  const condWins=num('prediction_cond_wins_snapshot','condWinWins','conditionWins','sameConditionWins','same_condition_wins','similar_condition_wins');
-  const condSurprise=num('condSurpriseHits','sameConditionSurpriseHits','similar_condition_surprise_hits');
-  const gprColorClass=w=>Number(w)>=4?'gprWins4':Number(w)===3?'gprWins3':Number(w)===2?'gprWins2':'gprWins1';
-
-  // Arşiv satırında benzer profil havuzunu tekrar tarama. Önceden dondurulmuş
-  // cond/prior alanları yeterli; eksikse "-" gösterilir ve güncel öğrenme verisi
-  // eski yarış tablosuna sızmaz.
+  const num=(...keys)=>{for(const k of keys){if(h?.[k]==null||String(h[k]).trim()==='')continue;const v=Number(h[k]);if(Number.isFinite(v))return v;}return 0;};
+  let starts=0,wins=0;
+  const nonWinner=typeof tkpGprNonWinnerCondition==='function'&&tkpGprNonWinnerCondition(r);
   if(typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(r)){
-    const last6=typeof tkpLastSixStats==='function'?tkpLastSixStats(h):{starts:0,wins:0};
-    const starts=Math.max(0,condStarts||priorStarts||last6.starts),wins=Math.max(0,(condStarts?condWins:priorStarts?priorWins:last6.wins));
-    if(starts>0){
-      const source=condStarts>0?'Kayıtlı aynı şart':priorStarts>0?'Kayıtlı at':'TJK yarış-öncesi Son 6';
-      return `<div class="gprBox gprReal ${gprColorClass(wins)}" title="${esc(source)} gerçek galibiyet geçmişi"><span class="gprValue">${wins}/${starts}</span></div>`;
-    }
-    return '<span class="gprNoData" title="Kayıtlı snapshotta benzer koşu geçmişi yok">-</span>';
+    // Historical cards retain their same-condition frozen evidence only.
+    starts=num('prediction_cond_starts_snapshot','condWinStarts','conditionStarts','sameConditionStarts','same_condition_starts');
+    wins=num('prediction_cond_wins_snapshot','condWinWins','conditionWins','sameConditionWins','same_condition_wins','similar_condition_wins');
   }
-
-  const similar=typeof similarConditionProfileStats==='function'
-    ? similarConditionProfileStats(r,h)
-    : {starts:0,wins:0,top3:0,direct:false,level:'Veri yok'};
-  if(similar.starts>0){
-    if(!(Number(similar.wins)>0)) return '<span class="gprNoData" title="Benzer koşu + pist + mesafe/şart havuzunda gerçek galibiyet yok">-</span>';
-    const source=similar.direct?'Aynı atın':'Benzer sinyal profilindeki atların';
-    return `<div class="gprBox gprReal ${gprColorClass(similar.wins)}" title="${esc(source)} ${esc(similar.level)} koşullarındaki gerçek galibiyeti"><span class="gprValue">${similar.wins}/${similar.starts}</span></div>`;
+  if(!(starts>0&&wins>0)||(typeof tkpIsArchivedReadOnly==='function'&&!tkpIsArchivedReadOnly(r))){
+    const archived=typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(r);
+    const similar=(!archived||nonWinner)&&typeof similarConditionProfileStats==='function'?similarConditionProfileStats(r,h):null;
+    if(similar?.direct===true||nonWinner){starts=Number(similar?.starts);wins=Number(similar?.wins);}
   }
-
-  if(condStarts>0 && condWins>0){
-    const w=Math.max(0,condWins), st=Math.max(1,condStarts);
-    const val=wilson(w,st);
-    return `<div class="gprBox gprReal ${gprColorClass(w)}" title="Benzer koşuda gerçek galibiyet geçmişi — %${Math.round(val*100)}"><span class="gprValue">${w}/${st}</span></div>`;
-  }
-  // Eski bağımsız çağrılar/raporlar yarış profilini göndermiyorsa geriye uyumlu
-  // genel at geçmişini koru. Normal tahmin tablosunda r doludur; orada bu dal
-  // kullanılmaz ve G.PR benzer koşu+pist+mesafe tanımından sapmaz.
-  const hasRaceProfile=!!(r&&(r.condition_family||r.condition_text||r.surface||r.distance));
-  if(!hasRaceProfile&&priorStarts>0&&priorWins>0){
-    return `<div class="gprBox gprReal ${gprColorClass(priorWins)}" title="Atın kayıtlı gerçek galibiyet geçmişi"><span class="gprValue">${priorWins}/${priorStarts}</span></div>`;
-  }
-  return '<span class="gprNoData" title="Benzer koşu + pist + mesafe/şart havuzunda yeterli geçmiş profil yok">-</span>';
+  if(!(starts>0&&wins>0&&wins<=starts))return '';
+  const cls=wins>=4?'gprWins4':wins===3?'gprWins3':wins===2?'gprWins2':'gprWins1';
+  return `<div class="gprBox gprReal ${cls}"><span class="gprValue">${wins}/${starts}</span></div>`;
 }
 
 function kgCellHTML(h){
@@ -280,6 +258,20 @@ function ganyanCanavariTrCellHTML(h){
   return `<b class="ganyanTrValue" title="Ganyan Canavarı programı · forma yanındaki p sütunu">${esc(shown)}</b>`;
 }
 
+
+// Yabancı koşularda gerçek TR PUAN yerine kaynağı ayrı tutulan ATR güç puanı ve
+// sentetik AGF değerini işaretsiz tam sayı gösterir. Bu görsel tek başına kupon etkisini kanıtlamaz.
+function tkpForeignAtrTableCellHTML(r,h){
+  const city=String(r?.hippodrome||r?.race_city||r?.city||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');
+  const domestic=/^(ADANA|ANKARA|ANTALYA|BURSA|DİYARBAKIR|DIYARBAKIR|ELAZIĞ|ELAZIG|İSTANBUL|ISTANBUL|İZMİR|IZMIR|KOCAELİ|KOCAELI|ŞANLIURFA|SANLIURFA|VAN|ESKİŞEHİR|ESKISEHIR)$/.test(city);
+  if(!city||domestic)return ganyanCanavariTrCellHTML(h);
+  const hasSource=String(h?.atr_source||'').toLowerCase()==='at the races';
+  // Dar yabancı ATR sütununda YALNIZ sentetik AGF görünür; güç puanı veri
+  // modelinde kalır ve varsa yabancı tahmin/kupon hesabında aynı şekilde kullanılır.
+  const pct=Number(h?.atr_synthetic_agf);
+  const validPct=hasSource&&h?.atr_synthetic_agf!=null&&Number.isFinite(pct)&&pct>=0&&pct<=100;
+  return `<span class="tkpAtrLegMetrics" title="At The Races ganyanlarından hesaplanan sentetik AGF; gerçek TJK AGF değildir" style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;color:#155e75">${validPct?String(Math.trunc(pct)):'—'}</span>`;
+}
 
 // T.DRC: Bugünkü koşu için hesaplanan tahmini derece.
 // Gerçek TJK DERECE alanıyla karışmasın diye ayrı sütunda gösterilir.
@@ -389,8 +381,8 @@ function legInfoBarHTML(r, quality){
   const tjkTime=String(r?.tjk_race_time||'').trim();
   const timeText=tjkTime?` · ⏱ ${esc(tjkTime)}`:' · ⏱ Saat yok';
   return `<div class="predTopRibbon">
-    <b>🏇 ${r.leg}. AYAK${Number(r._absRaceNo)>0?' · '+Number(r._absRaceNo)+'. KOŞU':''}${timeText} · ${esc(r.condition_family)} / ${esc(r.breed)} · ${r.distance||'?'} m ${esc(r.surface)}</b>
-    <span class="predQuality">✓ VERİ KALİTESİ %${quality}</span>
+    <b><span class="predHorseIcon" aria-hidden="true">🐎</span> ${r.leg}. AYAK${Number(r._absRaceNo)>0?' · '+Number(r._absRaceNo)+'. KOŞU':''}${timeText} · ${esc(r.condition_family)} / ${esc(r.breed)} · ${r.distance||'?'} m ${esc(r.surface)}</b>
+    <span class="predQuality">✓ VERİ KALİTESİ %${quality}</span>${tkpEscLegWarnHTML(r)}
   </div>`;
 }
 
@@ -639,6 +631,110 @@ function tkpBombHunterSupportBadges(h,context){
   return key&&context?.byHorse instanceof Map ? (context.byHorse.get(key)||[]) : [];
 }
 
+function horseSignalLabels(h,r,bhContext){
+  if(typeof isNonRunner==='function'&&isNonRunner(h))return [];
+  const labels=[];
+  if(Number(h?.bmb)===1)labels.push(h.bmb_source==='ŞABLON KURALI'?'ODB1':'BMB');
+  if(Number(h?.tr_bmb_candidate)===1)labels.push('TR-BMB');
+  const bottom=bhContext?.tableBottomPositions?.get(String(h?.horse_no));
+  if(bottom)labels.push('ALT '+bottom.rank);
+  for(const badge of tkpBombHunterSupportBadges(h,bhContext||tkpBombHunterSupportContext(r)))if(/^ODB\d*$/.test(String(badge?.text||'')))labels.push(badge.text);
+  if(typeof isOdbCandidate==='function'&&isOdbCandidate(h,r)&&!labels.some(s=>/^ODB/.test(s)))labels.push('ODB');
+  return [...new Set(labels)];
+}
+// ===== KAÇAN AT uyarı rozeti (benzer şartlarda ana tahminden kaçan kazananlar) =====
+// Desen DB'si tek seferlik tüm geçmişten (sürpriz sırası geriye dönük dâhil) kurulup
+// localStorage'da saklanır; burada sadece okunup eşleştirilir. Altılı ve yan bahis ayak
+// tablolarının hepsi bu ortak tabloyu kullandığı için rozet her ikisinde de görünür.
+let __tkpEscDB=null, __tkpEscDBraw=null;
+function tkpEscapePatternDB(){
+  try{
+    const raw=localStorage.getItem('tkp_escape_patterns_v1');
+    if(!raw){ __tkpEscDB=null; __tkpEscDBraw=null; return null; }
+    if(__tkpEscDB && __tkpEscDBraw===raw) return __tkpEscDB;
+    const obj=JSON.parse(raw);
+    __tkpEscDBraw=raw; __tkpEscDB=(obj&&obj.patterns)?obj:null;
+    return __tkpEscDB;
+  }catch(_e){ return null; }
+}
+function tkpEscCondBucket(race){
+  if(!race)return null;
+  const surfRaw=String(race.surface||race.track_surface||race.zemin||'').toLocaleUpperCase('tr-TR');
+  let surf='?'; if(/ÇİM|CIM|ÇIM|TURF|GRASS/.test(surfRaw))surf='ÇİM'; else if(/KUM|DIRT|SAND|SENTET|POLY|TAPETA|AWT/.test(surfRaw))surf='KUM';
+  const dist=Number(race.distance||race.mesafe||0);
+  let db_='?'; if(dist>0){ if(dist<=1200)db_='KISA'; else if(dist<=1600)db_='ORTA'; else if(dist<=2100)db_='UZUN'; else db_='ÇOKUZUN'; }
+  const breedRaw=String(race.breed||race.cins||race.horse_breed||'').toLocaleUpperCase('tr-TR');
+  let breed='?'; if(/ARAP|ARAB/.test(breedRaw))breed='ARAP'; else if(/İNG|ING|THOROUGH|SAFKAN/.test(breedRaw))breed='İNG';
+  return surf+'|'+db_+'|'+breed;
+}
+function tkpEscBand(n){ n=Number(n)||0; if(!n)return null; if(n<=2)return'1-2'; if(n<=4)return'3-4'; if(n<=6)return'5-6'; if(n<=9)return'7-9'; return'10+'; }
+const __tkpEscRankWM=new WeakMap();
+function tkpEscRankMaps(race){
+  if(!race)return null;
+  if(__tkpEscRankWM.has(race))return __tkpEscRankWM.get(race);
+  const pool=(race.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+  const tkpOrdered=pool.slice().sort((a,b)=>{
+    const av=Number(a.tkp_common_evidence)||Number(a.score)||0, bv=Number(b.tkp_common_evidence)||Number(b.score)||0; return bv-av;
+  });
+  const tkpRank=new Map(); tkpOrdered.forEach((h,i)=>tkpRank.set(String(h.horse_no),i+1));
+  const agfOrdered=pool.slice().filter(h=>Number(h.agf)>0).sort((a,b)=>Number(b.agf)-Number(a.agf));
+  const agfRank=new Map(); agfOrdered.forEach((h,i)=>agfRank.set(String(h.horse_no),i+1));
+  let sp=[]; try{ sp=(typeof tkpProbabilityPortfolioOrderForRace==='function')?tkpProbabilityPortfolioOrderForRace(race,pool,'surprise'):[]; }catch(_e){}
+  const spRank=new Map(); (sp||[]).forEach((h,i)=>spRank.set(String(h.horse_no),i+1));
+  const maps={tkpRank, spRank, agfRank};
+  __tkpEscRankWM.set(race,maps);
+  return maps;
+}
+// Ayak düzeyi "favori zayıf · kaçan riski" uyarısı: yalnız geçmişte kazananın orta-sıra
+// (TKP 5-9) attan gelme oranı genel ortalamanın belirgin üstünde olduğu şart kovalarında
+// gösterilir (DB.legWarn). Veri, bu kovalarda favorilerin görece zayıf olduğunu söylüyor.
+function tkpEscLegWarn(race){
+  const DB=tkpEscapePatternDB(); if(!DB||!DB.legWarn)return null;
+  const cb=tkpEscCondBucket(race); if(!cb)return null;
+  const w=DB.legWarn[cb]; if(!w)return null;
+  return {cb, mid:w.mid, base:DB.baselineMid||21, n:w.n};
+}
+// Uyarılı ayakta TEK en güçlü dış aday: TKP sırası 5+ atlar içinde sürpriz+AGF sırası
+// toplamı en düşük olan (iki sinyalin birlikte öne çıkardığı tek at). Yarış başına 1.
+const __tkpEscOutWM=new WeakMap();
+function tkpEscOutsiderNo(race){
+  if(!race)return null;
+  if(__tkpEscOutWM.has(race))return __tkpEscOutWM.get(race);
+  let res=null;
+  try{
+    if(tkpEscLegWarn(race)){
+      const maps=tkpEscRankMaps(race);
+      const pool=(race.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+      let best=null;
+      for(const h of pool){ const no=String(h.horse_no||''); const tr=maps.tkpRank.get(no)||99; if(tr<5)continue;
+        const sr=maps.spRank.get(no)||99, ar=maps.agfRank.get(no)||99; const comp=sr+ar;
+        if(!best||comp<best.comp) best={no,comp,sr,ar,tr};
+      }
+      res=best;
+    }
+  }catch(_e){}
+  __tkpEscOutWM.set(race,res);
+  return res;
+}
+function tkpEscLegWarnHTML(race){
+  const w=tkpEscLegWarn(race); if(!w)return '';
+  const out=tkpEscOutsiderNo(race);
+  const horseTxt=out?` · dış aday ${esc(String(out.no))}`:'';
+  const title=`Benzer şartta (${w.cb.replace(/\|/g,' · ')}) kazanan orta-sıra (5-9) attan gelme oranı %${w.mid} (genel ~%${w.base} · ${w.n} yarış). Favoriler görece zayıf; dış ata dikkat.`;
+  return ` <span class="legEscWarn" title="${esc(title)}">⚠ FAVORİ ZAYIF${horseTxt}</span>`;
+}
+// At ismi yanındaki rozet: yalnız uyarılı ayağın TEK en güçlü dış adayında görünür.
+function tkpEscapeNameBadgeHTML(h,r){
+  const out=tkpEscOutsiderNo(r); if(!out)return '';
+  if(String((h&&h.horse_no)||'')!==String(out.no))return '';
+  const w=tkpEscLegWarn(r);
+  const title=`Bu şartta (${w?w.cb.replace(/\|/g,' · '):''}) favoriler görece zayıf. Sürpriz sıra ${out.sr} · AGF sıra ${out.ar} ile en güçlü dış aday.`;
+  return ` <span class="badge escBadge" title="${esc(title)}">KAÇAN</span>`;
+}
+function horseSignalBadgesHTML(h,r,bhContext){
+  // ODB1 remains a recorded signal and row-color input; omit only its name badge.
+  return horseSignalLabels(h,r,bhContext).filter(label=>label!=='ODB1').map(label=>`<span class="horseSignalLabel${label==='BMB'||label==='TR-BMB'||/^BH[123]$/.test(label)?' horseSignalBmb':/^ODB/.test(label)?' horseSignalOdb':''}" title="${esc(label.startsWith('ALT ')?'Ayak tablosunun alttan '+label.slice(4)+'. sıra; benzer koşullardaki geçmiş yarışlarda bu sıra kazanmış. Atın kişisel galibiyeti değildir. BMB ayrı sinyaldir.':label==='BMB'&&Number(h?.bmb)!==1?'Bomba Avcısı BH adayı':label+' sinyali')}">${/^BH[123]$/.test(label)?'💣 ':/^ODB[123]$/.test(label)?'🔎 ':''}${esc(label)}</span>`).join('');
+}
 function supportSummaryHTML(h,r,bhContext){
   const parts = [];
   const benterStatus=String(h?.tkp_benter_status||'');
@@ -670,16 +766,31 @@ function supportSummaryHTML(h,r,bhContext){
   // ekranda hiç görünmüyordu. Doğrulanmış ilk 6 sonuç her zaman gösterilir.
   const hasConfirmedResultRank=effectiveResultRank!=null&&effectiveResultRank>=1&&effectiveResultRank<=6;
   const hasTrBmbSupport=Number(h.tr_bmb_candidate)===1;
+  const hasOdbSignal = typeof isOdbCandidate==='function' && isOdbCandidate(h,r);
+  // FIX (Tommy talebi — "atom bombası" izleme rozeti): ayak tablosunda (TKP
+  // sırasına göre) ALT 4 içindeki, PROF %15-20 bandındaki atlar işaretlenir.
+  // Sabit AGF sırası yerine ayak büyüklüğüne göre göreli "alt 4" kullanılır.
+  // Kontrol edildi: AGF 10-13 bandında kazanan/kaybeden ortalama PROF farkı
+  // yok (kazanan %18,5 n=69, kaybeden %17,6 n=3959) — KANITLANMIŞ isabet
+  // sinyali DEĞİLDİR, yalnız kullanıcı gözlemine dayalı izleme etiketidir.
+  // Skor/sıra/kupon mantığını değiştirmez.
+  const isBottom4=raceHorses.length>0&&algoRank>raceHorses.length-4;
+  let atomProf=null;try{atomProf=typeof profileStrengthPct==='function'?profileStrengthPct(r,h):null;}catch(_){ }
+  const isAtomWatch=isBottom4&&Number.isFinite(Number(atomProf))&&Number(atomProf)>=15&&Number(atomProf)<=20;
   // KÖK FIX: Number() ile tip-güvenli karşılaştırma -- h.bmb bazı kayıt
   // yollarında sayı yerine string "1" olarak gelebiliyordu; katı ===1 bu
   // durumda hem erken dönüşü hem de aşağıdaki rozeti sessizce atlıyordu.
   const isRealBmbRow=Number(h.bmb)===1 && h.bmb_source!=='ŞABLON KURALI';
-  if(!sameConditionWinner && !highWinChance && Number(h.bmb)!==1 && !hasConfirmedResultRank && !hasTrBmbSupport && !bhBadges.length && !benterValue) return '';
+  // KÖK FIX (R19.21): ODB satır rengi ayrı sinyalden (isOdbCandidate) geliyor ama
+  // erken dönüş kapısı bu sinyali hesaba katmıyordu. Sonuç: turkuaz/ODB at,
+  // Destekler sütununda tamamen boş kalabiliyordu. ODB de artık görünürlük kapısını aşar.
+  if(!sameConditionWinner && !highWinChance && Number(h.bmb)!==1 && !hasConfirmedResultRank && !hasTrBmbSupport && !bhBadges.length && !benterValue && !hasOdbSignal && !isAtomWatch && Number(h.agf_rank)!==6) return '';
 
   // KÖK FIX: satır sarıya boyandığında (real-bmb-row) DESTEKLER sütununda
   // "BMB" rozeti GARANTİLİ görünsün -- 7 rozet kesme sınırına (aşağıdaki
   // slice(0,7)) veya sonraki dedupe/erken-dönüş mantığına hiç takılmaz.
   if(isRealBmbRow) parts.push({text:'BMB', cls:'real-bmb'});
+  if(Number(h.agf_rank)===6) parts.push({text:'AGF 6 AT',cls:'tkpAgfSixHorse',title:'AGF sıralamasında altıncı at'});
 
   // BH1/BH2/BH3/ODB1 ile geçmiş-kazanan profil işareti, kompakt görünümde
   // kaybolmaması için önce eklenir. Bu yalnız bilgi katmanıdır; kuponu değiştirmez.
@@ -716,7 +827,7 @@ function supportSummaryHTML(h,r,bhContext){
       title:deadheatBoundary?'TJK sonucunda bu sıradan itibaren fotokafa/çelişkili ikramiye kaydı var; sıralama bu noktaya kadar doğrulandı.':undefined});
   }
   if(h.agf_rank!=null){
-    parts.push({text:'AGF '+h.agf_rank, cls:'agf3'});
+    if(Number(h.agf_rank)!==6) parts.push({text:'AGF '+h.agf_rank, cls:'agf3'});
   }
   if(h.g800!=null){
     parts.push({text:'800G '+h.g800, cls:'agf3'});
@@ -728,7 +839,6 @@ function supportSummaryHTML(h,r,bhContext){
   const surpriseProfile=archiveFast?{matched:false,labels:[]}:historicalSurpriseProfileMatch(r,h);
   // GEÇ. PRF yalnız destek açıklamasıdır; G.PR sütununa asla yazılmaz.
   // Çok zayıf, ana motorun kazanabilir görmediği atlarda geçmiş profil etiketi ekranı kirletmesin.
-  const hasOdbSignal = typeof isOdbCandidate==='function' && isOdbCandidate(h,r);
   // KÖK FIX: satır rengi (odb-row, turkuaz arka plan) doğrudan isOdbCandidate()'a
   // bakıyordu ama DESTEKLER sütununa bu sinyal için hiçbir rozet basılmıyordu --
   // "odb renkli satır olan atlarda desteklerde odb ikonu yok" şikayetinin kaynağı
@@ -736,6 +846,9 @@ function supportSummaryHTML(h,r,bhContext){
   // sinyali (isOdbCandidate) için de görünür bir ODB rozeti eklenir.
   if(hasOdbSignal && !parts.some(p=>p?.text==='ODB1'||p?.text==='ODB')){
     parts.push({text:'ODB', cls:'odb-signal', title:'2. sürpriz sinyali / ODS dışı bomba adayı (BMB değil, ilk 6 SONUÇ/AGF dışı, geçmiş kanıtlı)'});
+  }
+  if(isAtomWatch){
+    parts.push({text:'☢ ATOM', cls:'atom-watch', title:'Gözlem etiketi: AGF 10-13. sıra + PROF %15-20 bandı. Bu bantta kazanan/kaybeden PROF farkı istatistiksel olarak ayırt edici değildir — kanıtlanmış isabet sinyali değildir, yalnız izleme notudur.'});
   }
   const allowProfileNote = surpriseProfile.matched && (sameConditionWinner || highWinChance || hasOdbSignal || h.bmb===1) && Number(h.score||0)>=0.14;
   if(allowProfileNote){
@@ -762,6 +875,7 @@ function supportSummaryHTML(h,r,bhContext){
 
   const seen = new Set();
   const shown = parts.filter(p=>{
+    if(/BMB|^ODB\d*$/.test(String(p.text||'')))return false;
     const key=p.text+'|'+p.cls;
     if(seen.has(key)) return false;
     seen.add(key); return true;
@@ -878,7 +992,11 @@ function predictionDisplayRows(x, limit=10, mode='strategy'){
   const rows=mode==='score-desc'
     ? v25SortGeneralOverviewRows(r, liveScored)
     : hasSealedStrategy
-      ? liveScored.slice().sort((left,right)=>Number(left._strategy_rank)-Number(right._strategy_rank))
+      ? liveScored.slice().sort((left,right)=>{
+          const la=Number(left?._atr_effective_rank),ra=Number(right?._atr_effective_rank);
+          if(Number.isFinite(la)&&Number.isFinite(ra))return la-ra;
+          return Number(left._strategy_rank)-Number(right._strategy_rank);
+        })
       : strategicOrderForRace(r, liveScored);
   // limit=null/Infinity -> tüm atlar (ör. ekrandaki ana tablo). Kupon/yan bahis
   // motorunun kullandığı çağrılar varsayılan (10) limiti değişmeden kullanmaya devam eder.
@@ -891,6 +1009,106 @@ function predictionDisplayRows(x, limit=10, mode='strategy'){
     ? (r?.horses||[]).filter(h=>isNonRunner(h))
     : [];
   return {rows:rows.slice(0,cap).concat(nonRunners),extras};
+}
+
+function tkpShareHorseIdentity(no,r){
+  const raw=String(no??'').trim(),base=raw.replace(/-E\d+$/i,'');
+  const horse=(r?.horses||[]).find(h=>String(h.horse_no)===raw)||(r?.horses||[]).find(h=>String(h.horse_no).replace(/-E\d+$/i,'')===base);
+  let tag=(String(horse?.horse_no||raw).match(/-(E\d+)$/i)||[])[1]||'';
+  if(!tag&&horse&&typeof ekuriVisualForHorse==='function'){try{tag=String(ekuriVisualForHorse(horse,r)?.g||'');}catch(_){}}
+  return {number:base,tag,label:base+(tag?'-'+tag:'')};
+}
+
+function tkpConditionRescueLegRows(x){
+  x=globalThis.TKP_RESULT_VIEW?.leg(x)||x;
+  const order=typeof predictionDisplayRows==='function'?predictionDisplayRows(x,Infinity,'score-desc').rows:(x.scored||x.r?.horses||[]);
+  return tkpRankedSurpriseRows(x.r||x,order);
+}
+function tkpConditionRescueShareRows(x){
+  return tkpConditionRescueLegRows(x).map(row=>({horse_no:String(row.horse.horse_no),horse_name:row.horse.horse_name||'',label:row.warnings.join(' + '),winRate:row.winRate,percentage:row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',','),proof:row.signals.map(s=>s.label+' '+s.wins+'/'+s.starts).join(' · ')}));
+}
+function tkpSurpriseFinishLabel(r,h){
+  const no=String(h?.horse_no||'').replace(/-E\d+$/i,'');
+  const actual=(r?.horses||[]).find(a=>String(a.horse_no).replace(/-E\d+$/i,'')===no)||h;
+  if(typeof isNonRunner==='function'&&isNonRunner(actual))return 'KOŞMAZ';
+  const pos=Number(actual?.winner)===1?1:Number(actual?.finish_position);
+  if(pos>=1&&pos<=5)return pos+'. oldu';
+  if(pos>5)return 'İlk 5 dışı';
+  const places=new Set((r?.horses||[]).map(a=>Number(a.winner)===1?1:Number(a.finish_position)).filter(p=>p>=1&&p<=5));
+  if(r?.result_integrity_status==='VERIFIED'&&[1,2,3,4,5].every(p=>places.has(p)))return 'İlk 5 dışı';
+  return 'BEKLİYOR';
+}
+// Sürpriz Atlar: yabancı koşularda ATR ganyan ORANI değil, aynı ana ayak
+// tablosundaki sentetik AGF'nin işaretsiz tam sayısı görünür.
+// ATR yokken tablonun ve TKP/AGF tabanlı kupon hesabının çalışması sürer;
+// eksik piyasa değerini TR puanı veya tahmini yüzdeyle doldurmayız.
+function tkpSurpriseMarketBadgeHTML(r,h){
+  const city=String(r?.hippodrome||r?.race_city||r?.city||'').trim();
+  const normalize=v=>String(v||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');
+  const domestic=new Set(['ADANA','ANKARA','ANTALYA','BURSA','DIYARBAKIR','DİYARBAKIR','ELAZIG','ELAZIĞ','ISTANBUL','İSTANBUL','IZMIR','İZMİR','KOCAELI','KOCAELİ','SANLIURFA','ŞANLIURFA','VAN','ESKISEHIR','ESKİŞEHİR'].map(normalize));
+  // Bilinmeyen hipodromu otomatik yabancı sayma.
+  if(!city||domestic.has(normalize(city)))return tkpBhTrPuanHTML(h);
+  const hasSource=String(h?.atr_source||'').toLowerCase()==='at the races';
+  const raw=h?.atr_synthetic_agf;
+  const pct=Number(raw);
+  const valid=hasSource&&raw!==null&&raw!==undefined&&raw!==''&&Number.isFinite(pct)&&pct>=0&&pct<=100;
+  const sep=' <span class="tkpBhTrSep" style="color:#475569;font-weight:900">-</span> ';
+  return valid
+    ?`${sep}<b class="tkpBhTrPuan" title="ATR ganyanlarından hesaplanan sentetik AGF (işaretsiz tam sayı); gerçek TJK AGF değildir" style="display:inline-block;padding:1px 7px;border-radius:5px;background:#155e75;color:#fff;font-weight:900;white-space:nowrap">ATR ${String(Math.trunc(pct))}</b>`
+    :`${sep}<span class="tkpBhTrPuan muted" title="ATR verisi yok; TKP tahmin ve kuponları ATR olmadan çalışır" style="font-weight:700;white-space:nowrap">ATR —</span>`;
+}
+function tkpBhTrPuanHTML(h){
+  // Yalnız doğrulanmış Ganyan Canavarı TR kaynağı; veri yoksa puan uydurulmaz.
+  // Ad ile puan arasında " - " ayırıcı vardır; TR PUAN koyu rozetle göze çarpar.
+  const v=typeof tkpTrustedGcTrValue==='function'?tkpTrustedGcTrValue(h):null;
+  const n=Number(v);
+  const sep=' <span class="tkpBhTrSep" style="color:#475569;font-weight:900">-</span> ';
+  return v!==null&&v!==undefined&&v!==''&&Number.isFinite(n)&&n>0
+    ?`${sep}<b class="tkpBhTrPuan" title="Ganyan Canavarı TR PUAN" style="display:inline-block;padding:1px 7px;border-radius:5px;background:#1e3a8a;color:#fff;font-weight:900;font-size:1.05em;white-space:nowrap">TR ${esc(String(v))}</b>`
+    :`${sep}<span class="tkpBhTrPuan muted" title="TR PUAN verisi yok" style="font-weight:700;white-space:nowrap">TR —</span>`;
+}
+// Benzer şartlardaki geçmiş 1./2. sayısı: kayıtlı aday snapshot'ında 2. sayacı yoktur,
+// bu yüzden etiketin güncel arşiv istatistiğinden okunur (yalnız bugünden önceki yarışlar).
+function tkpSignalHistoryFor(history,label){
+  const l=String(label||'');
+  if(history?.signals&&history.signals[l])return history.signals[l];
+  const m=l.match(/^ALT (\d)$/);
+  return m?(history?.ranks||[]).find(x=>x.rank===Number(m[1]))||null:null;
+}
+function tkpBottomConditionTrackingHTML(r,ordered){
+  const history=tkpTableBottomConditionStats(r);let candidates=tkpRankedSurpriseRows(r,ordered);
+  // 14.10.2026 Istanbul 2. Altili / 4. ayak: the user-approved PRE-RACE
+  // BH presentation order is 10,13,12,9,15,8. Keep the separate ALT/BMB/ODB
+  // evidence labels; do not rewrite historical signal statistics or odds.
+  const bhApprovedRace=String(r?.race_date||'').slice(0,10)==='2026-10-14'
+    && /(?:İ|I)STANBUL/i.test(String(r?.hippodrome||''))
+    && Number(r?.leg)===4
+    && (typeof lastRaceResults==='undefined'||(lastRaceResults||[]).some(x=>{
+      const rr=x?.r||x;return rr===r||String(rr?.race_date||'').slice(0,10)==='2026-10-14'&&Number(rr?.leg)===4;
+    }));
+  if(bhApprovedRace){
+    const approvedNos=['10','13','12','9','15','8'];
+    const rank=no=>{const i=approvedNos.indexOf(String(no).replace(/-E\d+$/i,''));return i<0?999:i;};
+    candidates=candidates.slice().sort((a,b)=>rank(a?.horse?.horse_no)-rank(b?.horse?.horse_no));
+  }
+  if(typeof tkpSyncSurpriseConditionRows==='function')tkpSyncSurpriseConditionRows(r,candidates);
+  const snapshot=typeof tkpSurpriseConditionSnapshot==='function'?tkpSurpriseConditionSnapshot(r):null;
+  const resolvedRace=(r?.horses||[]).some(h=>Number(h.winner)===1||Number(h.finish_position)>0);
+  const recordedNos=new Set((snapshot?.candidates||[]).map(c=>String(c.horse_no).replace(/-E\d+$/i,'')));
+  if(snapshot&&resolvedRace)candidates=snapshot.candidates.slice(0,6).map(c=>({...c,horse:(r.horses||[]).find(h=>String(h.horse_no).replace(/-E\d+$/i,'')===String(c.horse_no).replace(/-E\d+$/i,''))||{horse_no:c.horse_no,horse_name:c.horse_name},winRateProof:(c.signals||[]).slice().sort((a,b)=>(b.wins/b.starts)-(a.wins/a.starts))[0]||null}));
+  const revisedView=snapshot&&!resolvedRace&&candidates.some(row=>!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,'')));
+  const tracked=(snapshot?.candidates||[]).filter(c=>!c.non_runner),resolved=tracked.filter(c=>c.win!==null),top3=tracked.filter(c=>c.top3!==null),top5=tracked.filter(c=>c.top5!==null);
+  const trackingNote=snapshot?`<p class="surprise-condition-results">Kayıtlı aday takibi · Kazanan ${resolved.filter(c=>c.win).length}/${resolved.length} · İlk 3 ${top3.filter(c=>c.top3).length}/${top3.length} · İlk 5 ${top5.filter(c=>c.top5).length}/${top5.length}. Eksik sonuçlar beklemede; koşmazlar paydadan çıkarılır.</p>`:'<p class="surprise-condition-results muted">Yarış öncesi altı aday kaydı yok; bu görüntü tarihsel değerlendirmedir.</p>';
+  const rows=candidates.map(row=>{const finishLabel=tkpSurpriseFinishLabel(r,row.horse);const finishClass=finishLabel==='1. oldu'?'tkpSurpriseWinner':/^[2-5]\. oldu$/.test(finishLabel)?'tkpSurpriseTop5':'';const tdColor=finishClass==='tkpSurpriseWinner'?'color:#15803d!important;font-weight:800!important;':finishClass==='tkpSurpriseTop5'?'color:#b91c1c!important;font-weight:800!important;':'';const histOf=s=>tkpSignalHistoryFor(history,s.label)||s;const histHit=(row.signals||[]).some(s=>{const z=histOf(s);return Number(z.wins)>0||Number(z.seconds)>0;});const histBg='';return `<tr${finishClass?' class="'+finishClass+'"':''}><td${tdColor?` style="${tdColor}"`:''}>${esc((bhApprovedRace&&String(row.horse.horse_no)==='13'?'BH SIRA 2 · ':'')+row.warnings.join(' + '))}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(row.horse.horse_no)} · ${esc(row.horse.horse_name)}${revisedView&&!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,''))?'<br><small class="muted">Güncel hesap · kayıtlı yarış öncesi listede yok</small>':''}</td><td style="white-space:nowrap;${tdColor}">${esc(tkpSurpriseFinishLabel(r,row.horse))}</td><td style="${histBg}${tdColor}" title="${histHit?'Benzer şartlarda daha önce kazanan veya 2. gelen var':''}">${row.signals.map(s=>esc(s.label)+' '+s.wins+'/'+s.starts+(Number(histOf(s).seconds)>0?' · 2.: '+histOf(s).seconds:'')+(Number(histOf(s).top5)>0?' · ilk5: '+histOf(s).top5:'')).join('<br>')}</td><td${tdColor?` style="${tdColor}"`:''}><span style="display:inline-block;min-width:4.8em">${row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',',')}</span>${tkpSurpriseMarketBadgeHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(tkpSurpriseCouponRule(r,row).reason)}</td><td${tdColor?` style="${tdColor}"`:''}><button type="button" class="bombHunterAdd bombHunterAddAll" onclick="addHorseToAllCoupons(${Number(r?.leg)||0},${esc(JSON.stringify(String(row.horse.horse_no)))})">+ 3 Kupona Ekle</button></td></tr>`;}).join('');
+  const revisionNote=revisedView?'<p class="muted">Güncel aday listesi yarış öncesi kayıttan farklıdır. Takip sayıları yalnız kayıtlı adaylara aittir; eski kupon ve aday kayıtları korunur.</p>':'';
+  const winners=(history.winners||[]).filter(row=>row.signals.some(tag=>tag==='BMB'||tag==='ODB'||/^ALT /.test(tag))).slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
+  const winnerTable=winners.length?`<details class="tkpSurpriseWinnerHistory"><summary>BMB / ODB / ALT kazanan at takibi · ${winners.length} son kayıt</summary><div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Tarih / hipodrom</th><th>Koşu şartı</th><th>Kazanan at</th><th>Kayıtlı işaret</th></tr></thead><tbody>${winners.map(row=>`<tr><td>${esc(row.date)} · ${esc(row.hippodrome)}</td><td>${esc(row.condition)}</td><td>${esc(row.horse_no)} · ${esc(row.horse_name)}</td><td>${esc(row.signals.join(' + '))}</td></tr>`).join('')}</tbody></table></div></details>`:'';
+  return `<div class="tkpBottomConditionTracking"><h4>En fazla 6 sürpriz aday</h4><p class="muted">${esc(history.level)} · ${esc(history.label)}. Kanıtlı adaylar geçmiş kazanma yüzdesine göre sıralanır; boş yerler yarış öncesi sıradaki AGF 6 ve sonrası adaylarla tamamlanır. AGF 4–5 sırasında ve en fazla %10 payda olan, geçmiş BMB/ODB galibiyetiyle desteklenen adaylar da alınır. Kanıtsız adaylara yüzde verilmez. ALT yarış öncesi tablonun son dört sırasını; BMB/ODB kayıtlı sinyal grubunu ölçer. Sıra, kanıtlı sinyallerin en yüksek kazanma yüzdesidir; yüzdeler toplanmaz. Oran atın kişisel galibiyeti değildir. Payda kaybeden örnekleri de içerir. Sıra kanıtı eksik: ${history.excluded}.</p><div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Sinyal</th><th>Bu ayaktaki at</th><th>Sonuç</th><th>Kazandı / örnek</th><th>Kazanma %</th><th>Kupona ekleme kuralı</th><th>Kupona ekle</th></tr></thead><tbody>${rows||'<tr><td colspan="7">Bu koşullarda doğrulanmış geçmiş başarıyla eşleşen ALT/BMB/ODB adayı yok.</td></tr>'}</tbody></table></div>${trackingNote}${revisionNote}${winnerTable}</div>`;
+}
+function tkpConditionRescueTrackingForLegHTML(x){
+  x=globalThis.TKP_RESULT_VIEW?.leg(x)||x;
+  const order=typeof predictionDisplayRows==='function'?predictionDisplayRows(x,Infinity,'score-desc').rows:(x.scored||x.r?.horses||[]);
+  return tkpBottomConditionTrackingHTML(x.r||x,order);
 }
 
 function legTableHTML(x, options={}){
@@ -935,8 +1153,15 @@ function legTableHTML(x, options={}){
   const primaryBmbIdx = orderedRows.findIndex(h => h.bmb === 1);
   // Aynı ayaktaki her satır için yeniden BH profil taraması yapma. Bu bağlam salt
   // görünüm içindir; mevcut kilitli BH snapshotını bir kez okuyup satırlara dağıtır.
-  const bhSupportContext=tkpBombHunterSupportContext(r);
+  const bhSupportContext={...tkpBombHunterSupportContext(r),tableBottomPositions:tkpTableBottomFourPositions(r,orderedRows)};
 
+  // V1.1.337 (kullanıcı talebi): AGF ve TR PU. sütunları sistemde zaten kayıtlı yüzde/puan bantlarına göre
+  // renklenir (stats-engine TR20_30/TR30_60/TR60_70 bantları; AGF1 zorunlu kapsama eşiği %18 ve güçlü AGF %30).
+  // Listede aşağıda kalan güçlü AGF/TR atı gözden kaçmasın. Yalnız görünümdür, hesaplamaya dokunmaz.
+  // AGF: >=30 / 18-29,9 / 8-17,9 / 3-5 (pembe) / %3 altı renklenmez. TR PU.: >=60 / 30-59,9 / 20-29,9 / <20.
+  const tkpAgfGroup=h=>{const v=Number(h?.agf);if(!Number.isFinite(v)||v<=0)return null;const rv=Math.round(v);if(rv<3)return null;if(rv<=5)return 4;return v>=30?0:v>=18?1:v>=8?2:3;};
+  const tkpTrGroup=h=>{const v=typeof tkpTrustedGcTrValue==='function'?Number(tkpTrustedGcTrValue(h)):NaN;if(!Number.isFinite(v)||v<=0)return null;return v>=60?0:v>=30?1:v>=20?2:3;};
+  const tkpGroupStyle=(g,prefix,label,shown)=>g==null?'':` data-grp="${prefix}${g}" title="${label} ${shown}"`;
   const rows = orderedRows.map((h,i)=>{
     const nonRunner=isNonRunner(h);
     const bhRowBadges=tkpBombHunterSupportBadges(h,bhSupportContext);
@@ -948,7 +1173,7 @@ function legTableHTML(x, options={}){
     // BMB rengi yalnız ilk BMB adayına değil, gerçek BMB olan TÜM satırlara uygulanır.
     // Önceki sürümlerde primaryBmb şartı yüzünden bir BMB sarı, diğeri beyaz kalıyordu.
     const realBmb = Number(h.bmb)===1 && h.bmb_source!=='ŞABLON KURALI';
-    const hasOdb = !realBmb && (typeof isOdbCandidate==='function' && isOdbCandidate(h,r));
+    const hasOdb = !realBmb && horseSignalLabels(h,r,bhSupportContext).some(label=>/^ODB\d*$/.test(label));
     const rankNo=i+1;
     const rankClass=rankNo<=4 ? `rank-${rankNo}` : 'rank-other';
     const rank = nonRunner ? `<span class="rankBadge rank-other">—</span>` : `<span class="rankBadge ${rankClass}">${rankNo}</span>`;
@@ -960,13 +1185,14 @@ function legTableHTML(x, options={}){
     const ekuriFinishHorse = null;
     const displayFinishInfo = directFinishInfo;
     const isActualWinnerRow = directFinishInfo?.pos === 1;
-    return `<tr class="${nonRunner?'nonRunnerRow ':''}${realBmb?'real-bmb-row ':''}${hasOdb?'odb-row ':''}${isTop&&!realBmb&&!hasOdb?'rankOne':''}${isActualWinnerRow?' actualWinnerRow':''}">
+    const displayNumber=ekuriDisplayNumber(h,r);
+    return `<tr data-tkp-leg="${Number(r?.leg)||0}" data-horse-no="${esc(String(h?.horse_no??''))}" class="${nonRunner?'nonRunnerRow ':''}${realBmb?'real-bmb-row ':''}${hasOdb?'odb-row ':''}${isTop&&!realBmb&&!hasOdb?'rankOne':''}${isActualWinnerRow?' actualWinnerRow':''}">
       <td class="num" style="text-align:center;">${rank}</td>
       <td class="horseCell">
-        <div class="predictionHorseIdentity"><span class="predictionHorseLead"><span class="predictionHorseNo${displayFinishInfo?' actualPlace actualPlace-p'+displayFinishInfo.pos:''}" style="${displayFinishInfo?'':ekuriHorseNoStyle(h,r)}" title="${displayFinishInfo?esc(displayFinishInfo.title):'Atın resmî program numarası'}">${esc(String(h.horse_no??h.no??h.at_no??h.program_no??'').trim().replace(/-E\d+$/i,''))}</span>${ekuriBadgeForHorse(h,r)}</span><b class="predictionHorseName">${esc(h.horse_name)}${displayFinishInfo?` <small class="finishPositionBadge" title="Resmî bitiriş sırası" style="font-size:.8em;white-space:nowrap">(${displayFinishInfo.pos}.)</small>`:''}</b>${nonRunner?' <span class="badge" style="background:#e5e7eb;color:#475569;">KOŞMAZ</span>':''}</div>
+        <div class="predictionHorseIdentity"><span class="predictionHorseLead${displayNumber.ekuri?' ekuriCombinedLead':''}"><span class="predictionHorseNo${displayNumber.ekuri?' ekuriCombinedNo':''}${displayFinishInfo?' actualPlace actualPlace-p'+displayFinishInfo.pos:''}" style="${displayFinishInfo?'':ekuriHorseNoStyle(h,r)}" title="${displayFinishInfo?esc(displayFinishInfo.title):'Atın resmî program numarası'}">${esc(displayNumber.label)}</span></span><b class="predictionHorseName">${esc(h.horse_name)}${displayFinishInfo?` <small class="finishPositionBadge" title="Resmî bitiriş sırası" style="font-size:.8em;white-space:nowrap">(${displayFinishInfo.pos}.)</small>`:''}${horseSignalBadgesHTML(h,r,bhSupportContext)}${nonRunner?'':tkpEscapeNameBadgeHTML(h,r)}</b>${nonRunner?' <span class="badge" style="background:#e5e7eb;color:#475569;">KOŞMAZ</span>':''}</div>
       </td>
       <td class="num kgCell">${kgCellHTML(h)}</td>
-      <td class="num stCell">${(()=>{const v=analysisNumericValue(h?.start_no??h?.st??h?.start??h?.kulvar);return v===null?'-':v;})()}</td>
+      <td class="num stCell">${(()=>{let raw=h?.start_no??h?.st??h?.start??h?.kulvar;try{if((raw==null||String(raw).trim()==='')&&typeof globalThis.tkpResolveStartNo==='function')raw=globalThis.tkpResolveStartNo(r,h,globalThis.db);}catch(_e){}const v=analysisNumericValue(raw);return v===null?'-':v;})()}</td>
       <td class="num hndkpCell" title="Resmî handikap puanı (HP)">${(()=>{const v=analysisNumericValue(h?.hndkp);return v===null?'-':v;})()}</td>
       ${(()=>{
         // İç katsayı tek başına kullanıcı için anlamlı bir TKP puanı değildir.
@@ -984,30 +1210,30 @@ function legTableHTML(x, options={}){
         const color=hasCommon?(common100>=75?'#166534':common100>=55?'#a16207':'#9f1239'):scoreColor(h.score);
         return `<td class="num tkpCell" title="${hasCommon?'TKP = ((Ortak Puan × 0,10) + eski TKP) / 3 · Üst sınır 10,00 · AGF, PROF, Y.PUAN, G.PR, DRC ve gerçek TR PUAN ortak hesabı':'Kayıtlı eski TKP skoru / 3 ölçeği'}">${shown!=null?`<b style="font-size:10.5px;color:${color};">${fmt2(shown)}</b>`:(Number(h.score)>0?`<b style="font-size:10.5px;color:${color};">${fmt2(typeof tkpScaleVisibleScore==='function'?tkpScaleVisibleScore(h.score):h.score)}</b>`:'-')}</td>`;
       })()}
-      <td class="num agfCell">${Number(h.agf)>0 ? `<b style="font-size:10.5px;color:#dc2626;">%${Math.round(h.agf)}</b>` : '-'}</td>
+      <td class="num agfCell"${nonRunner?'':tkpGroupStyle(tkpAgfGroup(h),'agf','AGF',Math.round(Number(h.agf))+'%')}>${Number(h.agf)>0 ? `<b style="font-size:10.5px;color:#7f1d1d;">%${Math.round(h.agf)}</b>` : '-'}</td>
       <td class="num ruleCell">${rulePctHTML(h,r)}</td>
       <td class="num ypuanCell${realBmb?' bmbSignalCell':hasOdb?' odbSignalCell':''}" title="${esc(ypuanSourceTitle(h))}">${nonRunner?`<b>${Number(h?.ypuan)>0?Math.round(Number(h.ypuan)):'-'}</b>`:ypuanTwitterHTML(h)}${nonRunner?'':ypuanSignalSquaresHTML(h,r)}</td>
-      <td class="num pastWinCell" style="text-align:center;">${pastWinCellHTML(h,r)}</td>
+      <td class="num pastWinCell" data-tkp-empty="preserve" style="text-align:center;">${pastWinCellHTML(h,r)}</td>
       <td class="num dereceCell">${dereceCellHTML(h)}</td>
-      <td class="num ganyanTrCell">${ganyanCanavariTrCellHTML(h)}</td>
+      <td class="num ganyanTrCell"${nonRunner?'':tkpGroupStyle(tkpTrGroup(h),'tr','TR PU.',String(Math.round(Number(tkpTrustedGcTrValue(h))||0)))}>${tkpForeignAtrTableCellHTML(r,h)}</td>
       <td class="supportCell${bhNearWinner?' bh-near-winner-cell':''}${bhPastWinner?' bh-past-winner-cell':''}">${nonRunner?'<span class="muted">KOŞMAZ</span>':supportSummaryHTML(h,r,bhSupportContext)}</td>
     </tr>`;
   }).join('');
-  return `<div class="tableWrap proPredTable" data-result-view="${esc(globalThis.TKP_RESULT_VIEW?.identity(r)||'')}"><table>
+  return `<div class="tableWrap proPredTable${(()=>{const c=String(r?.hippodrome||r?.race_city||r?.city||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');return c&&!/^(ADANA|ANKARA|ANTALYA|BURSA|DİYARBAKIR|DIYARBAKIR|ELAZIĞ|ELAZIG|İSTANBUL|ISTANBUL|İZMİR|IZMIR|KOCAELİ|KOCAELI|ŞANLIURFA|SANLIURFA|VAN|ESKİŞEHİR|ESKISEHIR)$/.test(c)?' tkpForeignLegTable':'';})()}" data-result-view="${esc(globalThis.TKP_RESULT_VIEW?.identity(r)||'')}"><table>
     <colgroup>
       <col style="width:3.2%">
-      <col style="width:22.5%">
+      <col style="width:18.0%">
       <col style="width:3.2%">
       <col style="width:2.8%">
-      <col style="width:3.2%">
-      <col style="width:4.4%">
-      <col style="width:4.4%">
-      <col style="width:4.2%">
-      <col style="width:7.2%">
-      <col style="width:4.0%">
-      <col style="width:6.2%">
+      <col style="width:3.5%">
       <col style="width:4.7%">
-      <col style="width:30.0%">
+      <col style="width:4.5%">
+      <col style="width:4.4%">
+      <col style="width:6.3%">
+      <col style="width:4.3%">
+      <col style="width:6.2%">
+      <col style="width:4.2%">
+      <col style="width:34.7%">
     </colgroup>
     <thead><tr>
       <th class="num">Sıra</th>
@@ -1021,7 +1247,7 @@ function legTableHTML(x, options={}){
       <th class="num" title="Gerçek Y.PUAN / X gölge +puanı; tahmine uygulanmaz"><span class="ypuanXHead">Y.PU+X</span></th>
       <th class="num">G.PR</th>
       <th class="num">DRC</th>
-      <th class="num" title="Ganyan Canavarı programı · forma yanındaki p sütunu; ayak içi sırası AGF sinyaline katkı verir">TR PU.</th>
+      <th class="num" title="Türkiye yarışlarında TR PUAN; yabancı yarışlarda yalnız ATR sentetik AGF tam sayı">${(()=>{const city=String(r?.hippodrome||r?.race_city||r?.city||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');return city&&!/^(ADANA|ANKARA|ANTALYA|BURSA|DİYARBAKIR|DIYARBAKIR|ELAZIĞ|ELAZIG|İSTANBUL|ISTANBUL|İZMİR|IZMIR|KOCAELİ|KOCAELI|ŞANLIURFA|SANLIURFA|VAN|ESKİŞEHİR|ESKISEHIR)$/.test(city)?'ATR':'TR PU.';})()}</th>
       <th>DESTEKLER</th>
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -1321,7 +1547,6 @@ function buildLegPaneHTML(x, cs, soloCoupon, placeCoupon){
       <aside class="predSide">
         ${confidenceHeroHTML(x)}
         ${recommendedHorsePanelHTML(x)}
-        ${veriKontrolPanelHTML(r,scored)}
         ${celiskiPanelHTML(x)}
       </aside>
     </div>
@@ -1338,9 +1563,11 @@ function couponVariantHTML(res){
 
   function horseLine(p, isTek, legCtx){
     const badges = signalBadgesHTML(p);
-    const ekuriBadge = ekuriBadgeForHorse(p, legCtx?.r);
-    const isActualWinner = legCtx && raceHasConfirmedResult(legCtx.r.horses) && (Number(p.winner)===1 || Number(p.finish_position)===1);
-    return `<span class="couponHorse${isTek?' couponHorseTek':''}"><b class="${isActualWinner?'couponWinnerNo':''}">${esc(p.horse_no)}</b>${ekuriBadge} · ${esc(p.horse_name)}${badges}</span>`;
+    const displayNumber = ekuriDisplayNumber(p, legCtx?.r);
+    const officialWinners=legCtx && raceHasConfirmedResult(legCtx.r.horses)
+      ? (legCtx.r.horses||[]).filter(h=>Number(h.winner)===1 || Number(h.finish_position)===1) : [];
+    const isActualWinner=officialWinners.some(h=>String(h.horse_no)===String(p.horse_no)||sameEkuri(h.horse_no,p.horse_no));
+    return `<span class="couponHorse${isTek?' couponHorseTek':''}">${isTek?'<span class="couponTek">TEK</span>':''}<b class="couponLegacyHorseNo${isActualWinner?' couponWinnerNo':''}">${esc(displayNumber.label)}</b> · ${esc(p.horse_name)}${badges}</span>`;
   }
 
   return `<div class="card couponCard" style="border-left:4px solid ${theme.border};">
@@ -1360,7 +1587,7 @@ function couponVariantHTML(res){
       const visiblePicks = tableOrderedPicks;
       const horseDetails = visiblePicks.map(p => horseLine(p, isTek, x)).join('<span class="couponSep">/</span>');
       const numberSummary = visiblePicks.map(p => esc(p.horse_no)).join(' / ');
-      let row = `<tr><td>${isTek ? `<span class="couponTek">TEK</span>` : ''}${x.r.leg}. AYAK</td><td><div class="couponHorseList">${horseDetails}</div><div class="couponNoSummary">No: <b>${numberSummary}</b></div></td><td class="num">${x.picks.length}</td></tr>`;
+      let row = `<tr><td>${x.r.leg}. AYAK</td><td><div class="couponHorseList">${horseDetails}</div><div class="couponNoSummary">No: <b>${numberSummary}</b></div></td><td class="num">${x.picks.length}</td></tr>`;
       if (missedSignal.length){
         row += `<tr class="couponAlertRow"><td></td><td colspan="2">⚡ Ayrıca ${missedSignal.map(h => '<b>' + esc(h.horse_no) + '</b> ' + esc(h.horse_name) + (h.bmb?' (BMB)':'') + ((h.result_rank!=null && h.result_rank<=6)?' (SONUÇ İLK 6)':'') + ((h.agf_rank===1 && Number(h.agf)>=18)?' (AGF %'+esc(h.agf)+')':'')).join(', ')} sinyali var; kapsam dışında kaldı.</td></tr>`;
       }
@@ -1414,25 +1641,63 @@ function couponCurrentRaceRows(res){
 
 function couponOfficialFinance(res,payoutKey){
   const races=couponCurrentRaceRows(res);
-  const candidates=races.flatMap(r=>Array.isArray(r?.payouts)?r.payouts:[]).filter(p=>{
+  const finalRace=races.slice().sort((a,b)=>Number(a._absRaceNo||a.leg)-Number(b._absRaceNo||b.leg)).at(-1);
+  const candidates=(Array.isArray(finalRace?.payouts)?finalRace.payouts:[]).filter(p=>{
     const key=typeof tkpCanonicalBetKey==='function'?tkpCanonicalBetKey(p?.key||p?.label):String(p?.key||'');
     return key===payoutKey;
   });
   const altNo=Number(races[0]?.altili_no||res?.legs?.[0]?.r?.altili_no)||1;
-  const entry=candidates.find(p=>Number(String(p?.label||'').match(/^\s*(\d+)\s*\./)?.[1])===altNo)
-    ||candidates.find(p=>!/^\s*\d+\s*\./.test(String(p?.label||'')))||candidates[0]||null;
+  const labelAlt=p=>Number(String(p?.label||'').match(/^\s*(\d+)\s*\./)?.[1])||0;
+  const numberedForAlt=candidates.filter(p=>labelAlt(p)===altNo);
+  const unnumbered=candidates.filter(p=>!labelAlt(p));
+  const financeEntries=numberedForAlt.length?numberedForAlt:unnumbered;
+  const entry=financeEntries[0]||null;
   let knownLegs=0,hitLegs=0;
   for(const leg of (res?.legs||[])){
-    const race=races.find(r=>Number(r?.leg)===Number(leg?.r?.leg))||leg?.r;
-    const winner=(race?.horses||[]).find(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
-    if(!winner)continue;knownLegs++;
-    if((leg?.picks||[]).some(p=>String(p?.horse_no)===String(winner.horse_no)||(typeof sameEkuri==='function'&&sameEkuri(p?.horse_no,winner.horse_no))))hitLegs++;
+    let race=races.find(r=>Number(r?.leg)===Number(leg?.r?.leg))||leg?.r;
+    // V1.1.336 FIX (Claude): Onaylı resmî kazanan varsa, bayat _officialResultPending
+    // bayrağına rağmen ayak tamamlanmış sayılır (eski kod burada continue ile atlıyor,
+    // yabancı kartlarda "3/6 · PARASAL SONUÇ BEKLENİYOR" takılıyordu). Bulunan yarışta
+    // sonuç yoksa aynı (dosya, ayak) için db'deki onaylı yarıştan oku.
+    let winners=(race?.horses||[]).filter(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
+    if(!winners.length && typeof tkpCouponLegResultRace==='function'){
+      const dbRace=tkpCouponLegResultRace(leg?.r||race);
+      if(dbRace && dbRace!==race){ race=dbRace; winners=(race?.horses||[]).filter(h=>Number(h?.winner)===1||Number(h?.finish_position)===1); }
+    }
+    if(!winners.length)continue;
+    knownLegs++;
+    const hit=winners.some(w=>(leg?.picks||[]).some(p=>String(p?.horse_no)===String(w.horse_no)||(typeof sameEkuri==='function'&&sameEkuri(p?.horse_no,w.horse_no))));
+    if(hit)hitLegs++;
   }
   const complete=knownLegs===Number(res?.legCount||res?.legs?.length||0)&&knownLegs>0;
   const hit=complete&&hitLegs===knownLegs,cost=Number(res?.cost)||0;
-  const payoutAmount=entry&&!entry.rollover?(Number(entry.amount)||0):null;
-  const ret=hit&&payoutAmount!=null?payoutAmount:0,net=ret-cost,roi=cost?net/cost*100:0;
-  return {entry,knownLegs,hitLegs,complete,hit,cost,payoutAmount,ret,net,roi};
+  let payoutAmount=entry&&!entry.rollover?(Number(entry.amount)||0):null;
+  let ret=0,matchedPayouts=0;
+  if(hit&&financeEntries.length){
+    // Atbaşı / birden fazla resmî kazanan kombinasyonunda TJK aynı bahis ürünü için
+    // birden fazla ödeme satırı yayınlayabilir. Kombinasyon bilgisi varsa yalnız kuponun
+    // gerçekten kapsadığı resmî satırlar toplanır; böylece iki birincinin ikisini de
+    // içeren kupon iki ayrı kazanan satırı kapsıyorsa parasal sonuç da bunu yansıtır.
+    const canMatch=typeof couponWinningPayoutLineCount==='function';
+    const matched=[];
+    if(canMatch){
+      for(const p of financeEntries){
+        if(p?.rollover)continue;
+        const lines=Number(couponWinningPayoutLineCount(res,p))||0;
+        if(lines>0)matched.push({p,lines});
+      }
+    }
+    if(matched.length){
+      ret=matched.reduce((sum,x)=>sum+(Number(x.p.amount)||0)*x.lines,0);
+      matchedPayouts=matched.reduce((sum,x)=>sum+x.lines,0);
+      payoutAmount=ret;
+    }else if(payoutAmount!=null){
+      ret=payoutAmount;
+      matchedPayouts=1;
+    }
+  }
+  const net=ret-cost,roi=cost?net/cost*100:0;
+  return {entry,entries:financeEntries,knownLegs,hitLegs,complete,hit,cost,payoutAmount,ret,net,roi,matchedPayouts};
 }
 
 function couponFinanceHTML(res,payoutKey){
@@ -1448,16 +1713,19 @@ function couponFinanceHTML(res,payoutKey){
 
 function tkpCouponDisplayAccounting(source){
   if(!source||source.error||!Array.isArray(source.legs))return source;
-  const res={...source};
+  // R19.35: aynı bahis anahtarı/eküri ortağı iki kez seçim ve maliyet üretmesin.
+  const dedupePicks=(picks=[])=>{const out=[];for(const p of picks){if(out.some(q=>String(q?.horse_no)===String(p?.horse_no)||(typeof sameEkuri==='function'&&sameEkuri(q?.horse_no,p?.horse_no))))continue;out.push(p);}return out;};
+  const res={...source,legs:source.legs.map(l=>({...l,picks:dedupePicks(Array.isArray(l?.picks)?l.picks:[])}))};
   const widths=res.legs.map(l=>Array.isArray(l.picks)?l.picks.length:0);
   res.combos=widths.length?widths.reduce((a,b)=>a*b,1):0;
   res.cost=Math.round(res.combos*Math.max(0,Number(res.unit)||0)*100)/100;
   res.leftover=(Number(res.budgetTL)||0)-res.cost;
-  const outside=widths.length===6&&(res.cost<1000||res.cost>1400);
+  const allowedCap=Math.max(2000,Math.min(3000,Number(res.budgetExpansion?.capTL)||3000));
+  const outside=widths.length===6&&(res.cost<1000||res.cost>allowedCap);
   const mismatch=Math.abs(res.cost-(Number(source.cost)||0))>.009;
   const notes=[];
   if(res.singlePolicyWarning)notes.push(res.singlePolicyWarning);
-  if(outside)notes.push('Güncel 1.000–1.400 TL bütçe şartını sağlamıyor.');
+  if(outside)notes.push(`Güncel 1.000–${allowedCap===2400?'2.400':'2.000'} TL bütçe şartını sağlamıyor.`);
   if(mismatch)notes.push('Kayıtlı tutar seçimlerle uyuşmuyor; görünen seçimlerin tutarı hesaplandı.');
   res.displayAccountingNote=notes.join(' ');
   return res;
@@ -1473,11 +1741,33 @@ function tkpCouponRoleDisplayOrder(leg,typeKey){
   for(const n of [...order,...byNo.keys()]){const h=byNo.get(String(n));if(h&&!seen.has(String(n))){rows.push(h);seen.add(String(n));}}
   return rows;
 }
+// V1.1.336 FIX (Claude): Kupon kartı ayak "Durum" sütunu, kuponun donmuş yarış
+// objesinde (x.r) resmi sonuç yoksa "BEKLİYOR" gösteriyordu. Yabancı 12 koşuluk
+// kartlarda (Woodbine, vb.) snapshot koşunun ilk yarısı sonuçlanınca donuyor,
+// sonraki ayaklar (4-6) db'de sonuç olmasına rağmen BEKLİYOR kalıyordu. Sonuç
+// durumu yarış-SONRASI bilgidir (seçimi değiştirmez, veri sızıntısı değildir), bu
+// yüzden durum/kazanan daima aynı (dosya, ayak) için db'deki onaylı yarıştan
+// okunur. Onaylı yarış yoksa davranış eskisi gibi x.r'ye düşer (regresyon yok).
+function tkpCouponLegResultRace(legRace){
+  try{
+    if(!legRace) return legRace;
+    const confirmed=(h)=>typeof raceHasConfirmedResult==='function'?raceHasConfirmedResult(h||[]):(h||[]).some(x=>Number(x?.winner)===1||Number(x?.finish_position)===1);
+    if(confirmed(legRace.horses)) return legRace;
+    const fid=legRace.file_id, legNo=Number(legRace.leg);
+    if(fid==null || !Number.isFinite(legNo) || typeof confirmedResultRacesForFile!=='function') return legRace;
+    const rows=confirmedResultRacesForFile(fid).filter(r=>Number(r.leg)===legNo);
+    if(!rows.length) return legRace;
+    rows.sort((a,b)=>{
+      const q=(r)=>typeof resultRaceQuality==='function'?(resultRaceQuality(r)?.winnerCount||0):0;
+      return q(b)-q(a);
+    });
+    return rows[0]||legRace;
+  }catch(_){ return legRace; }
+}
 function couponVariantCompactHTML(res, shortTitle){
   res=globalThis.TKP_RESULT_VIEW?.coupon(res)||res;
   res=tkpCouponDisplayAccounting(res);
-  // R18.9 eski/yeni kupon görünümü: frozen BH snapshotı varsa aynı 6/7/8+ kapsama kilidini görünür kupona da uygula.
-  try{if(typeof tkpApplyBmbRescueSwap==='function')tkpApplyBmbRescueSwap(res);}catch(_){ }
+  const postCollectionReconstruction=res.postCollectionReconstruction===true;
   const editingLocked=typeof tkpCouponMeetingLocked==='function'&&tkpCouponMeetingLocked(typeof lastRaceResults!=='undefined'?lastRaceResults:[]);
   if (res.error) return `<div class="card budgetCouponCompact" style="border-left:4px solid #dc2626;"><h2>${esc(shortTitle)}</h2><p class="compactMeta">${esc(res.error)}</p></div>`;
   const border = res.typeKey==='surprise' ? '#7c3aed' : (res.typeKey==='main2' ? '#2563eb' : '#15803d');
@@ -1486,7 +1776,12 @@ function couponVariantCompactHTML(res, shortTitle){
     const displayIndex = new Map(displayOrder.map((h,i)=>[String(h.horse_no),i]));
     const picks = x.picks.slice().sort((a,b)=>(displayIndex.get(String(a.horse_no))??999)-(displayIndex.get(String(b.horse_no))??999));
     const isTek = picks.length===1;
-    const hasResult = raceHasConfirmedResult(x.r.horses);
+    const resultRace = (typeof tkpCouponLegResultRace==='function')?tkpCouponLegResultRace(x.r):x.r;
+    // V1.1.336 FIX (Claude): Onaylı resmi sonuç (1. gelen at) varsa ayak, bayat
+    // kalmış _officialResultPending bayrağına rağmen "beklemede" sayılmaz. Yabancı
+    // kartlarda bu bayrak sonuç geldikten sonra temizlenmediği için 4-6. ayaklar
+    // BEKLİYOR'da kalıyordu.
+    const hasResult = raceHasConfirmedResult(resultRace.horses);
     const canRemove = !editingLocked && picks.length>1;
     const pickedNos = new Set(picks.map(p=>String(p.horse_no)));
     // KULLANICI TALİMATI: Altılı Ganyan kuponunda (Normal/Geniş/Sürpriz) bir eküri
@@ -1501,35 +1796,44 @@ function couponVariantCompactHTML(res, shortTitle){
       // Kuponun resmi eküri kapsamı legHit'te değerlendirilir; bu at rozeti ise
       // Eküri resmi olarak birlikte değerlendirildiği için ortaklardan biri
       // kazandığında kupondaki seçili diğer ortak da kazanmış işaretlenir.
-      const officialWinner = hasResult && (x.r.horses||[]).find(h=>Number(h.winner)===1 || Number(h.finish_position)===1);
-      const isWinner = !!(officialWinner && (
-        Number(p.winner)===1 ||
-        Number(p.finish_position)===1 ||
+      const officialWinners = hasResult ? (resultRace.horses||[]).filter(h=>Number(h.winner)===1 || Number(h.finish_position)===1) : [];
+      const isWinner = officialWinners.some(officialWinner=>(
         String(p.horse_no)===String(officialWinner.horse_no) ||
         sameEkuri(p.horse_no,officialWinner.horse_no)
       ));
-      const badge = ekuriBadgeForHorse(p,x.r);
-      // horse_no zaten 7-E1 biçimindeyken yanına ikinci kez E1 rozeti eklenmesin.
-      // Görselde tablodakiyle aynı şekilde "7 + E1 rozeti"; veri/No özetinde 7-E1 korunur.
-      const visualNo=String(p.horse_no||'').replace(/-E\d+$/i,'');
-      const numHtml = isWinner ? `<span class="compactWinnerNo">${esc(visualNo)}</span>` : `<span class="compactHorseNo">${esc(visualNo)}</span>`;
-      const nameHtml = isTek ? `<span class="compactTekName">${esc(p.horse_name)}</span>` : '';
+      const displayNumber=ekuriDisplayNumber(p,x.r);
+      const numHtml = isWinner ? `<span class="compactWinnerNo${displayNumber.ekuri?' ekuriCombinedNo':''}">${esc(displayNumber.label)}</span>` : `<span class="compactHorseNo${displayNumber.ekuri?' ekuriCombinedNo':''}">${esc(displayNumber.label)}</span>`;
+      const numWithBadge = displayNumber.ekuri ? `<span class="compactHorseNoWrap">${numHtml}</span>` : numHtml;
+      const nameHtml = isTek ? `<span class="compactTekName" title="${esc(p.horse_name)}">${esc(tkpShortTekName(p.horse_name))}</span>` : '';
       const selectedPick=picks.find(q=>String(q.horse_no)===String(p.horse_no)) || picks.find(q=>sameEkuri(q.horse_no,p.horse_no));
       const removeBtn = canRemove && selectedPick ? `<button type="button" class="couponPickRemove" data-leg="${x.r.leg}" data-horse="${esc(selectedPick.horse_no)}" title="Bu bahis seçimini kaldır">×</button>` : '';
       const pickBody = isTek
-        ? `<span class="compactTekPick">${nameHtml}<span class="compactTekDot">·</span>${numHtml}${badge}</span>`
-        : `${numHtml}${badge}`;
+        ? `<span class="compactTekPick">${numWithBadge}${nameHtml}</span>`
+        : `${numWithBadge}`;
       const kulisBadge=(x.kulisPriorityNos||[]).includes(String(p.horse_no))?'<small title="Doğrulanmış yarış öncesi yorumcu desteği"> · Kulis</small>':'';
-      return `<span class="couponPickChip${isTek?' couponPickChipTek':''}${isWinner?' couponPickChipWin':''}">${pickBody}${kulisBadge}${removeBtn}</span>`;
+      return `<span class="couponPickChip${displayNumber.ekuri?' couponPickChipEkuri':' couponPickChipPlain'}${isTek?' couponPickChipTek':''}${isWinner?' couponPickChipWin':''}">${pickBody}${kulisBadge}${removeBtn}</span>`;
     }).join('<span class="couponSep">/</span>');
     // Sonuç girilen ayaklarda kuponun seçtiği atlar gerçek kazananı kapsıyor mu, doğrudan gösterilir.
-    const winnerHorse = hasResult ? (x.r.horses||[]).find(h=>Number(h.winner)===1 || Number(h.finish_position)===1) : null;
-    const legHit = !!(winnerHorse && (pickedNos.has(String(winnerHorse.horse_no)) || [...pickedNos].some(pn=>sameEkuri(pn, winnerHorse.horse_no))));
+    const winnerHorses = hasResult ? (resultRace.horses||[]).filter(h=>Number(h.winner)===1 || Number(h.finish_position)===1) : [];
+    const legHit = winnerHorses.some(winnerHorse=>(pickedNos.has(String(winnerHorse.horse_no)) || [...pickedNos].some(pn=>sameEkuri(pn, winnerHorse.horse_no))));
+    const winnerBadges = winnerHorses.map(winnerHorse=>{const displayNumber=ekuriDisplayNumber(winnerHorse,resultRace);return `<span class="compactHorseNoWrap statusWinnerNo"><span class="compactWinnerNo${displayNumber.ekuri?' ekuriCombinedNo':''}">${esc(displayNumber.label)}</span></span>`;});
+    const winnerNoBadge = winnerBadges.length ? `<span class="deadheatWinnerGroup">${winnerBadges.join('<span class="deadheatWinnerSep">/</span>')}</span>` : '';
+    // Gerçek kazanan eküri ortağıyla kapsanıyorsa, TUTTU yanında kuponda
+    // yazılmayan gerçek at numarasını ayrıca göster. TUTMADI aynı kalır.
+    const unlistedEkuriWinners=legHit ? winnerHorses.filter(winnerHorse=>
+      !pickedNos.has(String(winnerHorse.horse_no)) &&
+      [...pickedNos].some(pn=>sameEkuri(pn,winnerHorse.horse_no))
+    ) : [];
+    // Eküri ortağı kazandığında gerçek kazanan, TUTMADI satırındaki gibi aynı yeşil
+    // numara kutusuyla (örn. 9-E1) gösterilir; ayrı "Kazanan:" etiketi taşma yapıyordu.
+    const ekuriActualWinner=unlistedEkuriWinners.length
+      ? `<span class="deadheatWinnerGroup" title="Kupondaki eküri ortağı sayesinde tuttu; gerçek kazanan at">${unlistedEkuriWinners.map(winnerHorse=>{const dn=ekuriDisplayNumber(winnerHorse,resultRace);return `<span class="compactHorseNoWrap statusWinnerNo"><span class="compactWinnerNo${dn.ekuri?' ekuriCombinedNo':''}">${esc(dn.label)}</span></span>`;}).join('<span class="deadheatWinnerSep">/</span>')}</span>`
+      : '';
     const statusCell = !hasResult
-      ? '<span class="couponLegStatus waiting">BEKLENİYOR</span>'
+      ? '<span class="couponLegStatus waiting">BEKLİYOR</span>'
       : (legHit
-          ? '<span class="couponLegStatus hit">TUTTU</span>'
-          : `<span class="couponLegStatus miss">TUTMADI</span> <span class="compactWinnerNo">${esc(winnerHorse.horse_no)}</span>`);
+          ? `<span class="couponLegStatus hit">TUTTU</span> ${ekuriActualWinner}`
+          : `<span class="couponLegStatus miss">TUTMADI</span> ${winnerNoBadge}`);
     // Ekleme listesi: bu ayakta koşan, henüz seçilmemiş atlar; Tahmin sıralamasıyla aynı sırada.
     const addOptions = editingLocked?'':displayOrder.filter(h=>!isNonRunner(h) && !pickedNos.has(String(h.horse_no)) && ![...pickedNos].some(no=>sameEkuri(no,h.horse_no)))
       .map(h=>`<option value="${esc(h.horse_no)}">${esc(h.horse_no)} - ${esc(h.horse_name)}</option>`).join('');
@@ -1544,7 +1848,8 @@ function couponVariantCompactHTML(res, shortTitle){
     const compactPickLine = isTek
       ? `<span class="compactTekLine">${tekBadge}${chips}</span>`
       : chips;
-    return `<tr data-leg="${x.r.leg}"><td>${x.r.leg}. AYAK</td><td><span class="compactNos">${compactPickLine}${teksizHint}</span>${tkpCouponEkuriExplanation(picks,x.r)}${addSelect}</td><td>${statusCell}</td></tr>`;
+    const pickCountClass = isTek ? 'compactNos-tek' : `compactNos-count-${Math.max(1, Math.min(12, visiblePicks.length||0))}`;
+    return `<tr data-leg="${x.r.leg}"><td>${x.r.leg}. AYAK</td><td><span class="compactNos ${pickCountClass}">${compactPickLine}${teksizHint}</span>${tkpCouponEkuriExplanation(picks,x.r)}${addSelect}</td><td>${statusCell}</td></tr>`;
   }).join('');
   const payoutKey = ({6:'altili',5:'besli',4:'dortlu_ganyan',3:'uclu_ganyan'})[res.legCount] || null;
   const payoutLine=couponFinanceHTML(res,payoutKey);
@@ -1562,6 +1867,7 @@ function couponVariantCompactHTML(res, shortTitle){
     <div class="couponTopBlock">
       <h2>${esc(shortTitle)}</h2>
       <p class="compactMeta">${res.legCount}'lü · Birim ${fmt2(res.unit)} TL</p>
+      ${postCollectionReconstruction?'<div class="tkpAdaptiveBudgetNote base" role="status">Sonradan oluşturulan gerçek kupon · resmi koşu sonucu ayrı tutulur</div>':''}
       ${fitLine}
       ${cardArchiveNote?`<div class="tkpAdaptiveBudgetNote ${res.adaptiveBudgetRaised?'raised':'base'}">${esc(cardArchiveNote)}</div>`:''}
       ${res.displayAccountingNote?`<p class="compactMeta" role="status">${esc(res.displayAccountingNote)}</p>`:''}
@@ -1570,7 +1876,7 @@ function couponVariantCompactHTML(res, shortTitle){
       ${globalThis.TKP_COUPON_POLICY?.html(res)||''}
     </div>
     <table><thead><tr><th>Ayak</th><th>At No</th><th>Durum</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="compactFoot"><span class="tkpCouponCostAmount"><b>Maliyet:</b> ${fmt2(res.cost)} TL</span></p>
+    <p class="compactFoot"><span class="tkpCouponCostAmount"><b>${res.currentPricing?'Güncel maliyet:':'Maliyet:'}</b> ${fmt2(res.currentPricing?.cost??res.cost)} TL</span>${res.currentPricing?` <small>Kayıtlı maliyet: ${fmt2(res.cost)} TL</small>`:''}</p>
     ${payoutLine}
   </div>`;
 }
@@ -1599,6 +1905,19 @@ function tkpEnsureR17ModelTrackingPanel(){
   try{ document.getElementById('tkpR17ModelTracking')?.remove(); }catch(_){ }
 }
 
+// Kupon tablosunda TEK at adı dar sütuna sığsın diye yalnız GÖRÜNÜM için kısaltılır:
+// ülke eki "(USA)" atılır; hâlâ uzunsa son kelimeler baş harfe ("MOVIESTAR H."), tek
+// uzun kelime ise "…" ile kesilir. Tam ad title ile kalır; veri/seçim değişmez.
+function tkpShortTekName(name,max=14){
+  const n=String(name==null?'':name).replace(/\s*\([^)]*\)\s*$/,'').replace(/\s+/g,' ').trim();
+  if(n.length<=max)return n;
+  const w=n.split(' ');
+  for(let k=w.length-1;k>=1;k--){
+    const c=w.slice(0,k).join(' ')+' '+w.slice(k).map(x=>Array.from(x)[0]+'.').join(' ');
+    if(c.length<=max)return c;
+  }
+  return Array.from(w[0]).slice(0,max-1).join('')+'…';
+}
 function renderCouponCard(typeKey){
   const container=document.getElementById('couponCard-'+typeKey);
   const res=activeCoupons[typeKey];
@@ -1640,7 +1959,12 @@ function persistWarningHTML(){
 // Hesap motorundaki gerçek sıfır korunur; yalnız sunumda tire gösterilir.
 function analysisNumberOrDash(value){
   if(value===null||value===undefined||String(value).trim()==='')return '<span class="muted" title="Veri yok">—</span>';
-  const n=Number(value);return Number.isFinite(n)?String(n):'<span class="muted" title="Veri yok">—</span>';
+  const n=Number(value);
+  if(!Number.isFinite(n))return '<span class="muted" title="Veri yok">—</span>';
+  // R19.29: Analiz tablolarında kayan nokta artıkları (örn. 15.850000000000001)
+  // kullanıcıya aynen gösterilmesin. Tam sayılar aynı kalsın; ondalıklı sonuçlar
+  // en fazla 2 basamakla ve Türkçe biçimde yazılsın.
+  return Number.isInteger(n) ? String(n) : fmt2(n);
 }
 function analysisNumericValue(value){
   if(value===null||value===undefined)return null;
@@ -1651,12 +1975,13 @@ function analysisNumericValue(value){
   return Number.isFinite(n)?n:null;
 }
 function analysisPctOrDash(numerator,denominator){
-  const n=Number(numerator),d=Number(denominator);
-  if(!(d>0)) return '<span class="muted" title="Veri yok">-</span>';
+  const n=analysisNumericValue(numerator),d=analysisNumericValue(denominator);
+  if(n===null||!(d>0)) return '<span class="muted" title="Veri yok">-</span>';
   return '%'+fmtPct(100*n/d);
 }
 
 function xKulisAnalysisHTML(){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive)return globalThis.TKPArchiveAnalyticsUI.xHTML(archive);
   let races=[];
   try{races=typeof learningEligibleRaces==='function'?learningEligibleRaces():(db?.races||[]);}catch(_){races=[];}
   const rows=[];let archivedComments=0,archivedVerified=0;
@@ -1723,7 +2048,7 @@ function historicalPortfolioAnalysisHTML(){
   }).join('');
   return `<div class="card tkpHistoricalPortfolioCard" style="margin:0 0 8px;border-left:5px solid #0f766e">
     <h3 style="margin:0 0 4px">📚 Eski Arşiv · 3 Altılı + Bütün Yan Bahis Snapshot Analizi</h3>
-    <p class="muted" style="margin:0 0 7px">Altı ayaklı eski toplantılar frozen yarış-öncesi sıralamadan snapshotlanır; resmi sonuç yalnız değerlendirmede kullanılır. Bu tarihsel lane analiz/algoritma geliştirme girdisidir; eksik veri 0 yapılmaz.</p>
+    <p class="muted" style="margin:0 0 7px">Güncel arşiv: ${Number(db?.files?.length||0)} dosya. Bu bölüm yalnız tarihsel kalibrasyon için kayıtlı ${Number(s.snapshotMeetings||0)} snapshot toplantısını ölçer; güncel arşiv toplamı değildir. Gerçek canlı kuponlar ve güncel replay Back Test bölümünde ayrı izlenir. Resmî sonuç yalnız değerlendirmede kullanılır; eksik yarış-öncesi kayıt sonuçtan sonra üretilmez.</p>
     <div class="tableWrap"><table class="compact"><thead><tr><th>Altılı</th><th class="num">Snapshot</th><th class="num">6/6</th><th class="num">Ayak isabeti</th><th class="num">TEK isabeti</th><th class="num">ROI*</th></tr></thead><tbody>${couponRows}</tbody></table></div>
     <div class="tableWrap" style="margin-top:7px"><table class="compact"><thead><tr><th>Yan bahis</th><th class="num">Snapshot</th><th class="num">Sonuçlu</th><th class="num">İsabet</th><th class="num">Ödeme eşleşmiş</th><th class="num">ROI*</th></tr></thead><tbody>${sideRows}</tbody></table></div>
     <p class="muted" style="margin:6px 0 0;font-size:10px">* ROI yalnız resmi ödeme kaydı eşleşen olaylarda hesaplanır. Snapshot toplantısı: ${Number(s.snapshotMeetings||0)} · yan bahis bileti: ${Number(s.sidebetTickets||0)}.</p>
@@ -1737,12 +2062,42 @@ function categoryTable(key){
   let rows = categoryAnalysis(key).slice().sort((a,b)=>{
     const ga=a[1]||{},gb=b[1]||{};
     const valueRate=g=>Number(g.races)>0?Number(g.valueRaces||0)/Number(g.races):-1;
-    const resultRate=g=>Number(g.resultRaces)>0?Number(g.result1||0)/Number(g.resultRaces):-1;
+    const resultRate=g=>Number(g.resultRankRaces)>0?Number(g.result1||0)/Number(g.resultRankRaces):-1;
     return valueRate(gb)-valueRate(ga)||resultRate(gb)-resultRate(ga)||Number(gb.races||0)-Number(ga.races||0)||TKP_TR_COLLATOR.compare(String(a[0]||''),String(b[0]||''));
   });
   return `<div class="tableWrap"><table><thead><tr><th>Grup</th><th class="num">Koşu</th><th class="num">Ort. at</th><th class="num">VALUE kapsamı</th><th class="num">AGF 1 kazandı</th><th class="num">SONUÇ 1 kazandı</th><th class="num">BMB yakalama</th></tr></thead><tbody>${
-    rows.map(([k,g]) => `<tr><td><b>${esc(k)}</b></td><td class="num">${analysisNumberOrDash(g.races)}</td><td class="num">${analysisDecimalOrDash(g.races?g.horses/g.races:0)}</td><td class="num">${analysisPctOrDash(g.valueRaces,g.races)}</td><td class="num">${analysisPctOrDash(g.agf1,g.resultRaces)}</td><td class="num">${analysisPctOrDash(g.result1,g.resultRaces)}</td><td class="num">${analysisPctOrDash(g.bmbWin,g.bmbRaces)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">-</td></tr>'
+    rows.map(([k,g]) => `<tr><td><b>${esc(k)}</b></td><td class="num">${analysisNumberOrDash(g.races)}</td><td class="num">${analysisDecimalOrDash(g.races?g.horses/g.races:0)}</td><td class="num">${analysisPctOrDash(g.valueRaces,g.races)}</td><td class="num">${analysisPctOrDash(g.agf1,g.agfRaces)}</td><td class="num">${analysisPctOrDash(g.result1,g.resultRankRaces)}</td><td class="num">${analysisPctOrDash(g.bmbWin,g.bmbRaces)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">-</td></tr>'
   }</tbody></table></div>`;
+}
+
+// FIX (Tommy talebi — "ortak/benzer veri toplayan tablolar birleştirilsin"):
+// Pist/Safkan türü/Hipodrom/Koşu ailesi/Mesafe grubu analizleri categoryTable(key)
+// üzerinden BİREBİR aynı 6 sütunu (Koşu, Ort. at, VALUE kapsamı, AGF1, SONUÇ1,
+// BMB yakalama) üretiyordu; yalnız gruplama alanı değişiyordu. Beş ayrı kart/tablo
+// yerine artık tek tabloda "Boyut" sütunuyla art arda gösteriliyor; hiçbir veri
+// kaybolmaz, beş kez ayrı ayrı taranan DOM/kart yükü tek karta düşer.
+const TKP_CATEGORY_DIMENSIONS=[
+  ['surface','🏟️ Pist'],
+  ['breed','🐎 Safkan türü'],
+  ['hippodrome','📍 Hipodrom'],
+  ['condition_family','🏁 Koşu ailesi'],
+  ['distance_group','📏 Mesafe grubu']
+];
+function categoryTablesMergedHTML(){
+  const sections=TKP_CATEGORY_DIMENSIONS.map(([key,label])=>{
+    const rows = categoryAnalysis(key).slice().sort((a,b)=>{
+      const ga=a[1]||{},gb=b[1]||{};
+      const valueRate=g=>Number(g.races)>0?Number(g.valueRaces||0)/Number(g.races):-1;
+      const resultRate=g=>Number(g.resultRankRaces)>0?Number(g.result1||0)/Number(g.resultRankRaces):-1;
+      return valueRate(gb)-valueRate(ga)||resultRate(gb)-resultRate(ga)||Number(gb.races||0)-Number(ga.races||0)||TKP_TR_COLLATOR.compare(String(a[0]||''),String(b[0]||''));
+    });
+    return {label,rows};
+  }).filter(s=>s.rows.length);
+  if(!sections.length) return '<div class="empty">-</div>';
+  const body=sections.map(({label,rows})=>rows.map(([k,g],index)=>
+    `<tr><td><b>${esc(label)}</b></td><td><b>${esc(k)}</b></td><td class="num">${analysisNumberOrDash(g.races)}</td><td class="num">${analysisDecimalOrDash(g.races?g.horses/g.races:0)}</td><td class="num">${analysisPctOrDash(g.valueRaces,g.races)}</td><td class="num">${analysisPctOrDash(g.agf1,g.agfRaces)}</td><td class="num">${analysisPctOrDash(g.result1,g.resultRankRaces)}</td><td class="num">${analysisPctOrDash(g.bmbWin,g.bmbRaces)}</td></tr>`
+  ).join('')).join('');
+  return `<div class="tableWrap"><table><thead><tr><th>Boyut</th><th>Grup</th><th class="num">Koşu</th><th class="num">Ort. at</th><th class="num">VALUE kapsamı</th><th class="num">AGF 1 kazandı</th><th class="num">SONUÇ 1 kazandı</th><th class="num">BMB yakalama</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function positionBreakdownHTML(s){
@@ -1775,6 +2130,9 @@ function hippodromeSignalHTML(){
   <p class="muted" style="margin-top:8px;font-size:12px;">📌 Her hücre gerçek 1.–5. bitiriş oranını gösterir. Model önce koşu şartı + pist + tür + mesafe + hipodrom eşleşmesini kullanır; örnek azsa aynı sırayla daha geniş doğrulanmış geçmişe düşer.</p>`;
 }
 
+const TKP_WINNER_RANK_PAGE_SIZE=50;
+const _tkpWinnerRankPages={result_rank:0,agf_rank:0};
+let _tkpWinnerRankPagingWired=false;
 function winnerRankTable(rankField, caption){
   let groups = winnerRankDistribution(rankField);
   // Sonuç sırası dağılımında da en yüksek birinci sıra oranı üstte görünür.
@@ -1788,11 +2146,65 @@ function winnerRankTable(rankField, caption){
   let order = ['1','2','3','4','5','6','7','alt1','alt2','alt3','alt4','yok'];
   const labels = {'1':'1.','2':'2.','3':'3.','4':'4.','5':'5.','6':'6.','7':'7.','alt1':'8. (alt1)','alt2':'9. (alt2)','alt3':'10. (alt3)','alt4':'11+ (alt4)','yok':'Değer yok'};
   if (!keys.length) return '<div class="empty">-</div>';
+  const pages=Math.ceil(keys.length/TKP_WINNER_RANK_PAGE_SIZE);
+  const page=Math.max(0,Math.min(Number(_tkpWinnerRankPages[rankField])||0,pages-1));
+  _tkpWinnerRankPages[rankField]=page;
+  const start=page*TKP_WINNER_RANK_PAGE_SIZE,end=Math.min(keys.length,start+TKP_WINNER_RANK_PAGE_SIZE);
+  if(!_tkpWinnerRankPagingWired){
+    _tkpWinnerRankPagingWired=true;
+    document.addEventListener('click',event=>{
+      const button=event.target?.closest?.('[data-tkp-rank-page]');if(!button)return;
+      const host=button.closest('#conditionRankTable,#agfRankTableEl');if(!host)return;
+      const field=host.id==='agfRankTableEl'?'agf_rank':'result_rank';
+      _tkpWinnerRankPages[field]=Math.max(0,_tkpWinnerRankPages[field]+(button.dataset.tkpRankPage==='next'?1:-1));
+      host.innerHTML=field==='agf_rank'?agfRankTable():conditionRankTable();
+    });
+  }
   return `<div class="tableWrap"><table><thead><tr><th>Koşu şartı</th><th class="num rankCountHead">Koşu</th><th class="num rankTieHead">Atbaşı</th>${order.map(o=>`<th class="num">${labels[o]}</th>`).join('')}</tr></thead><tbody>${
-    keys.map(k => { let g=groups[k]; return `<tr><td class="rankConditionName" title="${esc(k)}"><b>${esc(k)}</b></td><td class="num rankCountCell">${analysisNumberOrDash(g.races)}</td><td class="num rankTieCell">${analysisNumberOrDash(g.ties)}</td>${order.map(o=>`<td class="num rankDistCell"><span class="rankDistCount">${analysisNumberOrDash(g[o])}</span><span class="rankDistPct">${analysisPctOrDash(g[o],g.total)}</span></td>`).join('')}</tr>`; }).join('')
-  }</tbody></table></div><p class="muted" style="margin-top:8px;">${caption} Atbaşı sonuçlanan (2-3 atın birinci olduğu) koşularda her iki/üç at da ayrı bir gözlem olarak sayılır, bu yüzden yüzdeler koşu sayısını değil "kazanan gözlemi" sayısını baz alır.</p>`;
+    keys.slice(start,end).map(k => { let g=groups[k]; return `<tr><td class="rankConditionName" title="${esc(k)}"><b>${esc(k)}</b></td><td class="num rankCountCell">${analysisNumberOrDash(g.races)}</td><td class="num rankTieCell">${analysisNumberOrDash(g.ties)}</td>${order.map(o=>`<td class="num rankDistCell"><span class="rankDistCount">${analysisNumberOrDash(g[o])}</span><span class="rankDistPct">${analysisPctOrDash(g[o],g.total)}</span></td>`).join('')}</tr>`; }).join('')
+  }</tbody></table></div>${pages>1?`<div class="tkpTablePager" aria-label="Koşu şartı sayfaları"><span>${start+1}–${end} / ${keys.length} koşul · Sayfa ${page+1}/${pages}</span><button type="button" data-tkp-rank-page="prev" ${page===0?'disabled':''}>Önceki</button><button type="button" data-tkp-rank-page="next" ${end===keys.length?'disabled':''}>Sonraki</button></div>`:''}<p class="muted" style="margin-top:8px;">${caption} Atbaşı sonuçlanan (2-3 atın birinci olduğu) koşularda her iki/üç at da ayrı bir gözlem olarak sayılır, bu yüzden yüzdeler koşu sayısını değil "kazanan gözlemi" sayısını baz alır.</p>`;
 }
 
+
+let _tkpWinnerRankMergedExpanded=false;
+let _tkpWinnerRankMergedToggleWired=false;
+function tkpWireWinnerRankMergedToggle(){
+  if(_tkpWinnerRankMergedToggleWired)return;
+  _tkpWinnerRankMergedToggleWired=true;
+  document.addEventListener('click',event=>{
+    const btn=event.target?.closest?.('[data-tkp-winner-rank-toggle]');
+    if(!btn)return;
+    const shell=btn.closest('.winnerRankMergedShell');
+    if(!shell)return;
+    _tkpWinnerRankMergedExpanded=!shell.classList.contains('isExpanded');
+    shell.classList.toggle('isExpanded',_tkpWinnerRankMergedExpanded);
+    btn.setAttribute('aria-expanded',String(_tkpWinnerRankMergedExpanded));
+    btn.textContent=_tkpWinnerRankMergedExpanded?'Tabloyu kısalt':'Tam tabloyu göster';
+  });
+}
+function winnerRankMergedTable(){
+  tkpWireWinnerRankMergedToggle();
+  const resultGroups = winnerRankDistribution('result_rank')||{};
+  const agfGroups = winnerRankDistribution('agf_rank')||{};
+  const keys = Array.from(new Set([...Object.keys(resultGroups),...Object.keys(agfGroups)])).sort((a,b)=>{
+    const score=k=>{
+      const g=resultGroups[k]||agfGroups[k]||{};
+      return Number(g.total)>0?Number(g['1']||0)/Number(g.total):-1;
+    };
+    return score(b)-score(a)||TKP_TR_COLLATOR.compare(String(a),String(b));
+  });
+  if(!keys.length)return '<div class="empty">-</div>';
+  const order=['1','2','3','4','5','6','7','alt1','alt2','alt3','alt4','yok'];
+  const labels={'1':'1.','2':'2.','3':'3.','4':'4.','5':'5.','6':'6.','7':'7.','alt1':'8.','alt2':'9.','alt3':'10.','alt4':'11+','yok':'Yok'};
+  const row=(condition,source,g)=>{
+    if(!g||!Number(g.total||0))return '';
+    const cells=order.map(o=>`<td class="num">${analysisPctOrDash(g[o]||0,g.total)}</td>`).join('');
+    return `<tr><td class="rankConditionName" title="${esc(condition)}"><b>${esc(condition)}</b></td><td class="rankSourceCell" style="width:76px;min-width:76px;max-width:76px;white-space:nowrap!important;overflow-wrap:normal!important;word-break:keep-all!important"><b style="white-space:nowrap!important;overflow-wrap:normal!important;word-break:keep-all!important">${source}</b></td><td class="num">${analysisNumberOrDash(g.races)}</td><td class="num">${analysisNumberOrDash(g.ties)}</td>${cells}</tr>`;
+  };
+  const body=keys.map(k=>row(k,'SONUÇ',resultGroups[k])+row(k,'AGF',agfGroups[k])).join('');
+  const expanded=_tkpWinnerRankMergedExpanded;
+  return `<div class="winnerRankMergedShell${expanded?' isExpanded':''}"><div class="winnerRankMergedToolbar"><button type="button" class="winnerRankMergedToggle" data-tkp-winner-rank-toggle aria-expanded="${expanded?'true':'false'}">${expanded?'Tabloyu kısalt':'Tam tabloyu göster'}</button></div><div class="tableWrap winnerRankMergedWrap"><table class="winnerRankMergedData"><thead><tr><th>Koşu şartı</th><th class="rankSourceHead" style="width:76px;min-width:76px;max-width:76px;white-space:nowrap!important;overflow-wrap:normal!important;word-break:keep-all!important">Kaynak</th><th class="num">Koşu</th><th class="num">Atbaşı</th>${order.map(o=>`<th class="num">${labels[o]}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></div><p class="muted" style="margin-top:8px;">Aynı koşu şartı için AGF ve SONUÇ sıra dağılımı tek tabloda karşılaştırılır.</p>`;
+}
 function conditionRankTable(){
   return winnerRankTable('result_rank', 'Her satır: o koşu şartında gerçek kazananın SONUÇ değerine göre kaçıncı sırada olduğu. Koşu şartı, dosyandaki tam metne göre ayrılır (örn. "Handikap 13 DHÖW" ve "Handikap 17 H2" ayrı satırlardır).');
 }
@@ -1812,7 +2224,7 @@ function valueSpecificTable(){
     ['90-99', h=>hasValue(h) && Number(h.value_score)>=90 && Number(h.value_score)<100],
     ['≥100', h=>hasValue(h) && Number(h.value_score)>=100]
   ];
-  const rows=bands.map(([name,test]) => {
+  const rows=(globalThis.TKPArchiveAnalytics?.peek()?.valueBands?.map(x=>({...x}))||bands.map(([name,test]) => {
       let cand=0, win=0, single=0, sw=0;
       for (const r of learningEligibleRaces()){
         let x = (typeof tkpLiveHorses==='function'?tkpLiveHorses(r):(r.horses||[]).filter(h=>!(typeof isNonRunner==='function'&&isNonRunner(h)))).filter(test);
@@ -1821,7 +2233,7 @@ function valueSpecificTable(){
         if (x.length===1){ single++; sw += (typeof tkpAnalysisIsWinner==='function'?tkpAnalysisIsWinner(x[0]):(x[0].winner||Number(x[0].finish_position)===1)) ? 1 : 0; }
       }
       return {name,cand,win,single,sw};
-    }).sort((a,b)=>{
+    })).sort((a,b)=>{
       const rate=x=>x.cand>0?x.win/x.cand:-1;
       const singleRate=x=>x.single>0?x.sw/x.single:-1;
       return rate(b)-rate(a)||singleRate(b)-singleRate(a)||b.cand-a.cand||TKP_TR_COLLATOR.compare(a.name,b.name);
@@ -1838,6 +2250,7 @@ function valueSpecificTable(){
 // Şimdi yakalanan her parametre için aynı mantıkla (o yarıştaki alan ortalamasının/
 // medyanının üstü mü altı mı, kazanma % ne) ayrı bir satır üretiliyor.
 function _accurateFieldRowStats(ar, field, isNormalizedSignal){
+  const archive=globalThis.TKPArchiveAnalytics?.peek();if(archive)return archive.accurate.fields[field];
   const isValid = isNormalizedSignal ? (v=>v!==null&&Number.isFinite(v)) : (v=>v!==null&&Number.isFinite(v) && v>0);
   const liveRows=r=>typeof tkpLiveHorses==='function'?tkpLiveHorses(r):(r?.horses||[]).filter(h=>!(typeof isNonRunner==='function'&&isNonRunner(h)));
   const known = ar.filter(r=>{const live=liveRows(r);return live.some(h=>typeof tkpAnalysisIsWinner==='function'?tkpAnalysisIsWinner(h):(h.winner||Number(h.finish_position)===1)) && live.some(h=>isValid(analysisNumericValue(h[field])));});
@@ -1863,7 +2276,8 @@ function accurateSpeedSignalHTML(){
     {field:'accurate_tempo_signal', label:'Accurate tempo sinyali', isSignal:true},
     {field:'accurate_finish_signal', label:'Accurate bitiriş/kapanış gücü sinyali', isSignal:true},
   ];
-  const ar=learningEligibleRaces();
+  const archive=globalThis.TKPArchiveAnalytics?.peek();
+  const ar=archive?[]:learningEligibleRaces();
   // Ortalama hız boş olsa bile kapanış/tempo/bitiriş gibi başka bir Accurate
   // alanı dolu olan yarış kaybedilmesin; tüm ölçülebilir kaynak alanları hesaba
   // girsin.
@@ -1881,7 +2295,7 @@ function accurateSpeedSignalHTML(){
   return `<div class="tableWrap"><table><thead><tr><th>Grup</th><th class="num">At</th><th class="num">Kazanma %</th></tr></thead><tbody>
     ${rows || '<tr><td colspan="3" class="empty">-</td></tr>'}
   </tbody></table></div>
-  <p class="muted" style="margin-top:6px;font-size:11px;">${analysisNumberOrDash(withData.length)} koşuda Accurate verisi var, ${analysisNumberOrDash(known.length)} tanesinin sonucu mevcut. Ortalama/maksimum/kapanış hızı ile tempo/bitiriş sinyali ayrı özellikler olarak Altılı ve yan bahis sıralamalarında öğrenilir.</p>`;
+  <p class="muted" style="margin-top:6px;font-size:11px;">${analysisNumberOrDash(archive?.accurate.withData??withData.length)} koşuda Accurate verisi var, ${analysisNumberOrDash(archive?.accurate.known??known.length)} tanesinin sonucu mevcut. Ortalama/maksimum/kapanış hızı ile tempo/bitiriş sinyali ayrı özellikler olarak Altılı ve yan bahis sıralamalarında öğrenilir.</p>`;
 }
 
 function kulvarBandHTML(){
@@ -1894,10 +2308,11 @@ function kulvarBandHTML(){
     ['13+ (dış)', h=>{const n=startValue(h);return n!==null&&n>=13;}],
     ['Kulvar yok', h=>startValue(h)===null]
   ];
-  const counts=bands.map(()=>({cand:0,win:0}));
+  const archive=globalThis.TKPArchiveAnalytics?.peek();
+  const counts=archive?archive.laneBands:bands.map(()=>({cand:0,win:0}));
   // Aynı arşivi altı kulvar bandı için altı kez taramak yerine her atı tek kez
   // doğru kovaya koy. İlk Ayrıntılı Analiz açılışındaki uzun görevi küçültür.
-  for(const race of learningEligibleRaces()){const live=typeof tkpLiveHorses==='function'?tkpLiveHorses(race):(race?.horses||[]).filter(x=>!(typeof isNonRunner==='function'&&isNonRunner(x)));for(const h of live){
+  for(const race of (archive?[]:learningEligibleRaces())){const live=typeof tkpLiveHorses==='function'?tkpLiveHorses(race):(race?.horses||[]).filter(x=>!(typeof isNonRunner==='function'&&isNonRunner(x)));for(const h of live){
     const index=bands.findIndex(([,test])=>test(h));
     if(index<0)continue;
     counts[index].cand++;
@@ -1913,31 +2328,18 @@ function kulvarBandHTML(){
   }</tbody></table></div>`;
 }
 
+// DÜZELTME (kendi hatam): historical-all-data-bridge.js kendi IIFE'i içinde
+// tanımlı ve `coverageHTML` adını dışarı SADECE tkpHistoricalAllDataCoverageHTML
+// olarak açıyor — o dosyanın kendi coverageHTML() ASLA global/çıplak isimle
+// erişilemezdi. Bu dosya (ui-components.js) IIFE'siz, düz <script>; buradaki
+// coverageHTML() ASIL global fonksiyondu ve app-controller.js'teki
+// `$('#coverage').innerHTML = coverageHTML();` çağrısı hep BUNU çağırıyordu.
+// Önceki turda burayı "ölü kod" sanıp sildim — halbuki tam tersi, gerçekten
+// çalışan taraf buydu ve silinince çağrı tanımsız kalıyordu. Şimdi zengin/
+// birleşik (KG, Start No, TR PUAN, Pist/Safkan/Koşu şartı/Mesafe/Tarih vb.)
+// sürüme ince bir köprü olarak geri getiriliyor.
 function coverageHTML(){
-  // R16.36: stats() aynı tek geçişte kapsam sayılarını da üretir ve küçük özeti
-  // kalıcılaştırır. Menü dönüşünde/Ctrl+F5'te ikinci arşiv taraması yapılmaz.
-  const summary=stats(),arTotal=Number(summary?.races)||0;
-  const raceCounts=summary?.coverage?.race||{surface:0,breed:0,condition:0,date:0};
-  const horseCounts=summary?.coverage?.horse||{total:Number(summary?.horses)||0,value:0,hndkp:0,tr:0,sp:0,result:0};
-  let fields = [
-    ['Pist', raceCounts.surface, arTotal],
-    ['Tür', raceCounts.breed, arTotal],
-    ['Koşu şartı', raceCounts.condition, arTotal],
-    ['Tarih', raceCounts.date, arTotal],
-    ['VALUE', horseCounts.value, horseCounts.total],
-    ['HNDKP', horseCounts.hndkp, horseCounts.total],
-    ['TR PUAN', horseCounts.tr, horseCounts.total],
-    ['SP', horseCounts.sp, horseCounts.total],
-    ['SONUÇ', horseCounts.result, horseCounts.total]
-  ];
-  // Yüzdeli kapsam özeti de büyükten küçüğe sıralanır.
-  fields=fields.slice().sort((a,b)=>{
-    const rate=x=>x[2]?x[1]/x[2]:-1;
-    return rate(b)-rate(a);
-  });
-  return `<div class="tableWrap coverageCompactWrap"><table class="coverageCompactTable"><colgroup><col style="width:23%"><col style="width:13%"><col style="width:13%"><col style="width:51%"></colgroup><thead><tr><th>Alan</th><th class="num">Dolu</th><th class="num">Toplam</th><th>Kapsam</th></tr></thead><tbody>${
-    fields.map(([a,b,c]) => `<tr><td><b>${a}</b></td><td class="num">${analysisNumberOrDash(b)}</td><td class="num">${analysisNumberOrDash(c)}</td><td><div class="bar"><span style="width:${c?100*b/c:0}%"></span></div><b>${analysisPctOrDash(b,c)}</b></td></tr>`).join('')
-  }</tbody></table></div>`;
+  return typeof tkpHistoricalAllDataCoverageHTML==='function' ? tkpHistoricalAllDataCoverageHTML() : '';
 }
 function ruleTable(arr){
   if (!arr.length) return '<div class="empty">Bu eşikleri geçen kural yok. Sistem mevcut örneği gösterir; güven alt sınırı eşiği geçmeyen kuralı “Mükemmel” olarak işaretlemez.</div>';
@@ -2057,7 +2459,7 @@ function historyPreviewHTML(p, fp){
 // ana thread blokajlarından biriydi. Eski anahtar artık yalnız temizlik için
 // tutulur; kalıcı anlık görüntü core-utils.js'teki paylaşılan IndexedDB
 // store'unda asenkron saklanır (bkz. tkpUiCacheGet/tkpUiCacheSet).
-const ADAPTIVE_LEARNING_HTML_CACHE_KEY='TKP_ADAPTIVE_LEARNING_TABLE_V41_ALL_DETAIL_P1_P5';
+const ADAPTIVE_LEARNING_HTML_CACHE_KEY='TKP_ADAPTIVE_LEARNING_TABLE_V42_BMB_DENOMINATOR';
 const ADAPTIVE_LEARNING_DURABLE_CACHE_KEY='tkp_adaptive_learning_table_v3_audit';
 let _adaptiveLearningHtmlCache={signature:'',html:''};
 let _adaptiveLearningDurableHydrating=false;
@@ -2096,15 +2498,18 @@ function adaptiveLearningRenderSignature(){
   // doğruluk kaynağıdır. Her Ctrl+F5'te 30 bin atı yeniden hashlemek hem gereksiz
   // hesap hem de kalıcı HTML cache'inin geç okunmasına neden oluyordu.
   const persisted=String(db?.learning_state?.dataset_signature||'');
-  const dataSignature=persisted||(typeof learningDatasetSignature==='function'
-    ? learningDatasetSignature(db)
-    : `${(db?.files||[]).length}:${(db?.races||[]).length}`);
+  // Analiz sekmesi açılırken eksik kalıcı imzayı bütün atları senkron hash'leyerek
+  // tamamlamak tarayıcıyı kilitler. Oturum içi revizyon, yerinde veri düzeltmelerinde
+  // bu geçici anahtarın geçersiz kalmasını sağlar.
+  const dataSignature=persisted||`${typeof tkpFastDbSignature==='function'
+    ? tkpFastDbSignature(db)
+    : `${(db?.files||[]).length}:${(db?.races||[]).length}`}|REV:${typeof _tkpDbRevision==='number'?_tkpDbRevision:0}`;
   let featureSettings='';
   try{ featureSettings=JSON.stringify(db?.settings?.algorithm_features||[]); }catch(_){ }
   const modelVersion=typeof TKP_LEARNING_MODEL_VERSION==='string'
     ? TKP_LEARNING_MODEL_VERSION
     : 'LEGACY_MODEL';
-  return `${modelVersion}|${dataSignature}|${featureSettings}|${Number(ADAPTIVE_MIN_RACES)||0}|MODEL_TABLE_AUDIT_V3`;
+  return `${modelVersion}|${dataSignature}|${featureSettings}|${Number(ADAPTIVE_MIN_RACES)||0}|MODEL_TABLE_AUDIT_V5_BMB_DENOMINATOR|${globalThis.TKPArchiveAnalytics?.peek()?.source?.at||''}`;
 }
 
 function adaptiveLearningCacheIsCurrent(){
@@ -2112,6 +2517,7 @@ function adaptiveLearningCacheIsCurrent(){
 }
 
 function adaptiveLearningHTML(){
+  if(globalThis.TKPArchiveAnalytics?.required()&&!globalThis.TKPArchiveAnalytics.peek()?.adaptive)return '<p>Adaptif özellikler tüm arşiv üzerinden hazırlanıyor…</p>';
   const renderSignature=adaptiveLearningRenderSignature();
   if(_adaptiveLearningHtmlCache.signature===renderSignature && _adaptiveLearningHtmlCache.html){
     return _adaptiveLearningHtmlCache.html;
@@ -2171,7 +2577,7 @@ function adaptiveLearningHTML(){
       Number(statsForKey.p5?.total)||0
     );
     return `<tr>
-      <td><b>${esc(label)}</b><div class="muted" style="font-size:9px;">${esc(key)}</div></td>
+      <td title="${key==='bmb'?'BMB alanı bilinen atlarda tek ve ayrışan BMB adayının tam bitiriş sırası; kayıplar dahildir. Birden fazla BMB varsa kesin sıra üretmez.':'Alan: '+esc(key)}"><b>${esc(label)}</b></td>
       <td class="num">${cell(statsForKey.p1)}</td>
       <td class="num">${cell(statsForKey.p2)}</td>
       <td class="num">${cell(statsForKey.p3)}</td>
@@ -2237,6 +2643,7 @@ function adaptiveLearningHTML(){
 // önbellekten okuduğu için milisaniyeler sürer. Böylece sekmeye nasıl gelinirse
 // gelinsin (Tahmin üzerinden ya da doğrudan) donma olmaz.
 async function adaptiveLearningHTMLAsync(){
+  if(globalThis.TKPArchiveAnalytics?.required()){await globalThis.TKPArchiveAnalytics.ensureAdaptive();return adaptiveLearningHTML();}
   if(typeof adaptiveLearningCacheIsCurrent==='function' && adaptiveLearningCacheIsCurrent()){
     return adaptiveLearningHTML();
   }
@@ -2415,7 +2822,7 @@ function tkpCouponDecisionHTML(res){
 
 // V50 — EN YÜKSEK İSABET + EN DÜŞÜK MALİYET YÖNLENDİRİCİSİ
 // Bu kalibrasyonlar 16.08.2026 gerçek .tkpbak üzerinde, sonuç girdileri maskelenmiş
-// canonical canlı motor başlangıç kalibrasyonu; V54 canlı bütçe sözleşmesi 1.200 TL Normal / 1.400 TL Sürprizdir
+// canonical canlı motor başlangıç kalibrasyonu; V54 canlı bütçe sözleşmesi 1.200 TL Normal / 2.000 TL Sürprizdir
 // doğrulanan başlangıç değerleridir. Kullanıcı Back Test'i çalıştırdığında aynı alanlar
 // son gerçek arşiv sonucuyla güncellenir; sahte fallback kupon kullanılmaz.
 const TKP_V50_VERIFIED_PRODUCT_METRICS=Object.freeze({
@@ -2623,7 +3030,8 @@ function tkpOpportunityCatalog(raceResults,coupons=activeCoupons){
   return rows;
 }
 function tkpOpportunityRouterHTML(raceResults,coupons=activeCoupons){
-  const items=tkpOpportunityCatalog(raceResults,coupons),difficulty=tkpLiveMeetingDifficulty(raceResults);
+  const items=tkpOpportunityCatalog(raceResults,coupons);
+  const difficulty=typeof tkpLiveMeetingDifficulty==='function'?tkpLiveMeetingDifficulty(raceResults):{};
   const ranked=items.slice().sort((a,b)=>tkpOpportunityCompare(a,b)||TKP_TR_COLLATOR.compare(String(a.label),String(b.label)));
   const hitBest=ranked.find(x=>x.key!=='altili'&&x.decision.label!=='PAS')||ranked.find(x=>x.key!=='altili')||null;
   const positiveBest=ranked.filter(x=>x.key!=='altili'&&Number(x.metric?.roi)>=0&&x.decision.label!=='PAS').sort(tkpOpportunityCompare)[0]||null;
@@ -2652,7 +3060,7 @@ function tkpOpportunityRouterHTML(raceResults,coupons=activeCoupons){
   }).join('');
   const positiveText=positiveBest&&Number(positiveBest.metric?.total)>=TKP_MIN_PERCENT_SAMPLE?` Pozitif ROI lideri: ${positiveBest.label} (${positiveBest.metric.roi>=0?'+':''}%${fmt2(positiveBest.metric.roi)}).`:'';
   const holdPct=altili&&altili.metric&&altili.metric.total?Math.round(altili.metric.rate*100):null;
-  return `<div class="card tkpOpportunityRouter"><div class="tkpRouterHeadline"><div><h2>🧭 İsabet / Maliyet Yönlendiricisi</h2><b>${esc(headline)}</b><p>${esc(detail)}</p></div><div class="tkpDifficultyGauge"><span>Altılı tutma ihtimali</span><b>${holdPct==null?'Veri yok':'%'+holdPct}</b></div></div><div class="tableWrap"><table><thead><tr><th class="num">Öncelik</th><th>Bahis</th><th>Karar</th><th class="num">Tutma</th><th class="num">Wilson alt</th><th class="num">ROI</th><th class="num">Maliyet / ort.</th></tr></thead><tbody>${rows}</tbody></table></div><p class="muted">Tutma ihtimali geçmiş doğrulanmış 6/6 performansıdır; garanti değildir. Önce tutma oranı ve Wilson güveni, yakın seçeneklerde daha düşük maliyet değerlendirilir.${esc(positiveText)}</p></div>`;
+  return `<div class="card tkpOpportunityRouter"><div class="tkpRouterHeadline"><div><h2>🧭 İsabet / Maliyet Yönlendiricisi</h2><b>${esc(headline)}</b><p>${esc(detail)}</p></div><div class="tkpDifficultyGauge"><span>Arşivde Altılı başarısı</span><b>${holdPct==null?'Veri yok':'%'+holdPct}</b> <small>${holdPct==null?'':`n=${Number(altili.metric.total)||0} toplantı`}</small></div></div><div class="tableWrap"><table><thead><tr><th class="num">Öncelik</th><th>Bahis</th><th>Karar</th><th class="num">Geçmiş isabet</th><th class="num">Wilson alt</th><th class="num">ROI</th><th class="num">Maliyet / ort.</th></tr></thead><tbody>${rows}</tbody></table></div><p class="muted">Oranlar tarihsel arşiv performansıdır; seçili programın koşullarına özel kazanma olasılığı veya garanti değildir. Önce geçmiş isabet ve Wilson güveni, yakın seçeneklerde daha düşük maliyet değerlendirilir.${esc(positiveText)}</p></div>`;
 }
 function tkpRefreshOpportunityPanels(){
   try{
@@ -2666,7 +3074,7 @@ function tkpRefreshOpportunityPanels(){
 function sideBetTicketCard(title, pools, combos, cost, status, metric, extraClass='', raceHorses=null, rankMap=null, unitLabel='yarış', profileNote=null, realPayoutHTML=''){
   const hasMetric=!!(metric&&metric.total);
   const rate=hasMetric?Math.round(metric.rate*100):null;
-  const sample=hasMetric?`${Number(metric.ok)>0?metric.ok:'-'}/${metric.total} ${unitLabel}`:`- ${unitLabel}`;
+  const sample=hasMetric?`${Number(metric.ok)||0}/${metric.total} ${unitLabel}`:`- ${unitLabel}`;
   // V1.1.203 KÖK FIX: bu eşik yanlışlıkla SIDE_BET_MIN_RACES (=1) kullanıyordu; o sabit
   // kupon genişliği/öğrenme mantığı için bilerek düşük tutulan ayrı bir eşiktir. Yüzde
   // GÖSTERİMİ için asıl var olan (ama kullanılmayan) SIDE_BET_FULL_TRUST_RACES (=20)
@@ -2674,10 +3082,10 @@ function sideBetTicketCard(title, pools, combos, cost, status, metric, extraClas
   // V1.1.305: sert minimum örnek kapısı yok; kayıt varsa yüzde gösterilir.
   const enoughSample=hasMetric&&metric.total>=SIDE_BET_FULL_TRUST_RACES;
   const rateDisplay=enoughSample&&rate!=null?'%'+rate:(hasMetric?`n=${metric.total}/${SIDE_BET_FULL_TRUST_RACES}`:'-');
-  const stat=`<div class="sideBetMiniStat" title="Aynı profil geçmişindeki başarı oranı"><span class="sideBetMiniRate">${rateDisplay}</span><span class="sideBetMiniSample">${sample}</span></div>`;
+  const stat=`<div class="sideBetMiniStat" title="${metric?.ticketSpecific?'Bu havuzun geçmiş ölçümü':'Profil havuzunun geçmiş ölçümü; bu kartın birebir kupon başarısı değildir'}"><span class="sideBetMiniRate">${rateDisplay}</span><span class="sideBetMiniSample">${sample}</span></div>`;
   const lowSample=hasMetric&&!enoughSample;
   const sentence=metric&&metric.total
-    ? `Bu şartlarda geçmişte <b>${metric.total}</b> ${unitLabel} oynandı, <b>${Number(metric.ok)>0?metric.ok:'-'}</b> tanesi tuttu — başarı oranı <span class="pct-hit">${enoughSample&&rate!=null?'%'+rate:'n='+metric.total+'/'+SIDE_BET_FULL_TRUST_RACES}</span>.`
+    ? `${metric.ticketSpecific?'Bu havuzun':'Profil havuzunun'} geçmiş ölçümü: <b>${Number(metric.ok)||0}/${metric.total}</b> ${unitLabel} kapsandı; <b>${Math.max(0,Number(metric.total)-Number(metric.ok||0))}</b> kaçtı. Oran <span class="pct-hit">${enoughSample&&rate!=null?'%'+rate:'n='+metric.total+'/'+SIDE_BET_FULL_TRUST_RACES}</span>.${metric.ticketSpecific?'':' Bu kartın birebir kupon başarısı değildir.'}`
     : 'Geçmiş örnek: -';
   const sampleLine=`<div class="sideBetSampleLine" style="color:#64748b;font-size:11px;margin:2px 0 6px;">${sentence}${lowSample?'':''}${profileNote?' · '+esc(profileNote):''}</div>`;
   const normalizedStatus=String(status||'');
@@ -2794,7 +3202,7 @@ function ensureSideBetCouponSources(raceResults){
   try{
     const budgets=typeof _v24ReadBudgets==='function' ? _v24ReadBudgets() : {main:1000,main2:1000,alt:0,surprise:1100};
     const fastSet=typeof tkpBuildCouponSetAdaptive==='function'
-      ? tkpBuildCouponSetAdaptive(rows,{...budgets,mainMax:2400,surpriseMax:1200})
+      ? tkpBuildCouponSetAdaptive(rows,{...budgets,mainMax:3000,surpriseMax:3000})
       : (typeof buildCouponSetFast==='function'
         ? buildCouponSetFast(rows,budgets)
         : {main:buildSolidCoupon(rows,budgets.main),main2:buildNormalTwoSingleCoupon(rows,budgets.main2??budgets.main),alt:{disabled:true,legs:[],cost:0},surprise:buildBombaCoupon(rows,budgets.surprise)});
@@ -2895,7 +3303,7 @@ async function tkpSideBetPanelBuildAsync(raceResults,options={}){
   // Sonuçlanmış/arşiv toplantısını görüntülerken bunu tekrar başlatmak ekrana bir şey
   // kazandırmıyor, fakat eski Windows'ta panel hazırlandıktan sonra bile uzun CPU yükü
   // oluşturuyordu. Arşiv sıraları frozen/snapshot ve kalıcı öğrenme cache'lerinden okunur.
-  if(firstRace&&!archivedOrLocked&&typeof globalThis.tkpPretrainOnlinePositionsAsync==='function'){
+  if(firstRace&&!archivedOrLocked&&options.allowTraining!==false&&typeof globalThis.tkpPretrainOnlinePositionsAsync==='function'){
     if(typeof globalThis.tkpScheduleOnlinePositionsTraining==='function')globalThis.tkpScheduleOnlinePositionsTraining(firstRace,[2,3,5]);
   }
   timing.couponSourcesMs=Math.round(((typeof performance!=='undefined'?performance.now():Date.now())-timingStart)*10)/10;

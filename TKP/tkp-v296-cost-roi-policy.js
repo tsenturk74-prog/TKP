@@ -2,7 +2,7 @@
 const policy={
   version:'R17.2-ROI-PORTFOLIO-GATE-20260913',
   hardMaxCostMultiplier:1.40,
-  preferredBudgets:{main:800,surprise:900,expert:900},economyBudget:700,normalKneeBudget:800,normalHardCap:1400,
+  preferredBudgets:{main:800,surprise:900,expert:900},economyBudget:700,normalKneeBudget:800,normalHardCap:3000,
   rule:'R17.2: Altılı + yan bahis portföyü gerçek cost/return ROI, MaxDD ve kayıp serisiyle izlenir. Negatif gerçek ROI ürünleri otomatik OYNA olamaz; yalnız yeni saat-kilitli forward kanıt yeniden terfi ettirebilir.',
   coverage:{archiveMeetings:509,safePreRaceMeetings:452,safePreRaceRaces:2712,unsafeOrMissingSnapshotMeetings:57,rankCoveragePct:{p1:31.05,p2:50.00,p3:64.05,p4:73.45,p5:80.01,p6:84.37,p7:88.97,p8:92.40,p9:94.99,p10:96.68}},
   altili:{

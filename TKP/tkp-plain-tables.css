@@ -1,0 +1,434 @@
+/* System task grid: the queue occupies the height of both left-hand panels. */
+@media(min-width:761px){
+ #tkpRoot#tkpRoot#tkpRoot #systemHealthPanel .tkpSystemDiagPairTasks>.tkpSystemFold:nth-child(2){
+  grid-column:2!important;grid-row:1 / span 2!important;
+ }
+ #tkpRoot#tkpRoot#tkpRoot #systemHealthPanel .tkpSystemDiagPairTasks>.tkpSystemFold:nth-child(2)[open]{
+  height:100%!important;min-height:0!important;max-height:none!important;
+ }
+}
+
+/* Financial text is semantic; neutral zebra backgrounds remain unchanged. */
+#tkpRoot#tkpRoot#tkpRoot #systemHealthPanel .tkpSystemDiagPairTasks .tkpSystemDiagTable th{
+ white-space:normal!important;overflow-wrap:anywhere!important;
+}
+#tkpRoot#tkpRoot#tkpRoot #pane-backtest .tkpMoney.pos{color:#15803d!important;}
+#tkpRoot#tkpRoot#tkpRoot #pane-backtest .tkpMoney.neg{color:#b91c1c!important;}
+#tkpRoot#tkpRoot#tkpRoot #pane-backtest .tkpMoney.neutral{color:#4b5563!important;}
+#tkpRoot#tkpRoot#tkpRoot #pane-backtest .tkpMoney :is(b,strong,span){color:inherit!important;}
+
+/* R19.45: one neutral palette; signals retain explicit text. */
+#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.real-bmb-row:not(.actualWinnerRow)>td[class],
+#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.real-bmb-row>td,
+#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.real-bmb-row:hover>td,
+#tkpRoot #predictionResult .proPredTable table.tkpReadable td.bmbSignalCell,
+#tkpRoot #predictionResult .proPredTable table.tkpReadable td.bmbSignalCell:hover {
+ background:#e5e7eb!important;background-image:none!important;box-shadow:none!important;color:#27313d!important;border-color:#d1d5db!important;
+}
+#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.odb-row>td,
+#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.odb-row:hover>td {
+ background:#eafaf8!important;background-image:none!important;box-shadow:none!important;color:#27313d!important;border-color:#c7eeea!important;
+}
+#tkpRoot .predictionHorseName .horseSignalLabel {
+ display:inline-block!important;margin-left:5px;padding:1px 4px;border:1px solid #d5d8dd!important;border-radius:3px;background:#f7f8fa!important;color:#374151!important;font-size:10px!important;font-weight:650!important;line-height:1.3;white-space:nowrap;
+}
+#tkpRoot table.tkpPlainTable.tkpReadable,
+#tkpRoot table.tkpPlainTable.tkpReadable :is(thead,tbody,tfoot,tr,th,td),
+#tkpRoot table.tkpPlainTable.tkpReadable :is(thead,tbody,tfoot,tr,th,td)[class] {
+ background:#fff!important;background-image:none!important;color:#303944!important;border-color:#e3e6ea!important;box-shadow:none!important;
+}
+#tkpRoot table.tkpPlainTable.tkpReadable th {background:#f1f3f5!important;color:#25303b!important;}
+#tkpRoot table.tkpPlainTable.tkpReadable tbody tr:nth-child(even)>td {background:#fafbfc!important;}
+#tkpRoot table.tkpPlainTable.tkpReadable :is(.badge,.rankBadge,.couponLegStatus,.sideBetHorseNo,.supportBadges span,b,strong,small) {
+ background:transparent!important;background-image:none!important;color:inherit!important;box-shadow:none!important;border-color:#d6dbe0!important;
+}
+#tkpRoot table.tkpPlainTable.tkpReadable :is(a,button) {color:#303944!important;background:#f4f5f7!important;border-color:#c9cfd6!important;}
+#tkpRoot table.tkpPlainTable.tkpReadable :is(a,button):focus-visible {outline:2px solid #334155;outline-offset:2px;}
+#tkpRoot#tkpRoot button.danger {background:#b91c1c!important;color:#fff!important;border:1px solid #991b1b!important;}
+#tkpRoot#tkpRoot button.danger:hover {background:#991b1b!important;}
+#tkpRoot#tkpRoot button.danger:focus-visible {outline:2px solid #b91c1c!important;outline-offset:3px;}
+
+/* All tables use the requested grayscale palette, including prediction rows.
+   Repeating the existing root id raises specificity over legacy embedded rules. */
+#tkpRoot#tkpRoot table.tkpReadable th {background:#e7e7e7!important;color:#292929!important;border-color:#d8d8d8!important;box-shadow:none!important;}
+#tkpRoot#tkpRoot table.tkpReadable tbody tr>td,
+#tkpRoot#tkpRoot table.tkpReadable tbody tr[class]>td[class] {background:#fff!important;background-image:none!important;color:#303030!important;border-color:#e0e0e0!important;box-shadow:none!important;}
+#tkpRoot#tkpRoot table.tkpReadable tbody tr:nth-child(even)>td {background:#f5f5f5!important;}
+#tkpRoot#tkpRoot table.tkpReadable tbody tr:hover>td {background:#ededed!important;}
+#tkpRoot#tkpRoot table.tkpReadable td .badge,
+#tkpRoot#tkpRoot table.tkpReadable td [class*="Badge"],
+#tkpRoot#tkpRoot table.tkpReadable td [class*="badge"],
+#tkpRoot#tkpRoot table.tkpReadable td b,
+#tkpRoot#tkpRoot table.tkpReadable td strong,
+#tkpRoot#tkpRoot table.tkpReadable td small {background:transparent!important;background-image:none!important;color:inherit!important;box-shadow:none!important;border-color:#d8d8d8!important;text-shadow:none!important;}
+
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable {min-width:1250px!important;table-layout:auto!important;}
+#tkpRoot#tkpRoot table.tkpReadable th,
+#tkpRoot#tkpRoot table.tkpReadable td {text-overflow:clip!important;overflow:visible!important;}
+
+/* Coupon number controls use the same understated raised tiles as the PNG. */
+#tkpRoot#tkpRoot #budgetCouponResult table.tkpReadable td .compactHorseNo,
+#tkpRoot#tkpRoot #budgetCouponResult table.tkpReadable td .compactWinnerNo,
+#tkpRoot#tkpRoot #budgetCouponResult table.tkpReadable td .couponLegacyHorseNo {
+ display:inline-flex!important;align-items:center;justify-content:center;min-width:20px!important;height:20px!important;padding:0 3px!important;
+ border:1px solid #c8cbd0!important;border-bottom:2px solid #bfc3c8!important;border-radius:5px!important;background:#f6f6f6!important;color:#111!important;font-size:11px!important;font-weight:800!important;box-shadow:inset 0 1px 0 #fff,0 1px 2px #0002!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .couponSep {display:none!important}
+#tkpRoot#tkpRoot #budgetCouponResult .couponPickChip {margin:2px!important}
+
+/* Shared official winner palette, taken from the R19.40 coupon chip. */
+#tkpRoot {--tkp-winner-bg:#bbf7d0;--tkp-winner-ink:#14532d;--tkp-winner-border:#22c55e;--tkp-winner-number:#4ade80;}
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.actualWinnerRow>td,
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.actualWinnerRow:hover>td,
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChip.couponPickChipWin,
+#tkpRoot#tkpRoot #budgetCouponResult table.tkpReadable .couponLegStatus.hit {
+ background:var(--tkp-winner-bg)!important;background-image:none!important;color:var(--tkp-winner-ink)!important;border-color:var(--tkp-winner-border)!important;box-shadow:none!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult table.tkpReadable td .compactWinnerNo,
+#tkpRoot#tkpRoot #budgetCouponResult table.tkpReadable td .couponWinnerNo,
+#tkpRoot#tkpRoot #predictionResult table.tkpReadable td .badge.result-rank-1 {
+ background:var(--tkp-winner-number)!important;color:#14532d!important;border-color:#16a34a!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .compactTekLine,
+#tkpRoot#tkpRoot #budgetCouponResult .compactTekPick,
+#tkpRoot#tkpRoot #budgetCouponResult .couponHorseTek {display:inline-flex!important;align-items:center!important;flex-direction:row!important;gap:5px!important;}
+#tkpRoot#tkpRoot #budgetCouponResult .compactTekPick>* {order:0!important;}
+
+/* One report per band; the archive coverage report belongs to the dashboard. */
+/* Left-side row labels should not compete with column headings. */
+#tkpRoot#tkpRoot table.tkpReadable tbody tr>td:first-child,
+#tkpRoot#tkpRoot table.tkpReadable tbody tr[class]>td[class]:first-child,
+#tkpRoot#tkpRoot table.tkpReadable tbody tr>th:first-child {
+ font-weight:400!important;color:#4b5563!important;
+}
+#tkpRoot#tkpRoot table.tkpReadable tbody :is(td,th):first-child :is(b,strong,a,span) {
+ font-weight:400!important;color:inherit!important;
+}
+#tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorArchiveGrid,
+#tkpRoot#tkpRoot #analyticsCoreTables {grid-template-columns:minmax(0,1fr)!important;gap:14px!important;}
+#tkpRoot#tkpRoot #operationsAnalyticTables>.card:has(#signalPerfTable),
+#tkpRoot#tkpRoot #operationsAnalyticTables>.card:has(#hippoSignalTable) {
+ grid-column:1/-1!important;height:auto!important;min-height:0!important;
+}
+#tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorPerformanceCard,
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot #analyticsCoreTables>.card {
+ height:auto!important;min-height:0!important;max-height:none!important;
+ padding:14px!important;border-radius:6px!important;overflow:visible!important;
+}
+#tkpRoot#tkpRoot #pane-analytics h3 {font-size:16px;line-height:1.4;letter-spacing:0;overflow-wrap:anywhere;}
+#tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorPerformanceNote {margin-bottom:10px;line-height:1.5;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot #analyticsCoreTables>.card>h3 {height:auto!important;min-height:0!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot #analyticsCoreTables>.card>#categoryAnalysisTable {overflow:visible!important;flex:none!important;height:auto!important;min-height:0!important;max-height:none!important;}
+#tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorTableWrap,
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot #analyticsCoreTables>.card>#categoryAnalysisTable>.tableWrap {
+ height:auto!important;flex:none!important;
+ max-height:480px!important;min-height:0!important;overflow:auto!important;flex:none!important;
+ border:1px solid #d8dde3;border-radius:4px;scrollbar-gutter:stable;
+}
+
+/* Degree distributions need intrinsic column width, not legacy percentage locks. */
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot :is(#hippoSignalTable,#signalPerfTable,#categoryAnalysisTable,#adaptiveLearningTable) table.tkpReadable {
+ table-layout:auto!important;width:100%!important;max-width:none!important;min-width:var(--tkp-table-min,0)!important;
+}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot :is(#hippoSignalTable,#signalPerfTable,#categoryAnalysisTable,#adaptiveLearningTable) :is(th,td,col) {
+ width:auto!important;max-width:none!important;white-space:normal!important;letter-spacing:0!important;
+}
+#tkpRoot#tkpRoot :is(#hippoSignalTable,#signalPerfTable) .tableWrap {overflow:auto!important;}
+#tkpRoot#tkpRoot :is(#hippoSignalTable,#signalPerfTable) .posCompact {
+ display:grid!important;grid-template-columns:repeat(5,52px)!important;gap:4px!important;
+ width:276px!important;min-width:276px!important;max-width:276px!important;text-align:left!important;
+}
+#tkpRoot#tkpRoot :is(#hippoSignalTable,#signalPerfTable) .pcell {
+ display:grid!important;grid-template-columns:18px minmax(0,1fr)!important;gap:2px!important;align-items:baseline!important;
+ width:52px!important;min-width:52px!important;white-space:nowrap!important;position:static!important;
+}
+#tkpRoot#tkpRoot :is(#hippoSignalTable,#signalPerfTable) .pnum {position:static!important;}
+#tkpRoot#tkpRoot #pane-analytics table.tkpReadable {font-size:13px!important;line-height:1.45!important;}
+#tkpRoot#tkpRoot #pane-analytics table.tkpReadable th,
+#tkpRoot#tkpRoot #pane-analytics table.tkpReadable td {padding:7px 9px!important;}
+#tkpRoot#tkpRoot #analyticsCommentatorPerformance table.tkpReadable th,
+#tkpRoot#tkpRoot #categoryAnalysisTable table.tkpReadable th {position:sticky!important;top:0!important;z-index:2;}
+#tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorTable td:nth-child(2) {
+ white-space:normal!important;overflow:visible!important;text-overflow:clip!important;
+}
+@media(max-width:600px){
+ #tkpRoot#tkpRoot {width:100%!important;margin:0!important;padding:8px 26px 8px 8px!important;}
+ #tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorPerformanceCard,
+ #tkpRoot#tkpRoot #analyticsCoreTables>.card {padding:10px!important;}
+ #tkpRoot#tkpRoot #analyticsCommentatorPerformance .tkpCommentatorTableWrap,
+ #tkpRoot#tkpRoot #categoryAnalysisTable>.tableWrap {max-height:380px!important;}
+}
+
+/* Keep coupon identity data intact; simplify only its visible labels/controls. */
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .ekuriMiniBadge,
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponEkuriExplanation {display:none!important;}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChip {
+ display:inline-flex!important;align-items:center!important;flex-direction:row!important;
+ border:0!important;background:transparent!important;box-shadow:none!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickRemove {
+ border:0!important;background:transparent!important;box-shadow:none!important;
+ min-width:20px!important;width:20px!important;height:26px!important;padding:0!important;
+ font-size:16px!important;line-height:26px!important;align-self:center!important;
+}
+
+/* Keep the leg table's signal colors consistent through zebra and hover rules. */
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.odb-row:not(.actualWinnerRow):not(.real-bmb-row)>td,
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.odb-row:not(.actualWinnerRow):not(.real-bmb-row)>td[class],
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.odb-row:not(.actualWinnerRow):not(.real-bmb-row):hover>td {
+ background:#eafaf8!important;background-image:none!important;border-color:#c7eeea!important;
+}
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.real-bmb-row:not(.actualWinnerRow)>td,
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.real-bmb-row:not(.actualWinnerRow)>td[class],
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.real-bmb-row:not(.actualWinnerRow):hover>td {
+ background:#f3f4f6!important;background-image:none!important;border-color:#e5e7eb!important;
+}
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.actualWinnerRow>td,
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.actualWinnerRow>td[class],
+#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable tbody tr.actualWinnerRow:hover>td {
+ background:var(--tkp-winner-bg)!important;background-image:none!important;border-color:var(--tkp-winner-border)!important;
+}
+#tkpRoot#tkpRoot #predictionResult .predLegend .badge.real-bmb {
+ background:#f3f4f6!important;color:#374151!important;border:1px solid #d1d5db!important;
+}
+#tkpRoot#tkpRoot #predictionResult .predLegend .badge.template-bmb {
+ background:#eafaf8!important;color:#0f615c!important;border:1px solid #c7eeea!important;
+}
+
+/* Ekuri remains one readable program number, including on narrow screens. */
+#tkpRoot#tkpRoot #predictionResult .proPredTable .predictionHorseLead.ekuriCombinedLead {
+ flex:0 0 auto!important;width:auto!important;min-width:0!important;gap:0!important;
+}
+#tkpRoot#tkpRoot #predictionResult .proPredTable .predictionHorseNo.ekuriCombinedNo:not(.actualPlace) {
+ display:inline-flex!important;align-items:center!important;justify-content:center!important;
+ width:auto!important;min-width:46px!important;height:24px!important;padding:0 5px!important;
+ background:#f8fafc!important;color:#111!important;border:1px solid #cbd5e1!important;
+ border-radius:5px!important;font-size:13px!important;font-weight:800!important;line-height:1!important;
+ white-space:nowrap!important;box-sizing:border-box!important;
+}
+#tkpRoot#tkpRoot #predictionResult .proPredTable .predictionHorseNo.ekuriCombinedNo.actualPlace {
+ display:inline-flex!important;align-items:center!important;justify-content:center!important;
+ width:auto!important;min-width:46px!important;height:24px!important;padding:0 5px!important;
+ font-size:13px!important;font-weight:800!important;line-height:1!important;
+ white-space:nowrap!important;box-sizing:border-box!important;
+}
+#tkpRoot#tkpRoot #predictionResult .proPredTable .predictionHorseName {
+ min-width:0!important;max-width:none!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact {overflow-x:hidden!important;}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact table.tkpReadable {min-width:0!important;width:100%!important;margin:0!important;box-sizing:border-box!important;}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .statusWinnerNo .compactWinnerNo {
+ background:var(--tkp-winner-number,#bbf7d0)!important;color:var(--tkp-winner-ink,#14532d)!important;
+ border:1px solid var(--tkp-winner-border,#22c55e)!important;box-shadow:none!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] {
+ display:flex!important;flex-wrap:wrap!important;gap:3px 4px!important;
+ width:100%!important;max-width:100%!important;min-width:0!important;justify-content:flex-start!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos .couponPickChip {
+ flex:0 0 calc((100% - 16px)/5)!important;min-width:40px!important;width:auto!important;max-width:100%!important;
+ margin:0!important;padding:0!important;gap:2px!important;box-sizing:border-box!important;overflow:visible!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos .couponPickChipEkuri {min-width:58px!important;}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickRemove {
+ flex:0 0 14px!important;min-width:14px!important;width:14px!important;margin:0!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos-tek .couponPickChip {
+ flex:0 1 auto!important;min-width:0!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact :is(.compactTekLine,.compactTekPick) {
+ display:flex!important;flex-wrap:wrap!important;min-width:0!important;max-width:100%!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTekName {
+ min-width:0!important;white-space:normal!important;overflow-wrap:anywhere!important;
+}
+#tkpRoot#tkpRoot #predictionResult .horseSignalLabel.horseSignalBmb {
+ background:#f3f4f6!important;color:#374151!important;border:1px solid #d1d5db!important;
+}
+#tkpRoot#tkpRoot #predictionResult .horseSignalLabel.horseSignalOdb {
+ background:#eafaf8!important;color:#0f615c!important;border:1px solid #c7eeea!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos .ekuriCombinedNo {
+ display:inline-flex!important;align-items:center!important;justify-content:center!important;
+ width:auto!important;min-width:35px!important;max-width:none!important;height:20px!important;
+ padding:0 3px!important;font-size:11px!important;line-height:1!important;
+ white-space:nowrap!important;box-sizing:border-box!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChip:not(.couponPickChipWin) .ekuriCombinedNo {
+ background:#f8fafc!important;color:#111!important;border:1px solid #cbd5e1!important;border-bottom:2px solid #bfc3c8!important;box-shadow:inset 0 1px 0 #fff,0 1px 2px #0002!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipWin .ekuriCombinedNo {
+ background:var(--tkp-winner-number)!important;color:var(--tkp-winner-ink)!important;border-color:var(--tkp-winner-border)!important;
+}
+#tkpRoot#tkpRoot #budgetCouponResult .couponTable table th:first-child,
+#tkpRoot#tkpRoot #budgetCouponResult .couponTable table td:first-child {
+ min-width:72px!important;width:72px!important;max-width:72px!important;
+ white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important;
+}
+
+/* Keep five picks per row while making each number easier to read. */
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .deadheatWinnerGroup {
+ display:flex!important;flex-wrap:wrap!important;align-items:center!important;
+ width:100%!important;min-width:0!important;margin:3px 0 0!important;gap:3px!important;
+}
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .statusWinnerNo {
+ display:inline-flex!important;margin:0!important;max-width:100%!important;
+}
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact :is(.compactHorseNo,.compactWinnerNo) {
+ font-size:14px!important;min-width:24px!important;width:auto!important;height:25px!important;
+ line-height:23px!important;padding:0 4px!important;box-sizing:border-box!important;
+}
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos .couponPickChip {
+ height:auto!important;min-height:27px!important;
+}
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos .ekuriCombinedNo {
+ min-width:40px!important;font-size:13px!important;height:25px!important;
+}
+/* Master names wrap inside a bounded column; number columns keep their widths. */
+#tkpRoot#tkpRoot #dataTable table :is(th,td):nth-child(4) {
+ width:180px!important;min-width:180px!important;max-width:180px!important;
+ white-space:normal!important;overflow-wrap:anywhere!important;word-break:normal!important;
+ height:auto!important;text-overflow:clip!important;vertical-align:middle!important;
+}
+#tkpRoot#tkpRoot #dataTable .tkpHippodromeName {
+ display:block;width:180px;max-width:100%;white-space:normal!important;
+ overflow-wrap:anywhere!important;word-break:normal!important;line-height:1.4;
+}
+#tkpRoot#tkpRoot [data-commentator-shadow] table {
+ width:100%!important;table-layout:auto!important;min-width:720px!important;
+}
+#tkpRoot#tkpRoot [data-commentator-shadow] :is(th,td) {
+ white-space:normal!important;overflow-wrap:anywhere!important;line-height:1.4;
+}
+#tkpRoot#tkpRoot [data-commentator-shadow] td.num {
+ white-space:nowrap!important;font-variant-numeric:tabular-nums;
+}
+#tkpRoot#tkpRoot #dataTable td.tkpFilenameCell,
+#tkpRoot#tkpRoot #dataTable th:first-child {
+  width: 240px !important;
+  min-width: 180px !important;
+  max-width: 240px !important;
+  white-space: normal !important;
+}
+#tkpRoot#tkpRoot #dataTable .tkpFilenameName {
+  display: block;
+  width: 100%;
+  max-width: 240px;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+#tkpRoot .tkpWeeklyModelTracker td small {
+  display: block;
+  white-space: normal;
+}
+/* Live table review: bounded name lane and readable result statuses. */
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable table.tkpReadable{table-layout:fixed!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable col:nth-child(2){width:16%!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable col:nth-child(13){width:36.7%!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .horseCell{white-space:normal!important;overflow-wrap:anywhere!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .predictionHorseName{white-space:normal!important;overflow-wrap:anywhere!important;line-height:1.4!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .supportBadges{display:flex!important;flex-wrap:wrap!important;gap:4px!important;min-width:0!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .supportBadges span{white-space:normal!important;overflow-wrap:anywhere!important;max-width:100%!important;line-height:1.35!important;height:auto!important;}
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .couponLegStatus{display:inline-block!important;font-size:14px!important;font-weight:800!important;line-height:1.4!important;white-space:normal!important;overflow-wrap:anywhere!important;max-width:100%!important;}
+
+/* Keep the non-runner label within its own horse row. */
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .nonRunnerRow .predictionHorseIdentity{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto!important;gap:4px!important;align-items:center!important;height:auto!important;min-height:26px!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .nonRunnerRow .predictionHorseIdentity>.badge{grid-column:3!important;grid-row:1!important;position:static!important;white-space:nowrap!important;font-size:11px!important;line-height:1.4!important;align-self:center!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .nonRunnerRow .predictionHorseName{min-width:0!important;}
+#tkpRoot#tkpRoot#tkpRoot #predictionResult .nonRunnerRow td{height:auto!important;vertical-align:middle!important;}
+/* The winning number belongs below the miss label in the same leg cell. */
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .couponLegStatus{display:block!important;width:max-content!important;max-width:100%!important;}
+#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .deadheatWinnerGroup{display:flex!important;flex-wrap:wrap!important;clear:both!important;gap:3px!important;margin:4px 0 0!important;}
+/* Status words never split; winner chips stay on the next line of the same cell. */
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact table :is(th,td):last-child{width:88px!important;min-width:88px!important;max-width:88px!important;box-sizing:border-box!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact table :is(th,td):nth-child(2){width:calc(100% - 160px)!important;min-width:0!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .couponLegStatus{white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important;width:max-content!important;max-width:none!important;}
+/* Transfer space from the two compact score lanes to the horse name. */
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable :is(col:nth-child(2),th:nth-child(2),td:nth-child(2)){width:23%!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable :is(col:nth-child(9),th:nth-child(9),td:nth-child(9)){width:6%!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable :is(col:nth-child(12),th:nth-child(12),td:nth-child(12)){width:4.9%!important;}
+/* Compact result labels; waiting remains legible and unbroken. */
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .couponLegStatus:is(.hit,.miss){font-size:10px!important;}
+/* Five displayed selections per line, including editable and ekuri picks. */
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"]{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:3px 2px!important;align-items:start!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .couponPickChip{min-width:0!important;width:100%!important;max-width:100%!important;gap:1px!important;justify-content:flex-start!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] :is(.compactHorseNo,.compactWinnerNo){min-width:20px!important;padding:0 2px!important;font-size:13px!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactNos[class*="compactNos-count-"] .ekuriCombinedNo{min-width:0!important;padding:0 1px!important;font-size:11px!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickRemove{flex:0 0 10px!important;min-width:10px!important;width:10px!important;padding:0!important;font-size:10px!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTek{font-size:10px!important;line-height:1.2!important;min-width:24px!important;max-width:none!important;height:auto!important;padding:2px 3px!important;white-space:nowrap!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .compactTekName{font-size:11px!important;line-height:1.2!important;padding:2px 3px!important;max-width:100%!important;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult :is(.couponLegStatus.hit,.couponLegStatus.miss,.compactTek){transform:scale(var(--tkp-coupon-label-scale,1))!important;transform-origin:left center!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact td:last-child .deadheatWinnerGroup{justify-content:flex-start!important;text-align:left!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #budgetCouponResult .budgetCouponCompact .couponPickChipWin{background:transparent!important;box-shadow:none!important;}
+/* The live tracking log shares the event/time first row and full-width message. */
+#tkpRoot .tkpChangeLogRows{min-width:0;max-width:100%;container-type:inline-size;}
+#tkpRoot .tkpChangeLogRow{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;gap:4px 12px!important;align-items:start!important;min-width:0!important;max-width:100%!important;padding:8px 4px;border-bottom:1px solid #dfe3e8;}
+#tkpRoot .tkpChangeLogType{min-width:0!important;white-space:normal!important;overflow-wrap:anywhere!important;font-weight:700;}
+#tkpRoot .tkpChangeLogType{word-break:normal!important;font-size:clamp(8px,3.3cqi,14px)!important;}
+#tkpRoot .tkpChangeLogType.tkpChangeLogTypeUnbroken{white-space:nowrap!important;overflow-wrap:normal!important;}
+#tkpRoot .tkpChangeLogTime{white-space:nowrap!important;text-align:right;}
+#tkpRoot .tkpChangeLogMessage{grid-column:1 / -1!important;min-width:0!important;margin:0!important;white-space:normal!important;overflow-wrap:anywhere!important;line-height:1.35!important;}
+
+#tkpRoot#tkpRoot .tkpDashboardLogMeta .badge.tkpDashboardLogTypeUnbroken{white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important;}
+
+/* Prominent official finish labels, separate from the compact coupon status. */
+#tkpRoot .bombHunterFinish .bhFinishBadge{display:inline-flex!important;align-items:center;white-space:nowrap!important;font-size:12px!important;line-height:1.3!important;font-weight:900!important;padding:4px 8px!important;border:1px solid #93c5fd!important;border-radius:6px;background:#eff6ff!important;color:#123b74!important;vertical-align:middle;}
+#tkpRoot .bombHunterFinish .bhFinishPosition1{background:#ffe45c!important;color:#332300!important;border:2px solid #bd8700!important;box-shadow:none!important;}
+#tkpRoot .bombHunterFinish :is(.bhFinishWaiting,.bhFinishOutside){background:#f1f5f9!important;color:#334155!important;border-color:#cbd5e1!important;}
+#tkpRoot .degreeTime{font-size:12px!important;font-weight:900!important;color:#17365d!important;white-space:nowrap!important;}
+#tkpRoot .degreePlacings{font-size:11px!important;font-weight:700!important;color:#475569!important;line-height:1.3!important;white-space:nowrap!important;}
+#tkpRoot .tkpBottomConditionTracking{margin-top:10px;padding-top:8px;border-top:1px solid #cbd5e1;}
+#tkpRoot .tkpBottomConditionTracking h4{margin:0 0 6px;}
+#tkpRoot .tkpBottomConditionTracking tr.tkpSurpriseTop5 > td{font-weight:700!important;}
+#tkpRoot .tkpLegSurpriseBadge{display:inline-block;font-size:12px;font-weight:600;margin-left:8px;padding:3px 7px;border:1px solid #cbd5e1;border-radius:5px;white-space:normal;}
+#tkpRoot .tkpLegSurpriseHigh{background:#fff3cd;color:#704600;border-color:#e5b849;font-weight:700;}
+/* Readable evidence colours; short phrases wrap as a unit on narrow screens. */
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge{background:#faf5ff!important;border-color:#d8b4fe!important;color:#64748b!important;line-height:1.5!important;}
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge>span{display:inline-block;white-space:nowrap;font-size:inherit!important;font-weight:700!important;}
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge .tkpSurpriseRate{color:#7e22ce!important;}
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge .tkpSurpriseSample{color:#1d4ed8!important;}
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge .tkpSurpriseLowSample{color:#92400e!important;}
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge .tkpSurprisePriority{color:#166534!important;}
+#tkpRoot#tkpRoot .tkpLegSurpriseBadge .tkpSurpriseNoData{color:#475569!important;}
+
+/* R19.47.28 — winner rank merged table UI lock: source labels never wrap;
+   table opens compact and expands only on explicit click. Scoped to this card only. */
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedData .rankSourceHead,
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedData .rankSourceCell{
+  width:76px!important;min-width:76px!important;max-width:76px!important;
+  white-space:nowrap!important;overflow-wrap:normal!important;word-break:keep-all!important;
+}
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedData .rankSourceCell b{
+  display:inline-block!important;white-space:nowrap!important;overflow-wrap:normal!important;word-break:keep-all!important;
+}
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedShell:not(.isExpanded) .winnerRankMergedWrap{
+  max-height:310px!important;overflow-y:hidden!important;overflow-x:auto!important;
+}
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedShell.isExpanded .winnerRankMergedWrap{
+  max-height:none!important;overflow-y:visible!important;overflow-x:auto!important;
+}
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedToolbar{
+  display:flex!important;justify-content:flex-end!important;align-items:center!important;margin:0 0 5px!important;
+}
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedToggle{
+  appearance:none;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;
+  padding:4px 9px;font-size:11px;font-weight:700;line-height:1.25;cursor:pointer;
+}
+#tkpRoot#tkpRoot #winnerRankMergedTable .winnerRankMergedToggle:hover{background:#f8fafc;}
+
+/* AGF 6. at — mevcut BMB / ODB rozetleriyle uyumlu, ayrı sinyal. */
+.badge.tkpAgfSixHorse { background:#ede9fe!important; color:#5b21b6!important; border:1px solid #c4b5fd!important; font-weight:800!important; white-space:nowrap; }
+
+/* Resmî sürpriz sonuçları: 1. yeşil, 2-5 kırmızı; bekleyen renksiz. */
+#tkpRoot .tkpBottomConditionTracking tr.tkpSurpriseWinner > td{color:#15803d!important;font-weight:800!important;}
+#tkpRoot .tkpBottomConditionTracking tr.tkpSurpriseTop5 > td{color:#b91c1c!important;font-weight:800!important;}
+#tkpRoot #budgetCouponResult .couponEkuriActualWinner{display:inline-flex;align-items:center;margin-left:6px;padding:2px 6px;border:1px solid #16a34a;border-radius:5px;background:#dcfce7;color:#14532d;font-size:11px;font-weight:800;white-space:nowrap;}
+
+/* ATR foreign only — compact row and fixed column width, never change Turkish layout. */
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable table.tkpReadable{min-width:0!important;width:100%!important;table-layout:fixed!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable :is(th,td){box-sizing:border-box!important;padding:5px 3px!important;min-width:0!important;font-size:10px!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable :is(col:nth-child(2),th:nth-child(2),td:nth-child(2)){width:20%!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable :is(col:nth-child(12),th:nth-child(12),td:nth-child(12)){width:5%!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable :is(col:nth-child(13),th:nth-child(13),td:nth-child(13)){width:28.5%!important;}
+#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable .tkpAtrLegMetrics{display:inline-block!important;white-space:nowrap!important;font-size:9px!important;letter-spacing:-.2px!important;}
+@media(max-width:950px){#tkpRoot#tkpRoot#tkpRoot#tkpRoot#tkpRoot #predictionResult .proPredTable.tkpForeignLegTable{overflow-x:auto!important;}}

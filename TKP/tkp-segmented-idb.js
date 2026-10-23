@@ -46,7 +46,7 @@
   // dalgası yaratmadan transaction sayısını yaklaşık dörtte bire indirir.
   const DEFAULT_READ_BATCH_BYTES=4*1024*1024;
   const DEFAULT_YIELD_MS=14;
-  const DEFAULT_TIMEOUT_MS=180000;
+  const DEFAULT_TIMEOUT_MS=50000;
   // 10M arşivde yalnız tarayıcıya sığan sıcak pencere tutulur. Bu sayı "tüm
   // arşivi RAM'e al" hedefi değildir; her zaman byte sınırıyla birlikte uygulanır.
   // 120 bin kayıt, Win8.1/Opera'da indeksleme ve ilk boyama için güvenli üst
@@ -109,7 +109,7 @@
   }
   // Native JSON encoding is much faster for bounded plain subtrees. Probe data
   // descriptors only, so getters/toJSON are still evaluated exactly once below.
-  function smallJsonTree(value,budget={slots:384,chars:32768},depth=0){
+  function smallJsonTree(value,budget={slots:4096,chars:262144},depth=0){
     if(value===null)return true;
     const type=typeof value;
     if(type==='string'){budget.chars-=value.length;return budget.chars>=0;}
@@ -118,7 +118,7 @@
     const proto=Object.getPrototypeOf(value);
     if(proto!==Object.prototype&&proto!==Array.prototype&&proto!==null)return false;
     const keys=Object.keys(value);budget.slots-=keys.length;
-    if(budget.slots<0||(Array.isArray(value)&&value.length>384))return false;
+    if(budget.slots<0||(Array.isArray(value)&&value.length>4096))return false;
     for(const key of keys){
       const descriptor=Object.getOwnPropertyDescriptor(value,key);
       if(!descriptor||!Object.prototype.hasOwnProperty.call(descriptor,'value'))return false;
@@ -192,12 +192,30 @@
     try{return await drainStorageSteps(cloneSteps(value));}
     catch(error){return JSON.parse(await stringifyAsync(value));}
   }
+  // learning_state.rule_cache_v2 (artımlı kural motoru) tamamen yeniden üretilebilir bir
+  // türetilmiş önbellektir ve ~30 MB'a çıkıyordu. Manifest meta'sında durduğu için HER
+  // kayıtta klonlanıyor, JSON'a çevrilip hash'leniyor, okunurken 32 MB deserialize ediliyor
+  // ve yeniden yazılıyordu (kupon başına birkaç kez, 400-900 ms'lik kesintisiz bloklar).
+  // Artık manifest'e yazılmaz; tkp-incremental-rules.js onu ayrı yan depoda saklar.
+  const EXTERNAL_DERIVED_LEARNING_KEYS=['rule_cache_v2','adaptive_stats_cache_v1'];
+  function learningStateWithoutExternal(value){
+    if(!value||typeof value!=='object'||Array.isArray(value))return value;
+    let has=false;for(const k of EXTERNAL_DERIVED_LEARNING_KEYS)if(Object.prototype.hasOwnProperty.call(value,k)){has=true;break;}
+    if(!has)return value;
+    const lite={};for(const k of Object.keys(value))if(!EXTERNAL_DERIVED_LEARNING_KEYS.includes(k))lite[k]=value[k];
+    return lite;
+  }
+  function metaWithoutExternalDerived(meta){
+    const ls=meta&&typeof meta==='object'?meta.learning_state:null;
+    const lite=learningStateWithoutExternal(ls);
+    return lite===ls?meta:{...meta,learning_state:lite};
+  }
   async function splitDbAsync(source){
     const meta={},collections={};
     for(const [key,value] of Object.entries(source||{})){
       if(String(key).startsWith('__segmented_'))continue;
       if(Array.isArray(value))collections[key]=compactCollectionForPersistence(key,value);
-      else{setStatus({phase:'meta-copy',collection:key});meta[key]=await clonePlainAsync(value);}
+      else{setStatus({phase:'meta-copy',collection:key});meta[key]=await clonePlainAsync(key==='learning_state'?learningStateWithoutExternal(value):value);}
       await yieldToUi(true);
     }
     return {meta,collections};
@@ -263,7 +281,7 @@
     for(const [key,value] of Object.entries(source||{})){
       if(String(key).startsWith('__segmented_')) continue;
       if(Array.isArray(value)) collections[key]=compactCollectionForPersistence(key,value);
-      else {setStatus({phase:"meta",collection:key});meta[key]=clonePlain(value);}
+      else {setStatus({phase:"meta",collection:key});meta[key]=clonePlain(key==='learning_state'?learningStateWithoutExternal(value):value);}
     }
     return {meta,collections};
   }
@@ -494,6 +512,10 @@
     return {key,payload,count,bytes,hash,start};
   }
 
+  async function analyticsContentSignature(manifest,names=['files','races']){
+    const refs=[];for(const name of names){const c=manifest.collections?.[name]||{};refs.push([name,c.count||0]);for(const r of c.refs||[])refs.push([r.hash,r.start,r.count,r.bytes]);}
+    return dualHashAsync(await stringifyAsync(refs));
+  }
   async function saveSnapshotWithAdapter(adapter,source,options={}){
     const check=()=>{if(typeof options.assertActive==='function')options.assertActive();};
     check();
@@ -545,7 +567,8 @@
       if(Date.now()-lastYield>=DEFAULT_YIELD_MS){lastYield=Date.now();await yieldToUi(true);}
     };
 
-    for(const [name,collection] of Object.entries(collections)){
+    for(const [name,sourceCollection] of Object.entries(collections)){
+      let collection=sourceCollection;
       const currentInfo=current?.collections?.[name];
       const currentRefs=Array.isArray(currentInfo?.refs)?currentInfo.refs:[];
       const safeCollection=safeInfo?.collections?.[name];
@@ -556,7 +579,14 @@
         baseOffset=Math.max(0,Number(safeCollection.loadedOffset)||0);
         const prefix=currentRefs.filter(ref=>Number(ref.start)+Number(ref.count)<=baseOffset);
         const prefixCount=prefix.reduce((sum,ref)=>sum+Number(ref.count||0),0);
-        if(prefixCount!==baseOffset) throw new Error(`${name} soğuk arşiv sınırı manifest parçalarıyla uyuşmuyor.`);
+        if(prefixCount!==baseOffset){
+          // The hot window may start inside an older, larger chunk. Rebuild
+          // only that boundary chunk's cold prefix, never drop those records.
+          const boundary=currentRefs.find(ref=>Number(ref.start)===prefixCount&&Number(ref.start)+Number(ref.count)>baseOffset);
+          if(!boundary)throw new Error(`${name} soğuk arşiv sınırı manifest parçalarıyla uyuşmuyor.`);
+          const page=await loadRangeFromManifest(adapter,current,name,prefixCount,baseOffset-prefixCount,{...options,verifyHashes:true});
+          collection=page.rows.concat(collection);baseOffset=prefixCount;
+        }
         for(const ref of prefix) refs.push({...ref});
         collectionBytes=prefix.reduce((sum,ref)=>sum+Number(ref.bytes||0),0);
         manifest.totalRecords+=prefixCount;
@@ -620,6 +650,8 @@
       }
       safeInfo.engine=ENGINE_VERSION;
       safeInfo.baseGeneration=generation;
+      safeInfo.analyticsContentSignature=await analyticsContentSignature(manifest);
+      safeInfo.analyticsLogSignature=await analyticsContentSignature(manifest,['auto_coupon_log','sidebet_ticket_log']);
       safeInfo.totalRecords=Number(manifest.totalRecords)||0;
       safeInfo.loadedRecords=loadedRecords;
       safeInfo.coldRecords=Math.max(0,safeInfo.totalRecords-loadedRecords);
@@ -836,10 +868,16 @@
     const size=Math.max(0,Number(limit)||0);
     const to=Math.min(Number(info.count)||0,from+size);
     if(to<=from) return {rows:[],offset:from,limit:size,total:Number(info.count)||0,hasMore:false,manifest};
-    const refs=(info.refs||[]).filter(ref=>Number(ref.start)+Number(ref.count)>from && Number(ref.start)<to);
+    // Sorted contiguous references allow O(log(chunks) + touched chunks) reads.
+    const allRefs=info.refs||[];
+    let lo=0,hi=allRefs.length;
+    while(lo<hi){const mid=(lo+hi)>>>1;if(Number(allRefs[mid].start)+Number(allRefs[mid].count)<=from)lo=mid+1;else hi=mid;}
+    const refs=[];
+    for(let i=lo;i<allRefs.length&&Number(allRefs[i].start)<to;i++)refs.push(allRefs[i]);
     const rows=[];
     let lastYield=monotonicNow();
     for(const batch of boundedRefBatches(refs,options)){
+      if(options.signal?.aborted)throw new Error('Arşiv okuması iptal edildi.');
       const chunks=await adapter.getChunks(batch.map(r=>r.key));
       for(let i=0;i<batch.length;i++){
         const ref=batch[i];
@@ -849,17 +887,22 @@
         if(Number(row.count)!==Number(ref.count) || payload.length!==Number(ref.count) || String(row.hash||'')!==String(ref.hash||'')){
           throw new Error(`${name} koleksiyonunda parça bütünlüğü bozuk: ${ref.key}`);
         }
+        if(options.verifyHashes===true){
+          const actual=await dualHashAsync(await stringifyAsync(payload));
+          if(actual!==ref.hash)throw new Error(`${name} parça hash doğrulaması başarısız: ${ref.key}`);
+        }
         const localFrom=Math.max(0,from-Number(ref.start));
         const localTo=Math.min(payload.length,to-Number(ref.start));
         rows.push(...payload.slice(localFrom,localTo));
       }
       lastYield=await yieldReadIfDue(lastYield,options);
     }
+    if(rows.length!==to-from)throw new Error(`${name} sayfalı okuma sayımı uyuşmuyor (${rows.length}/${to-from}).`);
     return {rows,offset:from,limit:size,total:Number(info.count)||0,hasMore:to<(Number(info.count)||0),manifest};
   }
 
   async function loadManifestHotWindowWithAdapter(adapter,manifest,options={}){
-    if(!structurallyValidManifest(manifest)) throw new Error('Manifest yapısı doğrulanamadı.');
+    if(!await validManifestAsync(manifest)) throw new Error('Manifest yapısı/hash doğrulanamadı.');
     const configuredMaxRecords=Math.max(1000,Number(options.maxMaterializedRecords)||DEFAULT_MAX_MATERIALIZED_RECORDS);
     // Kayıt sayısı tek başına RAM güvenliği değildir: bir milyon küçük sayaç ile
     // bir milyon tam at/yarış nesnesinin boyutu aynı olmaz. Manifest zaten gerçek
@@ -870,32 +913,58 @@
     const averageBytes=Math.max(1,(Number(manifest.totalBytes)||totalRecords)/totalRecords);
     // Byte limiti kayıt sayısı tabanından önceliklidir: çok büyük nesnelerde
     // "en az 1000" demek 64 MB tavanını sessizce aşabilirdi.
-    const byteBoundRecords=Math.max(1,Math.floor(maxMaterializedBytes/averageBytes));
-    const maxRecords=Math.max(1,Math.min(configuredMaxRecords,byteBoundRecords));
+    const maxRecords=configuredMaxRecords;
     const caps=materializationCaps(manifest,maxRecords,options.collectionCaps||{});
-    const out=clonePlain(manifest.meta||{});
+    const out=await clonePlainAsync(manifest.meta||{});
     const storageCollections={};
     let loadedRecords=0;
+    // Learning caches are metadata, but still occupy memory. Previously the
+    // window budget counted only collections and silently loaded them on top.
+    const metadataBytes=utf8Bytes(await stringifyAsync(manifest.meta||{}));
+    let loadedBytes=metadataBytes+2;
     let lastYield=monotonicNow();
     for(const [name,info] of Object.entries(manifest.collections||{})){
       const total=Math.max(0,Number(info.count)||0);
       const desiredCount=Math.max(0,Math.min(total,Number(caps[name])||0));
-      const desiredOffset=total-desiredCount;
-      const loadedOffset=alignedTailOffset(info,desiredOffset);
-      const actualCount=total-loadedOffset;
-      const page=await loadRangeFromManifest(adapter,manifest,name,loadedOffset,actualCount,options);
-      out[name]=page.rows;
-      loadedRecords+=page.rows.length;
-      storageCollections[name]={total,loadedOffset,loadedCount:page.rows.length,coldCount:loadedOffset};
-      if(typeof options.onProgress==='function') options.onProgress({phase:'safe-read',collection:name,loaded:page.rows.length,total,loadedRecords,maxRecords});
+      // Read bounded chunks from the tail, select exact rows inside both
+      // budgets, and preserve a possibly partial cold boundary on the next save.
+      let selectedCount=0,selectedBytes=0;
+      const blocks=[];
+      const refs=info.refs||[];
+      for(let i=refs.length-1;i>=0;i--){
+        if(selectedCount>=desiredCount||loadedRecords+selectedCount>=maxRecords)break;
+        const ref=refs[i];
+        const chunk=await loadRangeFromManifest(adapter,manifest,name,ref.start,ref.count,{...options,verifyHashes:options.verifyHashes!==false});
+        const rows=chunk.rows;let start=rows.length;
+        while(start>0&&selectedCount<desiredCount&&loadedRecords+selectedCount<maxRecords){
+          const bytes=utf8Bytes(await stringifyAsync(rows[start-1]))+1;
+          if(loadedBytes+selectedBytes+bytes+1024>maxMaterializedBytes)break;
+          start--;selectedCount++;selectedBytes+=bytes;
+          lastYield=await yieldReadIfDue(lastYield,options);
+        }
+        if(start<rows.length)blocks.push(rows.slice(start));
+        if(start>0)break;
+      }
+      const loadedOffset=total-selectedCount,values=[];
+      for(let i=blocks.length-1;i>=0;i--)for(const row of blocks[i])values.push(row);
+      out[name]=values;
+      loadedRecords+=values.length;
+      loadedBytes+=selectedBytes;
+      storageCollections[name]={total,loadedOffset,loadedCount:values.length,coldCount:loadedOffset};
+      if(typeof options.onProgress==='function') options.onProgress({phase:'safe-read',collection:name,loaded:values.length,total,loadedRecords,maxRecords});
       lastYield=await yieldReadIfDue(lastYield,options);
     }
     out.__segmented_storage={
       safeMode:true,
       engine:ENGINE_VERSION,
       baseGeneration:manifest.generation,
+      analyticsContentSignature:await analyticsContentSignature(manifest),
+      analyticsLogSignature:await analyticsContentSignature(manifest,['auto_coupon_log','sidebet_ticket_log']),
       totalRecords:Number(manifest.totalRecords)||0,
       loadedRecords,
+      loadedBytes,
+      metadataBytes,
+      metadataOverBudget:metadataBytes>maxMaterializedBytes,
       coldRecords:Math.max(0,(Number(manifest.totalRecords)||0)-loadedRecords),
       maxMaterializedRecords:maxRecords,
       configuredMaxMaterializedRecords:configuredMaxRecords,
@@ -932,7 +1001,8 @@
     try{
       const safeLimit=Math.max(0,Number(options.maxMaterializedRecords)||0);
       const safeByteLimit=Math.max(0,Number(options.maxMaterializedBytes)||0);
-      const safeMode=(safeLimit>0 && Number(manifest?.totalRecords||0)>safeLimit)||(safeByteLimit>0&&Number(manifest?.totalBytes||0)>safeByteLimit);
+      const metadataBytes=safeByteLimit>0?utf8Bytes(await stringifyAsync(manifest?.meta||{})):0;
+      const safeMode=(safeLimit>0 && Number(manifest?.totalRecords||0)>safeLimit)||(safeByteLimit>0&&Number(manifest?.totalBytes||0)+metadataBytes>safeByteLimit);
       const db=safeMode?await loadManifestHotWindowWithAdapter(adapter,manifest,options):await loadManifestWithAdapter(adapter,manifest,options);
       markAdapterVerified(adapter,manifest.generation);
       setStatus({mode:safeMode?'indexeddb-segmented-safe':'indexeddb-segmented',verified:true,error:'',generation:manifest.generation,bytes:manifest.totalBytes,records:manifest.totalRecords,chunks:manifest.totalChunks,durationMs:Date.now()-started,safeMode});
@@ -942,7 +1012,8 @@
       if(!previous) throw activeError;
       const safeLimit=Math.max(0,Number(options.maxMaterializedRecords)||0);
       const safeByteLimit=Math.max(0,Number(options.maxMaterializedBytes)||0);
-      const safeMode=(safeLimit>0 && Number(previous?.totalRecords||0)>safeLimit)||(safeByteLimit>0&&Number(previous?.totalBytes||0)>safeByteLimit);
+      const metadataBytes=safeByteLimit>0?utf8Bytes(await stringifyAsync(previous?.meta||{})):0;
+      const safeMode=(safeLimit>0 && Number(previous?.totalRecords||0)>safeLimit)||(safeByteLimit>0&&Number(previous?.totalBytes||0)+metadataBytes>safeByteLimit);
       const db=safeMode?await loadManifestHotWindowWithAdapter(adapter,previous,options):await loadManifestWithAdapter(adapter,previous,options);
       recovered=true;
       // Bozuk aktif manifesti yerinde bırakmak bir sonraki kayıtta eksik chunk'ın
@@ -957,9 +1028,40 @@
 
   async function loadCollectionPageWithAdapter(adapter,name,{offset=0,limit=1000,manifestKey=ACTIVE_MANIFEST}={}){
     const manifest=await adapter.getManifest(manifestKey);
-    if(!validManifest(manifest)) throw new Error('Sayfalı okuma için geçerli manifest yok.');
+    if(!await validManifestAsync(manifest)) throw new Error('Sayfalı okuma için geçerli manifest yok.');
     return loadRangeFromManifest(adapter,manifest,name,offset,limit);
   }
+
+  // Snapshot-scoped streaming: validate once, read each chunk once, retain at
+  // most one chunk and one output page. Consumers must await each page.
+  async function* iterateCollectionPagesWithAdapter(adapter,name,options={}){
+    const manifest=options.manifest||await adapter.getManifest(ACTIVE_MANIFEST);
+    if(!await validManifestAsync(manifest))throw new Error('Akışlı okuma için geçerli manifest yok.');
+    if(options.expectedGeneration&&options.expectedGeneration!==manifest.generation)throw new Error('Arşiv nesli değişti; görünümü yenileyin.');
+    const info=manifest.collections?.[name];if(!info)return;
+    const size=Math.max(1,Math.min(50000,Math.floor(Number(options.limit)||1000)));
+    const from=Math.max(0,Math.floor(Number(options.offset)||0));
+    const to=Math.min(info.count,options.endOffset==null?info.count:Math.max(0,Math.floor(Number(options.endOffset)||0)));
+    let expected=0;
+    for(const ref of info.refs||[]){
+      if(!Number.isSafeInteger(ref.start)||!Number.isSafeInteger(ref.count)||ref.count<=0||ref.start!==expected)throw new Error(`${name} parça sırası/sayımı bozuk.`);
+      expected+=ref.count;
+    }
+    if(expected!==info.count)throw new Error(`${name} koleksiyon sayımı bozuk.`);
+    for(const ref of info.refs||[]){
+      if(ref.start+ref.count<=from)continue;if(ref.start>=to)break;
+      if(options.signal?.aborted)throw new Error('Arşiv okuması iptal edildi.');
+      const start=Math.max(from,ref.start),end=Math.min(to,ref.start+ref.count);
+      const chunk=await loadRangeFromManifest(adapter,manifest,name,start,end-start,options);
+      for(let i=0;i<chunk.rows.length;i+=size){
+        if(options.signal?.aborted)throw new Error('Arşiv okuması iptal edildi.');
+        const rows=chunk.rows.slice(i,i+size),offset=start+i;
+        yield {rows,offset,total:info.count,hasMore:offset+rows.length<to,generation:manifest.generation};
+      }
+      await yieldToUi(true);
+    }
+  }
+  function iterateCollectionPages(name,options={}){return iterateCollectionPagesWithAdapter(browserAdapter(),name,options);}
 
   async function checkpointWithAdapter(adapter,label='manual'){
     const active=await adapter.getManifest(ACTIVE_MANIFEST);
@@ -1012,6 +1114,9 @@
     return run;
   }
   function withBrowserLock(name,task,{lockTimeoutMs=15000}={}){
+    return serializeOperation(()=>acquireBrowserLock(name,task,{lockTimeoutMs}));
+  }
+  function acquireBrowserLock(name,task,{lockTimeoutMs=15000}={}){
     if(typeof navigator!=='undefined' && navigator.locks?.request){setStatus({phase:'lock-request',lock:name});
       // The write deadline starts only AFTER acquiring the Web Lock. Bound the
       // separate wait too, and cancel it so it cannot write after reporting failure.
@@ -1033,7 +1138,7 @@
         })).then(resolve,reject).finally(()=>clearTimeout(timer));
       });
     }
-    return serializeOperation(task);
+    return task();
   }
 
   async function saveWithDeadline(adapter,source,options={}){
@@ -1105,7 +1210,10 @@
     return out;
   }
   async function mergeMetaPatchAsync(base,patch){
-    const out=base&&typeof base==='object'&&!Array.isArray(base)?base:{};
+    // Copy only changed paths; neither the active manifest nor patch is owned
+    // by this writer. The adapter clones at commit, so unchanged branches can
+    // be shared internally without duplicating a large learned cache twice.
+    const out=base&&typeof base==='object'&&!Array.isArray(base)?{...base}:{};
     for(const [key,value] of Object.entries(patch||{})){
       if(value&&typeof value==='object'&&!Array.isArray(value)&&Object.prototype.hasOwnProperty.call(out,key)&&out[key]&&typeof out[key]==='object'&&!Array.isArray(out[key]))out[key]=await mergeMetaPatchAsync(out[key],value);
       else Object.defineProperty(out,key,{value:await clonePlainAsync(value),writable:true,enumerable:true,configurable:true});
@@ -1119,13 +1227,13 @@
     if(!await validManifestAsync(active))throw new Error('Metadata güncellemesi için geçerli aktif manifest yok.');
     const expected=String(options.expectedGeneration||'');
     if(expected&&expected!==String(active.generation||''))throw new Error('Aktif veri nesli değişti; eski oturum metadata cache yazımı iptal edildi.');
-    const next=await clonePlainAsync(active);
-    next.meta=await mergeMetaPatchAsync(next.meta||{},patch||{});
+    const next={...active};
+    next.meta=metaWithoutExternalDerived(await mergeMetaPatchAsync(next.meta||{},patch||{}));
     next.manifestHash=await stableManifestHashAsync(next);
     await adapter.putManifest(ACTIVE_MANIFEST,next);
     markAdapterVerified(adapter,next.generation);
     setStatus({mode:'indexeddb-segmented-meta',verified:true,error:'',generation:next.generation,bytes:next.totalBytes,records:next.totalRecords,chunks:next.totalChunks,safeMode:false});
-    return {ok:true,manifest:await clonePlainAsync(next),stats:{generation:next.generation,metaBytes:utf8Bytes(await stringifyAsync(patch||{}))}};
+    return {ok:true,...(options.returnManifest===false?{}:{manifest:await clonePlainAsync(next)}),stats:{generation:next.generation,metaBytes:utf8Bytes(await stringifyAsync(patch||{}))}};
   }
   async function updateMetaPatch(patch,options={}){
     return withBrowserLock('segmented-save',()=>timeout(updateMetaPatchWithAdapter(browserAdapter(),patch,options),Number(options.timeoutMs)||DEFAULT_TIMEOUT_MS,'Parçalı IndexedDB metadata yazımı'));
@@ -1151,12 +1259,13 @@
       if(!Array.isArray(source?.[name]))throw new Error(`${name} koleksiyonu RAM'de hazır değil.`);
       if(Number(safeInfo?.collections?.[name]?.coldCount)>0)throw new Error(`${name} koleksiyonunun soğuk kısmı yüklü değil; kısmi yazım güvenli değil.`);
     }
-    const next=await clonePlainAsync(active);
+    const next={...active,collections:{...active.collections}};
     next.engine=ENGINE_VERSION;
     next.schemaVersion=Number(source?.schema_version)||Number(active.schemaVersion)||0;
     next.generation=randomGeneration();
     next.createdAt=nowIso();next.createdAtMs=Date.now();next.complete=false;
     if(options.metaPatch)next.meta=await mergeMetaPatchAsync(next.meta||{},options.metaPatch);
+    next.meta=metaWithoutExternalDerived(next.meta);
     const pending=[];
     const writeBatch=Math.max(1,Number(options.writeBatch)||DEFAULT_WRITE_BATCH);
     let writtenChunks=0,reusedChunks=0,lastYield=Date.now();
@@ -1167,7 +1276,13 @@
       if(Date.now()-lastYield>=DEFAULT_YIELD_MS){lastYield=Date.now();await yieldToUi(true);}
     };
     for(const name of requested){
-      const rows=source[name],oldRefs=Array.isArray(active.collections?.[name]?.refs)?active.collections[name].refs:[];
+      // V1.1.336 FIX (Claude): Artımlı (kısmi) kayıt yolu da tam snapshot gibi
+      // geçici runtime önbelleklerini (__tkpLiveHorsesCache/__tkpLiveHorsesSrc,
+      // ~300 MB) sıyırmalı. Eski kod source.races'i ham chunk'lıyordu; bu yüzden
+      // her veri/X toplamada races 171→470+ MB şişip diske yazılıyor ve her kayıtta
+      // yeniden serileştiriliyordu (9+ sn donma). compactCollectionForPersistence
+      // canlı db'yi değiştirmez, yalnız persist edilen kopyadan bu alanları atar.
+      const rows=compactCollectionForPersistence(name,source[name]),oldRefs=Array.isArray(active.collections?.[name]?.refs)?active.collections[name].refs:[];
       const refs=[];let bytes=0,start=0,chunkCountHint=0;
       while(start<rows.length){
         const chunk=await makeChunk(name,rows,start,options,chunkCountHint);if(!chunk)break;
@@ -1191,27 +1306,36 @@
     next.complete=true;next.manifestHash=await stableManifestHashAsync(next);
     await adapter.commitManifest(next,active);
     markAdapterVerified(adapter,next.generation);
-    if(source?.__segmented_storage)source.__segmented_storage.baseGeneration=next.generation;
+    if(source?.__segmented_storage){source.__segmented_storage.baseGeneration=next.generation;source.__segmented_storage.analyticsContentSignature=await analyticsContentSignature(next);source.__segmented_storage.analyticsLogSignature=await analyticsContentSignature(next,['auto_coupon_log','sidebet_ticket_log']);}
     setStatus({mode:'indexeddb-segmented-patch',verified:true,error:'',generation:next.generation,bytes:next.totalBytes,records:next.totalRecords,chunks:next.totalChunks,durationMs:Date.now()-started,safeMode:Boolean(safeInfo)});
-    return {ok:true,manifest:await clonePlainAsync(next),stats:{generation:next.generation,records:next.totalRecords,bytes:next.totalBytes,chunks:next.totalChunks,writtenChunks,reusedChunks,durationMs:Date.now()-started,collections:requested}};
+    return {ok:true,...(options.returnManifest===false?{}:{manifest:await clonePlainAsync(next)}),stats:{generation:next.generation,records:next.totalRecords,bytes:next.totalBytes,chunks:next.totalChunks,writtenChunks,reusedChunks,durationMs:Date.now()-started,collections:requested}};
   }
   async function updateCollections(source,names,options={}){
-    return withBrowserLock('segmented-save',()=>timeout(updateCollectionsWithAdapter(browserAdapter(),source,names,options),Number(options.timeoutMs)||DEFAULT_TIMEOUT_MS,'Parçalı IndexedDB kısmi koleksiyon yazımı'));
+    const adapter=browserAdapter();
+    const queuedGeneration=adapterVerifiedGeneration(adapter);
+    return withBrowserLock('segmented-save',()=>{
+      // Only follow writes verified by this adapter while waiting for its lock.
+      // A different tab still fails the active-manifest check in the writer.
+      const expected=String(options.expectedGeneration||'');
+      const currentOptions=expected&&expected===queuedGeneration
+        ?{...options,expectedGeneration:adapterVerifiedGeneration(adapter)}:options;
+      return timeout(updateCollectionsWithAdapter(adapter,source,names,currentOptions),Number(options.timeoutMs)||DEFAULT_TIMEOUT_MS,'Parçalı IndexedDB kısmi koleksiyon yazımı');
+    });
   }
 
   async function getActiveManifest(){
     const manifest=await browserAdapter().getManifest(ACTIVE_MANIFEST);
-    if(!validManifest(manifest)) throw new Error('Geçerli aktif parçalı IndexedDB manifesti yok.');
-    return clonePlain(manifest);
+    if(!await validManifestAsync(manifest)) throw new Error('Geçerli aktif parçalı IndexedDB manifesti yok.');
+    return clonePlainAsync(manifest);
   }
   async function loadCollectionPageFromManifest(manifest,name,options={}){
-    if(!validManifest(manifest)) throw new Error('Sayfalı okuma için geçerli manifest yok.');
+    if(!await validManifestAsync(manifest)) throw new Error('Sayfalı okuma için geçerli manifest yok.');
     const offset=Math.max(0,Number(options.offset)||0);
     const limit=Math.max(0,Number(options.limit)||0);
     return loadRangeFromManifest(browserAdapter(),manifest,name,offset,limit,options);
   }
   async function hasSnapshot(){
-    try{return validManifest(await browserAdapter().getManifest(ACTIVE_MANIFEST));}catch(_e){return false;}
+    try{return await validManifestAsync(await browserAdapter().getManifest(ACTIVE_MANIFEST));}catch(_e){return false;}
   }
   async function createCheckpoint(label){return withBrowserLock('segmented-checkpoint',()=>checkpointWithAdapter(browserAdapter(),label));}
   async function restoreCheckpoint(key,options={}){return withBrowserLock('segmented-rollback',()=>timeout(restoreCheckpointWithAdapter(browserAdapter(),key,options),Number(options.timeoutMs)||DEFAULT_TIMEOUT_MS,'Checkpoint geri alma'));}
@@ -1222,7 +1346,7 @@
     ENGINE_VERSION,DB_NAME,DB_VERSION,ACTIVE_MANIFEST,PREVIOUS_MANIFEST,
     DEFAULT_MAX_RECORDS,DEFAULT_TARGET_BYTES,DEFAULT_MAX_MATERIALIZED_RECORDS,materializationCaps,
     dualHash,stableManifestHash,validManifest,status,stringifyAsync,dualHashAsync,clonePlainAsync,stableManifestHashAsync,validManifestAsync,
-    createBrowserAdapter,createMemoryAdapter,
+    createBrowserAdapter,createMemoryAdapter,iterateCollectionPagesWithAdapter,iterateCollectionPages,
     saveSnapshotWithAdapter,importFramedCollectionsWithAdapter,loadSnapshotWithAdapter,loadManifestHotWindowWithAdapter,loadCollectionPageWithAdapter,checkpointWithAdapter,restoreCheckpointWithAdapter,gcWithAdapter,updateMetaPatchWithAdapter,updateCollectionsWithAdapter,
     saveDb,saveWithDeadline,importFramedCollections,loadDb,updateMetaPatch,updateCollections,getActiveManifest,loadCollectionPageFromManifest,hasSnapshot,createCheckpoint,restoreCheckpoint,loadCollectionPage,gc
   };
