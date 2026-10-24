@@ -1858,6 +1858,11 @@ function couponVariantCompactHTML(res, shortTitle){
     const addOptions = editingLocked?'':displayOrder.filter(h=>!isNonRunner(h) && !pickedNos.has(String(h.horse_no)) && ![...pickedNos].some(no=>sameEkuri(no,h.horse_no)))
       .map(h=>`<option value="${esc(h.horse_no)}">${esc(h.horse_no)} - ${esc(h.horse_name)}</option>`).join('');
     const addSelect = addOptions ? `<select class="legAddSelect" data-leg="${x.r.leg}"><option value="">+ At ekle</option>${addOptions}</select>` : '';
+    // KULLANICI: Bu ayak TEK ise, alternatif atları DİĞER iki kupona ekleme menüsü
+    // (bu kupon TEK kalır; öteki tablolar genişler · BH/çeşitlendirme için yer).
+    const addOtherSelect = (!editingLocked && isTek && addOptions)
+      ? `<select class="legAddOtherSelect" data-leg="${x.r.leg}" title="Bu ayağın alternatifini diğer iki kupona ekle"><option value="">⊕ Diğer tablolara</option>${addOptions}</select>`
+      : '';
     const tekBadge = isTek ? '<span class="compactTek">TEK</span>' : '';
     // Ana kupon kartında ayrı "Teksiz" önerisi gösterilmez; bu ifade gerçek
     // kupon sanılıyor. Çoklu alternatifler yalnız ilgili yan bahis kartlarında
@@ -1869,7 +1874,7 @@ function couponVariantCompactHTML(res, shortTitle){
       ? `<span class="compactTekLine">${tekBadge}${chips}</span>`
       : chips;
     const pickCountClass = isTek ? 'compactNos-tek' : `compactNos-count-${Math.max(1, Math.min(12, visiblePicks.length||0))}`;
-    return `<tr data-leg="${x.r.leg}"><td>${x.r.leg}. AYAK</td><td><span class="compactNos ${pickCountClass}">${compactPickLine}${teksizHint}</span>${tkpCouponEkuriExplanation(picks,x.r)}${addSelect}</td><td>${statusCell}</td></tr>`;
+    return `<tr data-leg="${x.r.leg}"><td>${x.r.leg}. AYAK</td><td><span class="compactNos ${pickCountClass}">${compactPickLine}${teksizHint}</span>${tkpCouponEkuriExplanation(picks,x.r)}${addSelect}${addOtherSelect}</td><td>${statusCell}</td></tr>`;
   }).join('');
   const payoutKey = ({6:'altili',5:'besli',4:'dortlu_ganyan',3:'uclu_ganyan'})[res.legCount] || null;
   const payoutLine=couponFinanceHTML(res,payoutKey);
@@ -1896,7 +1901,7 @@ function couponVariantCompactHTML(res, shortTitle){
       ${globalThis.TKP_COUPON_POLICY?.html(res)||''}
     </div>
     <table><thead><tr><th>Ayak</th><th>At No</th><th>Durum</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="compactFoot"><span class="tkpCouponCostAmount"><b>${res.currentPricing?'Güncel maliyet:':'Maliyet:'}</b> ${fmt2(res.currentPricing?.cost??res.cost)} TL</span>${res.currentPricing?` <small>Kayıtlı maliyet: ${fmt2(res.cost)} TL</small>`:''}</p>
+    <p class="compactFoot"><span class="tkpCouponCostAmount"><b>${res.currentPricing?'Güncel maliyet:':'Maliyet:'}</b> ${fmt2(res.currentPricing?.cost??res.cost)} TL</span>${res.currentPricing?` <small>Kayıtlı maliyet: ${fmt2(res.cost)} TL</small>`:''}${editingLocked?'':`<button type="button" class="tkpCouponSaveBtn" title="Düzenlenen kuponları son kayıt olarak kaydet" style="margin-left:8px;padding:2px 9px;font-size:11px;border:1px solid #15803d;background:#f0fdf4;color:#166534;border-radius:6px;cursor:pointer;">💾 Son kayıt</button>`}</p>
     ${payoutLine}
   </div>`;
 }
@@ -1949,6 +1954,12 @@ function renderCouponCard(typeKey){
   });
   container.querySelectorAll('.couponPickRemove').forEach(btn=>{
     btn.onclick=(e)=>{ e.preventDefault(); removeHorseFromCouponLeg(typeKey, btn.dataset.leg, btn.dataset.horse); };
+  });
+  container.querySelectorAll('.legAddOtherSelect').forEach(sel=>{
+    sel.onchange=()=>{ const val=sel.value; if(val && typeof addHorseToOtherCoupons==='function') addHorseToOtherCoupons(typeKey, sel.dataset.leg, val); };
+  });
+  container.querySelectorAll('.tkpCouponSaveBtn').forEach(btn=>{
+    btn.onclick=(e)=>{ e.preventDefault(); const ok=(typeof tkpSaveCouponSnapshotNow==='function')&&tkpSaveCouponSnapshotNow(); const t=btn.textContent; btn.disabled=true; btn.textContent=ok?'✓ Kaydedildi':'Kaydedilemedi'; setTimeout(()=>{try{btn.textContent=t;btn.disabled=false;}catch(_){}} ,1600); };
   });
   // offsetHeight okumaları zorunlu reflow üretir. Kart tıklamasını bloklamasın;
   // hizalama bir sonraki frame'de yapılsın.

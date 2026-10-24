@@ -5908,6 +5908,18 @@ function tkpPersistFinalCouponSnapshot(){
     return saveAutomaticCouponSnapshot(lastRaceResults,activeCoupons,budgets,'SON_KUPON');
   }catch(_e){return false;}
 }
+// KULLANICI: Ekle/çıkar sonrası elle "Son kayıt" butonu. Düzenlenen üç kuponu
+// SON_KUPON snapshot'ı olarak kaydeder ve kalıcılaştırır. Otomatik kayıt zaten
+// yapılıyor; bu buton kullanıcıya açık onay/kontrol verir.
+function tkpSaveCouponSnapshotNow(){
+  try{
+    if(!lastRaceResults?.length || tkpCouponMeetingLocked(lastRaceResults))return false;
+    const ok=tkpPersistFinalCouponSnapshot();
+    try{ if(typeof saveDB==='function') saveDB(false,true); }catch(_e){}
+    return ok!==false;
+  }catch(_e){return false;}
+}
+if(typeof globalThis!=='undefined')globalThis.tkpSaveCouponSnapshotNow=tkpSaveCouponSnapshotNow;
 // Explicit user edits are a display record, separate from immutable pre-race
 // evidence. They cannot turn a missed historical ticket into a backtest win.
 function tkpApplyManualCouponDisplayOverrides(raceResults){
@@ -5967,6 +5979,19 @@ function addHorseToAllCoupons(legNo,horseNo){
   for(const typeKey of ['main','alt','surprise']){
     // V55: Geniş kupon kaldırıldı. Manuel BH override üç canlı kupona uygulanır;
     // otomatik TEK motorunun yarış-öncesi kuralı değişmez.
+    if(addHorseToCouponLeg(typeKey,legNo,horseNo))added++;
+  }
+  if(added)tkpPersistFinalCouponSnapshot();
+  return added;
+}
+// KULLANICI TALİMATI: Bir kuponda bir ayak TEK yapıldığında, o ayağın diğer (TEK
+// olmayan) adaylarını DİĞER kupon tablolarına ekleyebil. Kaynak kupon TEK kalır;
+// alternatifler yalnız öteki iki kupona yazılır (BH/çeşitlendirme için yer açar).
+function addHorseToOtherCoupons(sourceTypeKey, legNo, horseNo){
+  if(tkpCouponMeetingLocked(lastRaceResults))return 0;
+  let added=0;
+  for(const typeKey of ['main','alt','surprise']){
+    if(typeKey===sourceTypeKey)continue;
     if(addHorseToCouponLeg(typeKey,legNo,horseNo))added++;
   }
   if(added)tkpPersistFinalCouponSnapshot();
