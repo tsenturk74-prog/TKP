@@ -4621,7 +4621,7 @@ function tkpFillCouponAllowedBudget(coupon){
       if(d?.isSingle===true&&['scoreOk','profileOk','profileGapOk','sampleOk','evidenceOk','weightOk'].every(k=>d[k]===true)&&Number(d.confidence)>=Number(d.threshold||68)+5)strong=true;
     }catch(_){ }
   }
-  // Tommy 20261018: kupon başı 3000'e kadar doldur; kullanıcı daha düşük bütçe girdiyse (1000-3000) o tavan geçerli.
+  // kupon başı 2200'e kadar doldur (BH için yer); kullanıcı daha düşük bütçe girdiyse (2000-2200) o tavan geçerli.
   const requestedCap=Number(coupon.userCapTL)||Number(coupon.inputCapTL)||0;
   const maxBudget=tkpCouponMaxBudget();
   const cap=requestedCap>0?Math.min(maxBudget,Math.max(1000,requestedCap)):maxBudget;
@@ -4652,7 +4652,7 @@ function tkpFillCouponAllowedBudget(coupon){
   }
   coupon.minimumBudgetTargetTL=minimum;coupon.minimumBudgetReached=coupon.cost>=minimum-1e-9;
   coupon.budgetTL=cap;coupon.maxBudgetTL=cap;coupon.userCapTL=cap;coupon.inputCapTL=cap;coupon.leftover=round2ish(cap-coupon.cost);
-  coupon.budgetExpansion={normalCapTL:cap,strongEvidenceCapTL:3000,strongEvidenceQualified:strong,evidence,added,capTL:cap,actualCostTL:coupon.cost};
+  coupon.budgetExpansion={normalCapTL:cap,strongEvidenceCapTL:2200,strongEvidenceQualified:strong,evidence,added,capTL:cap,actualCostTL:coupon.cost};
   coupon.feePolicy={...(coupon.feePolicy||{}),minBudgetTL:1000,maxBudgetTL:cap,defaultBudgetTL:cap};
   coupon.dynamicBudgetTargetTL=cap;
   recalcCouponCost(coupon);
@@ -5586,7 +5586,7 @@ async function tkpBuildCouponSetAdaptiveCriticalAsync(raceResults,budgets={},opt
       tkpSyncBhPanelToCoupons(candidate);
       for(const role of ['main','alt','surprise'])if(candidate[role]?.legs)tkpCaptureCoverageAudit('canonical-final-'+role,candidate[role].legs,{cost:candidate[role].cost,capTL:3000});
       const completeCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].legs?.length===6);
-      const budgetCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].cost>=1000&&candidate[k].cost<=(Number(candidate[k].budgetExpansion?.capTL)||3000));
+      const budgetCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].cost>=1000&&candidate[k].cost<=(Number(candidate[k].budgetExpansion?.capTL)||2200));
       if((options.currentReplayFast===true&&completeCandidate)||budgetCandidate){
         boundedPlan=candidate;run.refinementBudgetMs=25000;
       }
@@ -5879,7 +5879,7 @@ function recalcCouponCost(res){
   // maliyet yeniden hesaplandığında aynı formatla tazeleniyor.
   if(res.adaptiveBudgetNote!=null&&!res.readOnlySnapshot){
     const target=Number(res.dynamicBudgetTargetTL||res.budgetTL)||1000;
-    const cap=Number(res.budgetExpansion?.capTL)||3000;
+    const cap=Number(res.budgetExpansion?.capTL)||2200;
     res.adaptiveBudgetNote=`Kapsama hedefi: ${round2ish(target)} TL · Tavan: ${round2ish(cap)} TL · Maliyet: ${round2ish(Number(res.cost)||0)} TL`;
   }
 }
