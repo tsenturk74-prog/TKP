@@ -734,4 +734,7 @@ async function run(options={}){
  state.completed=true;state.completed_at=new Date().toISOString();await checkpoint();g.tkpInvalidateFastBacktestCache?.();return state;
  }finally{g.__tkpCurrentArchivePolicyRunning=false;}}
 g.tkpRepriceRecordedCoupons=reprice;g.tkpCurrentArchiveSummary=summary;g.tkpCurrentArchivePolicyHTML=html;g.tkpRunCurrentArchivePolicyReplay=run;
+// Kart 'guncel maliyet' icin beklenen surum: bayat (ornegin 2200-bandi '...3023-BH-DYN-V4')
+// current_pricing yok sayilir, kayitli maliyete (orijinal 2500-3000) duser.
+g.TKP_CURRENT_ARCHIVE_PRICING_VERSION=VERSION;
 })(globalThis);

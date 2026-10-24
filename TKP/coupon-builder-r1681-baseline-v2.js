@@ -8934,7 +8934,7 @@ function tkpRestoreLatestPreRaceCouponSnapshot(raceResults,options={}){
     const unit=Number(saved.unit)||0,cost=Number(saved.cost)||0;
     restored[typeKey]={typeKey,label:labels[typeKey],legs,unit,cost,combos:unit?cost/unit:0,legCount:legs.length,
       budgetTL:Number(snapshot.effective_budgets?.[typeKey]??snapshot.budgets?.[typeKey]??snapshot.effective_budgets?.surprise??snapshot.budgets?.surprise??snapshot.effective_budgets?.main??snapshot.budgets?.main)||cost,
-      leftover:0,readOnlySnapshot:true,snapshotId:snapshot.id,snapshotSource:snapshot.source,currentPricing:snapshot.current_pricing?.coupons?.[typeKey]||null,
+      leftover:0,readOnlySnapshot:true,snapshotId:snapshot.id,snapshotSource:snapshot.source,currentPricing:(snapshot.current_pricing&&(!globalThis.TKP_CURRENT_ARCHIVE_PRICING_VERSION||snapshot.current_pricing.version===globalThis.TKP_CURRENT_ARCHIVE_PRICING_VERSION))?(snapshot.current_pricing.coupons?.[typeKey]||null):null,
       postCollectionReconstruction:Number(snapshot?.post_collection_reconstruction)===1,
       calculationLimited:saved.calculationLimited===true,algorithmVersion:saved.algorithmVersion||snapshot.algorithm_version,policyAudit:saved.policyAudit||null,
       singlePolicyWarning:distinctSingles?'':'Eski kayıt: üç kupon için farklı TEK şartı sağlanmıyor. Bu kayıt güncel öneri değildir.',
