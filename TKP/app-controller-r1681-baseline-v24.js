@@ -9140,6 +9140,25 @@ async function init(){
       if(typeof tkpInvalidateIndexes==='function')tkpInvalidateIndexes();
       if(typeof saveDB==='function')saveDB(false);
       console.warn('TKP: '+_dd+' mükerrer toplantı koşu kaydı otomatik pasiflendi'); } }catch(_e){}
+  // GERİ-ALMA (2026-10-24): 2.000-2.200 bütçe denemesi sırasında geçmiş toplantıların
+  // "sonradan hesaplanan" (SONRADAN_HESAPLANAN) araştırma kuponları 2200'de yeniden
+  // hesaplanıp ~2.160 TL maliyetle DB'ye kalıcı yazılmıştı (replay_generation='2200bh').
+  // Kod 2.500-3.000 bandına döndü; bu bayat kayıtları temizle ki toplantı açılınca
+  // güncel kuralla (3.000) yeniden üretilsin. Gerçek yarış-öncesi kuponlarda bu damga
+  // yoktur; onlara dokunulmaz. Idempotent: temizlendiğinde sonraki açılışlarda no-op.
+  try{
+    if(Array.isArray(loadedDb.auto_coupon_log)){
+      const _before=loadedDb.auto_coupon_log.length;
+      loadedDb.auto_coupon_log=loadedDb.auto_coupon_log.filter(s=>!(s&&s.replay_generation==='2200bh'));
+      const _removed=_before-loadedDb.auto_coupon_log.length;
+      if(_removed>0){
+        if(typeof invalidateActiveRacesCache==='function')invalidateActiveRacesCache();
+        if(typeof tkpInvalidateIndexes==='function')tkpInvalidateIndexes();
+        if(typeof saveDB==='function')saveDB(false);
+        console.warn('TKP geri-alma: '+_removed+' adet 2200-dönemi (2.160) sonradan-hesaplanan kupon temizlendi; 3.000 bandında yeniden üretilecek.');
+      }
+    }
+  }catch(error){console.warn('2200-dönemi kupon temizliği başarısız',error);}
   // Dağıtım ZIP'i gerçek güncel kayıtlarla gelir. İlk açılışta eksik/eski yerel
   // kayıt varsa worker üzerinden bir defa atomik olarak IndexedDB'ye aktarılır.
   // Aktarım büyük olduğundan bunu ilk boya/etkileşim yolunda bekletme: ekran
