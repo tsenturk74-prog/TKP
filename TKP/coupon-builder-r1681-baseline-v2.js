@@ -604,35 +604,6 @@ function legCoveragePlan(x, mode='main'){
     singleDecision.isSingle=false;
     singleDecision.reason='TR Gizli Favori koruması · TEK genişletildi';
   }
-// Tek Takibi -> canlı TEK güven kapısı. Yalnız hedef yarıştan ÖNCE tamamlanmış
-// LIVE_FORWARD kayıtlarını kullanır; yarış sonrası doldurulmuş arşivden öğrenmez.
-function tkpSingleTrackingDecisionForRace(race, candidate){
-  const rows=typeof db!=='undefined'&&Array.isArray(db?.forward_tracking_log)?db.forward_tracking_log:[];
-  const targetDate=String(race?.race_date||'').slice(0,10);
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)||!candidate||!rows.length)return null;
-  const ar=Number(candidate.agf_rank), tr=Number(candidate.tr_rank??candidate.tr_sira);
-  const arValid=Number.isInteger(ar)&&ar>=1&&ar<=12;
-  const trValid=Number.isInteger(tr)&&tr>=1&&tr<=12;
-  if(!arValid&&!trValid)return null;
-  let total=0,hits=0;
-  for(const rec of rows){
-    if(rec?.evidence_lane!=='LIVE_FORWARD'||rec?.historical_calibration)continue;
-    const rd=String(rec.race_date||'').slice(0,10);
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(rd)||rd>=targetDate||!rec.winner_no)continue;
-    // Geçmişte yarış öncesi saklanan sıralamayı kullan; sonuçtaki sıralamayı asla okuma.
-    const snap=Array.isArray(rec.pre_race_candidates)?rec.pre_race_candidates:[];
-    if(!snap.length)continue;
-    let row=null;
-    if(arValid)row=snap.find(h=>Number(h.agf_rank)===ar);
-    else if(trValid)row=snap.find(h=>Number(h.rank)===tr);
-    if(!row||!row.horse_no)continue;
-    total++;
-    if(String(row.horse_no)===String(rec.winner_no))hits++;
-  }
-  if(total<30)return null;
-  const rate=(hits+2)/(total+8); // küçük örneklerde düzenlileştirme
-  return {total,hits,rate,agfRank:arValid?ar:null};
-}
   // Tek Takibi yalnız tablo değildir: düşük geçmiş tek güveni canlı tek kararını veto eder.
   // Veri yoksa mevcut kararı aynen bırakır. Böylece otomatik AGF lideri zorlamaz.
   const singleTrack=first?tkpSingleTrackingDecisionForRace(x.r,first):null;
@@ -794,6 +765,39 @@ function tkpSingleTrackingDecisionForRace(race, candidate){
   const moneySignalPicks=protectMoneySignals?couponMoneySignalCandidates(x,ordered):[];
   return finishPlan({picks, reliable, strength, margin, singleDecision, decisionPolicy, allResultPolicy, orderedPool,leaderFloorCount,moneySignalPicks,protectMoneySignals,narrowBmbExtra,hybridAudit,hardBhOdbPicks,
     reason: reliable ? `Güvenilir tek · güven %${singleDecision.confidence} / eşik %${singleDecision.threshold}` : `${singleDecision.reason} · ${count>=4?'En geniş kapsama':'Geniş kapsama'}${hardBhOdbPicks.length?` · zor ayak ${hardBhOdbPicks.map(row=>row.kind).join('+')} koruması`:''}${(hybridAudit.added.length||hybridAudit.replaced.length)?` · Hibrit kapsam: ${(hybridAudit.signals||[]).join(' / ')||'güçlü sinyal'}`:''}${benter?.status==='GUCLU_DEGER'?' · Benter güçlü değer adayını koru':''}`,benter});
+}
+
+// Tek Takibi -> canlı TEK güven kapısı. TOP-LEVEL: eskiden legCoveragePlan İÇİNE
+// nested tanımlıydı; bu yüzden tkpEvidenceFallbackSingle (1364) ve diğer çağrılar
+// "tkpSingleTrackingDecisionForRace is not defined" veriyordu (12+ atlı TEK-kapalı
+// ayaklarda fallback yolu tetiklenince). Yalnız hedef yarıştan ÖNCE tamamlanmış
+// LIVE_FORWARD kayıtlarını kullanır; yarış sonrası doldurulmuş arşivden öğrenmez.
+function tkpSingleTrackingDecisionForRace(race, candidate){
+  const rows=typeof db!=='undefined'&&Array.isArray(db?.forward_tracking_log)?db.forward_tracking_log:[];
+  const targetDate=String(race?.race_date||'').slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)||!candidate||!rows.length)return null;
+  const ar=Number(candidate.agf_rank), tr=Number(candidate.tr_rank??candidate.tr_sira);
+  const arValid=Number.isInteger(ar)&&ar>=1&&ar<=12;
+  const trValid=Number.isInteger(tr)&&tr>=1&&tr<=12;
+  if(!arValid&&!trValid)return null;
+  let total=0,hits=0;
+  for(const rec of rows){
+    if(rec?.evidence_lane!=='LIVE_FORWARD'||rec?.historical_calibration)continue;
+    const rd=String(rec.race_date||'').slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(rd)||rd>=targetDate||!rec.winner_no)continue;
+    // Geçmişte yarış öncesi saklanan sıralamayı kullan; sonuçtaki sıralamayı asla okuma.
+    const snap=Array.isArray(rec.pre_race_candidates)?rec.pre_race_candidates:[];
+    if(!snap.length)continue;
+    let row=null;
+    if(arValid)row=snap.find(h=>Number(h.agf_rank)===ar);
+    else if(trValid)row=snap.find(h=>Number(h.rank)===tr);
+    if(!row||!row.horse_no)continue;
+    total++;
+    if(String(row.horse_no)===String(rec.winner_no))hits++;
+  }
+  if(total<30)return null;
+  const rate=(hits+2)/(total+8); // küçük örneklerde düzenlileştirme
+  return {total,hits,rate,agfRank:arValid?ar:null};
 }
 
 function dedupeEkuri(pool, r=null, mode='main', useInputOrder=false){
