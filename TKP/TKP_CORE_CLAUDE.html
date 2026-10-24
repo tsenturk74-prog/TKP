@@ -4175,17 +4175,17 @@
       <div class="card" style="margin-top:10px;border-left:5px solid #2563eb;">
         <h3 style="margin:0 0 8px;font-size:14px;">🎟️ Kupon bütçeleri</h3>
         <div class="row" style="align-items:flex-end;gap:10px;">
-          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Normal bütçe aralığı (2.000–2.200 TL · BH için yer)</span>
-            <span class="budgetFixedRangeBox" title="Hedef 2.200 TL · üst limit 2.200 TL · kalan bütçe manuel BH içindir">2.000–2.200 TL</span>
-            <input id="normalCouponBudget" type="hidden" value="2200" data-min="2000" data-max="2200">
+          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Normal bütçe aralığı (2.500–3.000 TL)</span>
+            <span class="budgetFixedRangeBox" title="Hedef 2.500 TL · üst limit 3.000 TL">2.500–3.000 TL</span>
+            <input id="normalCouponBudget" type="hidden" value="2500" data-min="1000" data-max="3000">
           </label>
-          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Sürpriz / Uzman bütçe aralığı (2.000–2.200 TL · BH için yer)</span>
-            <span class="budgetFixedRangeBox" title="Hedef 2.200 TL · üst limit 2.200 TL · kalan bütçe manuel BH içindir">2.000–2.200 TL</span>
-            <input id="surpriseCouponBudget" type="hidden" value="2200" data-min="2000" data-max="2200">
+          <label class="budgetRangeLabel"><span class="budgetRangeTitle">Sürpriz / Uzman bütçe aralığı (2.500–3.000 TL)</span>
+            <span class="budgetFixedRangeBox" title="Hedef 2.500 TL · üst limit 3.000 TL">2.500–3.000 TL</span>
+            <input id="surpriseCouponBudget" type="hidden" value="2500" data-min="1000" data-max="3000">
           </label>
           <button id="buildBudgetCoupon" class="primary">🎟️ 3 kuponu oluştur</button>
         </div>
-        <p class="muted" style="margin:8px 0 0;font-size:11px;"><b>Bütçe:</b> Her kupon 2.000–2.200 TL hedefler; kalan bütçe (~800 TL) manuel BH atları içindir. Eski kayıtlı kuponlar açılınca otomatik 2.000–2.200 bandına yeniden hesaplanır (orijinal yarış-öncesi kayıt korunur).</p>
+        <p class="muted" style="margin:8px 0 0;font-size:11px;"><b>Bütçe:</b> Normal / Sürpriz / Uzman 2.000 TL’ye kadar genişler. Çok güçlü tek, sürpriz veya diğer adaylar için yeterli bağımsız destek varsa tavan 2.400 TL olur. Eski kayıtların tutarı korunur; güncel kupon için yeniden hesapla.</p>
       </div>
       <!-- Yan bahis miktarları ilgili yan bahis kartlarında zaten gösterilir.
            Motorun mevcut varsayılanlarını korumak için girişler görünmez tutulur. -->
@@ -4407,16 +4407,16 @@
 <script src="v53-target15-engine.js?v=1.1.333-r19.45.5"></script>
 <script src="surprise-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
 <script src="strategy-lab.js?v=1.1.333-r19.45.5"></script>
-<script src="tkp-v320-portfolio-engine.js?v=20261022-3009"></script>
+<script src="tkp-v320-portfolio-engine.js?v=20261020-2500-3000"></script>
 <script src="tkp-v321-sidebet-calibration.js?v=1.1.333-r19.45.5"></script>
 <script src="tkp-real509-archive.js?v=1.1.333-r19.45.5"></script>
 <script src="tkp-marginal-gain-optimizer.js?v=1.1.333-r19.45.5"></script>
-<script src="coupon-builder-r1681-baseline-v2.js?v=20261024-bh2201"></script>
+<script src="coupon-builder-r1681-baseline-v2.js?v=20261020-tek-takibi-v2"></script>
 <script src="tkp-calibration-engine-r1681-bankroll-90k-v1.js?v=tommy-20261018-r11"></script>
 <script src="tkp-baseline-evidence.js?v=1.1.333-r19.45.5"></script>
 <script src="tkp-backtest-fast-r1681-surprise-band-v1.js?v=1.1.333-r19.47.13-final"></script>
 <script src="bet-template-engine.js?v=20261004-results"></script>
-<script src="ui-components.js?v=20261024-bh2200"></script>
+<script src="ui-components.js?v=20261020-2500-3000"></script>
 <script src="v55-live-diagnostics.js?v=20261020-2500-3000"></script>
 <script src="tkp-champion-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
 <script src="tkp-probability-portfolio-engine.js?v=1.1.333-r19.45.5"></script>
@@ -4458,14 +4458,14 @@
 <script src="r16-learned-features.js?v=1.1.333-r19.45.5"></script>
 <script src="r16-learned-model.js?v=1.1.333-r19.45.5"></script>
 <script src="r16-position-runtime.js?v=1.1.333-r19.45.5"></script>
-<script src="r16-coupon-coverage.js?v=20261024-bh2200"></script>
-<script src="coupon-policy-governance.js?v=20261024-bh2200"></script>
+<script src="r16-coupon-coverage.js?v=20261020-width-single-opt-r2"></script>
+<script src="coupon-policy-governance.js?v=1.1.333-r19.47.8-display-top-n-2"></script>
 <script src="result-display-sync.js?v=1.1.333-r19.47.50"></script>
 <script src="selective-backup.js?v=tommy-20261018-r2"></script>
-<script src="app-controller-r1681-baseline-v24.js?v=1.1.348-3010"></script>
+<script src="app-controller-r1681-baseline-v24.js?v=1.1.348-SA-OLD-SNAPSHOT"></script>
 <script src="tkp-r19-integrity-runtime.js?v=tommy-20261010-blank-startup"></script>
-<script src="archive-coupon-planner.js?v=20261024-bh2200"></script>
-<script src="historical-calibration.js?v=20261024-bh2200band"></script>
+<script src="archive-coupon-planner.js?v=1.1.333-r20.3000.bh2"></script>
+<script src="historical-calibration.js?v=1.1.333-r20.3000.bh2"></script>
 <script src="final-runtime-fixes.js?v=tommy-20261010-blank-startup"></script>
 <script src="print-report.js?v=1.1.333-r19.45.5"></script>
 

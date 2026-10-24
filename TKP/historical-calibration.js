@@ -637,7 +637,7 @@ global.tkpScheduleHistoricalCalibration503=schedule;
 
 // CURRENT ARCHIVE POLICY REPLAY
 (function(g){'use strict';
-const VERSION='CURRENT-TABLE-POLICY-20261023-3023-BH-DYN-V4',roles=['main','alt','surprise'];
+const VERSION='CURRENT-TABLE-POLICY-20261020-3000-BH-COVERAGE-V2',roles=['main','alt','surprise'];
 const group=no=>{const s=String(no?.horse_no??no),e=typeof g.ekuriGroup==='function'?g.ekuriGroup(s):s.match(/-E\d+$/i)?.[0];return e?'E:'+e:'N:'+s;};
 function reprice(log,at=new Date().toISOString()){
  let count=0;for(const snapshot of log||[]){const coupons={};for(const role of roles){const c=snapshot?.coupons?.[role];if(!c||c.error||!c.legs?.length)continue;
@@ -720,25 +720,13 @@ async function run(options={}){
  for(const x of rr){x.__tkpArchivedReadOnly=true;record.tables.push({leg:x.r.leg,nos:g.predictionDisplayRows(x,Infinity,'score-desc').rows.map(h=>String(h.horse_no))});}
  let lastYield=Date.now();
  const pause=async()=>{if(Date.now()-lastYield<8)return;if(typeof g.tkpYieldToUi==='function')await g.tkpYieldToUi();else await new Promise(resolve=>setTimeout(resolve,0));lastYield=Date.now();};
- const built=typeof g.TKP_ARCHIVE_COUPON_PLANNER.buildAsync==='function'?await g.TKP_ARCHIVE_COUPON_PLANNER.buildAsync(rr,2200,{current:true,pause}):g.TKP_ARCHIVE_COUPON_PLANNER.build(rr,2200,{current:true});
+ const built=typeof g.TKP_ARCHIVE_COUPON_PLANNER.buildAsync==='function'?await g.TKP_ARCHIVE_COUPON_PLANNER.buildAsync(rr,3000,{current:true,pause}):g.TKP_ARCHIVE_COUPON_PLANNER.build(rr,3000,{current:true});
  for(const role of roles)g.tkpEnsureBottomConditionCouponCoverage?.(built[role],role);
  g.tkpSynchronizeTwoHorseLegs?.(built);
  g.tkpProtectVisibleMainCoverage(built.main);for(const role of roles)g.tkpAlignFinalCouponOrder(built[role]);
  for(const role of roles){const c=built[role];if(!c||c.error||c.legs?.length!==6)throw new Error(c?.error||role+' kupon eksik');const legs=c.legs.map(l=>({leg:l.r.leg,picks:l.picks.map(h=>String(h.horse_no))}));let ready=true,hit=true;
  for(const l of legs){const actual=original.find(r=>Number(r.leg)===Number(l.leg)),winners=(actual?.horses||[]).filter(h=>Number(h.winner)===1||Number(h.finish_position)===1);if(!g.TKP_BET_TEMPLATE_ENGINE.official(actual)||!winners.length){ready=false;continue;}hit=hit&&winners.some(h=>l.picks.some(no=>group(no)===group(h.horse_no)));}
  record.coupons[role]={legs,unit:c.unit,cost:c.cost,combinations:c.combos,hit:ready?hit:null};}
- // (A) Guncel maliyet kartta 2.000-2.200 bandinda gorunsun: bu toplantinin tam
- // recompute (2200) maliyetini eslesen auto_coupon_log snapshot'(lar)inin
- // current_pricing'ine yaz. recorded_cost korunur; picks/kayit degismez.
- try{
-  const cp={};for(const role of roles){const c=record.coupons[role];if(c&&!c.error&&Array.isArray(c.legs))cp[role]={unit:c.unit,combinations:c.combinations,cost:c.cost,recorded_cost:null};}
-  if(Object.keys(cp).length){for(const snap of d.auto_coupon_log||[]){
-   if(String(snap.race_date)!==String(file.race_date)||String(snap.hippodrome)!==String(file.hippodrome))continue;
-   if(file.altili_no!=null&&snap.altili_no!=null&&Number(snap.altili_no)!==Number(file.altili_no))continue;
-   const out={};for(const role of roles)if(cp[role])out[role]={...cp[role],recorded_cost:snap.coupons?.[role]?.cost??null};
-   snap.current_pricing={version:VERSION,at:new Date().toISOString(),coupons:out};
-  }}
- }catch(_e){}
  for(const x of rr){const specs=[];g.tkpWithSideBetPanelNoScan(()=>g.sideBetTicketForRace(x,{sirali:{},ikili:{}},null,{exactSpecs:specs,currentPolicyReplay:true}));
  for(const spec of specs){const actual=original.find(r=>Number(r.leg)===Number(x.r.leg));record.sidebets.push({leg:x.r.leg,product:spec.product,pools:spec.pools,unit:spec.unit,cost:spec.cost,...g.TKP_BET_TEMPLATE_ENGINE.outcome(actual,spec.pools)});}await new Promise(resolve=>setTimeout(resolve,0));}
  record.status='DONE';}catch(e){record.status='ERROR';record.error=String(e.message||e);state.errors.push({file_id:file.id,error:record.error});}
