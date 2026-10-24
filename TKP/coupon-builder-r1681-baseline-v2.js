@@ -4996,7 +4996,7 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
       c.legs=bounded.legs;recalcCouponCost(c);
     }
     c.budgetAutoAdapted=true;
-    c.budgetTargetNote=Number(c.cost)<2500?'Hedef altinda: izin verilen ayak/genislikte en yakin kupon olusturuldu.':(Number(c.cost)>3000?'Hedef ustunde: yariş kosullariyla maliyet siniri saglanamadi.':'Hedef araliginda');
+    c.budgetTargetNote=Number(c.cost)<2000?'Hedef altinda: izin verilen ayak/genislikte en yakin kupon olusturuldu.':(Number(c.cost)>2200?'Hedef ustunde: yariş kosullariyla maliyet siniri saglanamadi.':'Hedef araliginda');
     tkpFinalEkuriInvariant(c,keyName==='main'?'main':'surprise');
   }
   // V320/rescue sonradan bir TEK'i çokluya çevirmiş olabilir. Nihai görünür
@@ -5136,28 +5136,28 @@ function tkpFinalLearnedSingleOptimizer(coupon, role){
       coupon.minimumSingleEnforced=true;
     }
     tkpFinalLearnedSingleOptimizer(coupon,role);
-    // TKP_3006: En az bir TEK kilitlendikten sonra maliyeti 2.500-3.000 TL
-    // bandina yukselt. Var olan tekler tkpRaiseCouponCostToMinimum tarafindan
-    // korunur; bu fonksiyon sadece diger ayaklara aday ekler.
+    // TKP_3006: En az bir TEK kilitlendikten sonra maliyeti 2.000-2.200 TL
+    // bandina yukselt (BH icin yer). Var olan tekler tkpRaiseCouponCostToMinimum
+    // tarafindan korunur; bu fonksiyon sadece diger ayaklara aday ekler.
     recalcCouponCost(coupon);
     const lastBudgetCap=TKP_COUPON_FEE_POLICY.maxBudgetTL;
-    if(Number(coupon.cost)<2500-1e-9)
-      tkpRaiseCouponCostToMinimum(coupon,2500,lastBudgetCap);
+    if(Number(coupon.cost)<2000-1e-9)
+      tkpRaiseCouponCostToMinimum(coupon,2000,lastBudgetCap);
     recalcCouponCost(coupon);
     coupon.finalSingleCount=coupon.legs.filter(leg=>(leg.picks||[]).length===1).length;
-    coupon.minimumBudgetTargetTL=2500;
-    coupon.minimumBudgetReached=Number(coupon.cost)>=2500-1e-9;
-    coupon.budgetTargetRangeTL=[2500,3000];
+    coupon.minimumBudgetTargetTL=2000;
+    coupon.minimumBudgetReached=Number(coupon.cost)>=2000-1e-9;
+    coupon.budgetTargetRangeTL=[2000,2200];
     coupon.finalSingleAndBudgetAudit={version:'TKP_3006',singleCount:coupon.finalSingleCount,costTL:Number(coupon.cost||0),
-      minimumTL:2500,maximumTL:3000,valid:coupon.finalSingleCount>=1&&Number(coupon.cost)>=2500-1e-9&&Number(coupon.cost)<=3000+1e-9};
+      minimumTL:2000,maximumTL:2200,valid:coupon.finalSingleCount>=1&&Number(coupon.cost)>=2000-1e-9&&Number(coupon.cost)<=2200+1e-9};
     if(!coupon.finalSingleAndBudgetAudit.valid){
       // Kuponu hata durumuna dusurme: en yakin uygulanabilir bedeli ve sebebini goster.
       coupon.budgetAutoAdapted=true;
       coupon.budgetConflict=false;
       coupon.budgetTargetNote=coupon.finalSingleCount<1
         ? 'Uygun tek adayi yok; mevcut tahmin kuponu gosterildi.'
-        : (Number(coupon.cost)<2500?'2.500 TL altinda en yakin uygulanabilir kupon olusturuldu.'
-          :'3.000 TL ustu; ust sinir zorunlu kontrol edilmelidir.');
+        : (Number(coupon.cost)<2000?'2.000 TL altinda en yakin uygulanabilir kupon olusturuldu.'
+          :'2.200 TL ustu; ust sinir zorunlu kontrol edilmelidir.');
     }
   }
   // R17.4: final kuponlar aynı P_WIN + EV + ROI + risk motorunda sıralanır.
@@ -5203,8 +5203,8 @@ const TKP_COUPON_FEE_POLICY=Object.freeze({
   monthlyTargetTL:50000,
   monthlyHardLimitTL:120000,
   minBudgetTL:2000,
-  maxBudgetTL:3000,
-  defaultBudgetTL:2000
+  maxBudgetTL:2200,
+  defaultBudgetTL:2200
 });
 const TKP_COUPON_BUDGET_POLICY=Object.freeze({
   version:TKP_COUPON_FEE_POLICY.version,
@@ -5223,8 +5223,8 @@ function tkpClampCouponBudget(value,policy){
 // 2000 TL üstü kuponların gerçek getirisi istatistiksel olarak anlamlı biçimde kötüyse tavanı
 // db.settings.coupon_budget_optimizer.maxBudgetTL ile (en az 1400) düşürür; yükseltemez.
 function tkpCouponMaxBudget(){
-  const hard=Number(TKP_COUPON_FEE_POLICY.maxBudgetTL)||3000;
-  try{const v=Number(typeof db!=='undefined'?db?.settings?.coupon_budget_optimizer?.maxBudgetTL:NaN);if(Number.isFinite(v)&&v>=2500&&v<=hard)return v;}catch(_){ }
+  const hard=Number(TKP_COUPON_FEE_POLICY.maxBudgetTL)||2200;
+  try{const v=Number(typeof db!=='undefined'?db?.settings?.coupon_budget_optimizer?.maxBudgetTL:NaN);if(Number.isFinite(v)&&v>=1400&&v<=hard)return v;}catch(_){ }
   return hard;
 }
 function tkpCouponBudgetFor(value,type='main'){
@@ -8087,10 +8087,10 @@ function _v25BuildBacktestCoupons(rows,budgets){
       live=tkpBuildCouponSetAdaptive(rr,{
         main:Number(budgets?.main)||1000,
         main2:Number(budgets?.main2??budgets?.main)||1000,
-        mainMax:3000,
+        mainMax:2200,
         alt:0,
         surprise:Number(budgets?.surprise)||1000,
-        surpriseMax:3000,
+        surpriseMax:2200,
         normalMode:budgets?.normalMode==='coverage'?'coverage':'standard'
       });
     }catch(e){
@@ -9078,7 +9078,7 @@ function tkpMigrateSnapshotToMinimumBudget(snapshot){
     return false;
   }
   snapshot.coupons=tmp;snapshot.original_coupons_pre3010=originalCoupons;snapshot.min2500_migrated_at=new Date().toISOString();
-  for(const k of low){const c=activeCoupons[k];c.budgetTL=Math.max(Number(c.budgetTL)||0,maxB);c.leftover=round2ish(c.budgetTL-c.cost);c.adaptiveBudgetNote=(c.adaptiveBudgetNote||'')+' · 2.500–3.000 TL bandına genişletildi ve donduruldu';}
+  for(const k of low){const c=activeCoupons[k];c.budgetTL=Math.max(Number(c.budgetTL)||0,maxB);c.leftover=round2ish(c.budgetTL-c.cost);c.adaptiveBudgetNote=(c.adaptiveBudgetNote||'')+' · 2.000–2.200 TL bandına genişletildi ve donduruldu';}
   try{tkpWriteCurrentCouponSnapshotWal(snapshot);}catch(_e){}
   try{if(typeof saveDB==='function')Promise.resolve(saveDB(false,true)).catch(()=>{});}catch(_e){}
   return true;

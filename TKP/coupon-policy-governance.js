@@ -95,7 +95,7 @@ function enforce(built){
    leg.policyAudit=audit;leg.selectionOrderNos=audit.input.map(h=>h.no);audits.push(audit);
   }
   c.combos=(c.legs||[]).reduce((n,l)=>n*l.picks.length,1);c.cost=Math.round(c.combos*Number(c.unit||1)*100)/100;
-  c.leftover=Number(c.budgetTL||2000)-c.cost;
+  c.leftover=Number(c.budgetTL||2200)-c.cost;
    const singles=(c.legs||[]).filter(l=>l.picks.length===1).length;
   const widths=(c.legs||[]).map(l=>l.picks.length);
   const twoHorseLegs=widths.filter(n=>n===2).length;
@@ -105,7 +105,7 @@ function enforce(built){
    singleCount:singles,cost:c.cost,legs:audits,
    distribution:{valid:distributionValid,widths,twoHorseLegs,maxTwoHorseLegs:1,minimumMultiWidth:3,undersizedMultiLegs}};
   const unsafeSingle=audits.some(a=>a.single?.eligibility?.ok===false);
-  if(c.legs?.length===6&&(unsafeSingle||singles<1||singles>2||c.cost<1000||c.cost>2000||!distributionValid)){
+  if(c.legs?.length===6&&(unsafeSingle||singles<1||singles>2||c.cost<1000||c.cost>2200||!distributionValid)){
    if(unsafeSingle){
     c.error='Genel Bakış lideri ve TEK güven kontrolü uyuşmadı; kupon yayımlanmadı.';
     c.policyAudit.status='UNSAFE_SINGLE';
@@ -113,7 +113,7 @@ function enforce(built){
    }
    c.error=!distributionValid
     ?'2 atlı ayak en fazla bir tane, diğer çoklu ayaklar en az 3 at olmalı; kupon yayımlanmadı.'
-    :'1–2 tek ve 1.000–2.000 TL denetimi geçilemedi; kupon yayımlanmadı.';
+    :'1–2 tek ve 1.000–3.000 TL denetimi geçilemedi; kupon yayımlanmadı.';
    c.policyAudit.status='CONTRACT_FAILED';
   }
  }

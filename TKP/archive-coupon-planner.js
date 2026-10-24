@@ -90,7 +90,7 @@ function* buildSteps(raceResults,budget=3000,options={}){
   const rows=(raceResults||[]).slice().sort((a,b)=>Number(a.r?.leg)-Number(b.r?.leg));
   if(rows.length!==6||new Set(rows.map(x=>Number(x.r?.leg))).size!==6)return Object.fromEntries(modes.map(k=>[k,{error:'Altı farklı gerçek ayak gerekli.'}]));
   const unit=typeof g.ganyanUnitPrice==='function'?Number(g.ganyanUnitPrice(rows[0].r?.hippodrome,6))||1:1;
-  const cap=Math.max(1000,Math.min(3000,Number(budget)||3000));
+  const cap=Math.max(1000,Math.min(2200,Number(budget)||2200));
   const usedSingles=new Set(),previous=[],out={};
   for(const role of modes){
     const fields=[];for(const x of rows)fields.push(yield* fieldSteps(x,role));
