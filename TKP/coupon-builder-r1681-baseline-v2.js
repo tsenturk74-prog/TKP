@@ -8977,7 +8977,7 @@ function tkpRestoreForwardTrackedCoupons(raceResults){
   return {id:'FORWARD-'+ctx.key,source:'ILERI_TAKIP',created_at:'',coupons:restored,forwardTrackingFallback:true};
 }
 // TKP_3010: Sonucu belli yerli toplantılar son geçerli algoritmayla bir kez hesaplanır, damgalanır, sonra donar.
-const tkpIsFrozenLatestReplay=s=>s&&s.source==='SONRADAN_HESAPLANAN'&&s.replay_generation==='3023';
+const tkpIsFrozenLatestReplay=s=>s&&s.source==='SONRADAN_HESAPLANAN'&&s.replay_generation==='2200bh';
 function tkpMeetingFullyResulted(raceResults){
   return Array.isArray(raceResults)&&raceResults.length>0&&raceResults.every(x=>typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(x?.r?.horses||x?.horses||[]));
 }
@@ -9386,7 +9386,7 @@ function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
         }))}
     ]))
   };
-  if(postCollection&&tkpFreezeLatestApplies(raceResults))snapshot.replay_generation='3023';
+  if(postCollection&&tkpFreezeLatestApplies(raceResults))snapshot.replay_generation='2200bh';
   if(postCollection){
     // Geçmiş yarışın gerçek orijinal kuponuna asla dokunma. Bütçe ve/veya
     // veri imzası değişmiş diğer araştırma kayıtlarını da kaybetme.
