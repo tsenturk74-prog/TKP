@@ -9226,6 +9226,10 @@ async function init(){
     // never an unconditional startup job. Durable caches above are read-only.
     window.__tkpHistoricalStartupDeferred=true;
   },0);
+  // GERİ-ALMA tek-sefer migrasyonu: eski (<2.500) donmuş kalibrasyon kuponlarını
+  // güncel kuralla 2.500-3.000'e yeniden kurar (buton yok, düşük öncelik, arka plan).
+  // Açılış/ilk çizim bittikten birkaç saniye sonra tetiklenir; tek sefer çalışır.
+  setTimeout(()=>{ try{ if(typeof tkpRev3000Regen==='function') tkpRev3000Regen(); }catch(_e){} }, 6000);
 
   // Açılışta otomatik TJK/veri TOPLAMA çağrısı yapılmaz. Ağ/collector başlatılmaz;
   // yalnız RAM/IndexedDB'de zaten kayıtlı olan bugünkü yerli TJK koşusu yukarıdaki
