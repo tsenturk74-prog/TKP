@@ -9278,7 +9278,12 @@ function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
   const sourceMetadata=tkpCouponSnapshotSourceMetadata(source);
   const createdAt=new Date().toISOString();
   const meetingStartAt=tkpCouponSnapshotMeetingStartAt(raceResults);
-  const timeVerified=Number.isFinite(Date.parse(meetingStartAt))&&Date.parse(createdAt)<=Date.parse(meetingStartAt);
+  // KULLANICI (geç-veri backtest'te geçerli olsun): doğrulama artık GİRDİ SAATİne değil,
+  // SONUÇ gelip gelmediğine bakar. Kullanıcı eve gelince geç topluyor; yarış başlamış olsa
+  // da SONUÇ gelmeden girilen veri gerçek yarış-öncesidir ve backtest'e girer. Yalnız toplantı
+  // tam sonuçlanmışsa (tkpCouponMeetingLocked) doğrulanmış sayılmaz → "hatalı veri kabul etmesin".
+  const meetingResolved=(typeof tkpCouponMeetingLocked==='function')&&tkpCouponMeetingLocked(raceResults);
+  const timeVerified=!meetingResolved;
   // Kullanıcının girdiği tavan ile motorun maliyete göre seçtiği efektif hedef
   // aynı şey değildir. İlki restore sözleşmesidir; ikincisi yalnız bilgi/maliyet
   // içindir. Eski kod efektif hedefi `budgets` diye yazıp yeniden açılışta kullanıcı

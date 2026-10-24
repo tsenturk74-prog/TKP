@@ -71,7 +71,10 @@
     if(available.length!==live.length)return false;
     const signature=options.decisionSignature||global.tkpLiveCouponFingerprint(live),now=new Date().toISOString();let changed=false;
     for(const snapshot of d.auto_coupon_log||[]){
-      if(snapshot.pre_race_only!==1||snapshot.snapshot_time_verified!==1||snapshot.backtest_eligible!==1||snapshot.data_signature!==signature||Date.parse(snapshot.meeting_start_at)<=Date.now())continue;
+      // KULLANICI (zaman kavramı olmasın): "meeting başladı" (meeting_start_at<=now) dışlaması
+      // kaldırıldı; geç girilen yarış-öncesi veri de gölge/backtest'e girer. Doğrulama artık
+      // snapshot bayraklarıyla (pre_race_only/snapshot_time_verified = sonuç gelmeden girildi).
+      if(snapshot.pre_race_only!==1||snapshot.snapshot_time_verified!==1||snapshot.backtest_eligible!==1||snapshot.data_signature!==signature)continue;
       const staged=JSON.parse(JSON.stringify(snapshot));let valid=false;
       for(const [format,c] of Object.entries(staged.coupons||{})){
         if(!['main','alt','surprise'].includes(format)||!c.deepSurpriseShadow||c.legs?.length!==6)continue;
