@@ -3265,6 +3265,7 @@ function renderLearning(){
   // Hızlı kabuk ilk iki frame'de görünür; kalıcı cache yoksa uzun kartlar bundan
   // sonra otomatik hazırlanır. Kullanıcının ayrıca düğmeye basması gerekmez.
   if(!cached)tkpAutoStartLearningTables(sig);
+  try{if(typeof tkpRenderBhConditionStats==='function')tkpRenderBhConditionStats();}catch(_e){}
 }
 
 function renderOperations(){
@@ -6920,7 +6921,11 @@ async function renderSavedPredictionByFileId(fileId){
         const couponTarget=$('#budgetCouponResult');
         // Do not run the three-coupon builder automatically for an archived
         // foreign meeting: the previously saved singles are the authority.
-        if(archivedCouponSnapshot && couponTarget){
+        // TKP_3010: sonucu belli yerli toplantı son algoritmayla bir kez hesaplanıp dondurulur.
+        const needsFreezeBuild=meetingLocked&&!isForeignMeeting&&couponTarget&&typeof globalThis.tkpFreezeLatestApplies==='function'&&globalThis.tkpFreezeLatestApplies(lastRaceResults)&&!globalThis.tkpHasFrozenLatestReplay(lastRaceResults)&&typeof globalThis.tkpRunBudgetCouponBuild==='function';
+        if(needsFreezeBuild){
+          await globalThis.tkpRunBudgetCouponBuild({currentReplay:false,auto:true,archiveReconstruction:true});
+        }else if(archivedCouponSnapshot && couponTarget){
           const archiveOnly=Number(archivedCouponSnapshot.archive_snapshot)===1 || Number(archivedCouponSnapshot.post_collection_reconstruction)===1;
           const verifiedAutomatic=Number(archivedCouponSnapshot.pre_race_only)===1 && Number(archivedCouponSnapshot.snapshot_time_verified)===1;
           couponTarget.innerHTML=`<div class="card" style="border-left:5px solid #2563eb;">${archiveOnly?'📚 Eski kayıtlı kupon korundu; güncel motor sonucu veya doğrulanmış yarış-öncesi tahmin değildir.':meetingLocked?`🔒 ${verifiedAutomatic?'Doğrulanmış otomatik':'Kayıtlı eski'} kupon açıldı; tekler ve at seçimleri yeniden hesaplanmadı.`:'✅ Seçili bugünkü toplantının kayıtlı üç kuponu açıldı.'}</div>`
@@ -8143,8 +8148,10 @@ $('#bulletinFile').onchange = async (e) => {
           ?tkpRestorePreferredForeignHistoricalCoupon(sourceRows):null)
           ||(typeof tkpRestoreExactHistoricalReplayCoupon==='function'
           ?tkpRestoreExactHistoricalReplayCoupon(sourceRows,requestedBudgets):null))
-        :(typeof tkpRestoreCurrentCouponSnapshotIfFresh==='function'
-          ?tkpRestoreCurrentCouponSnapshotIfFresh(sourceRows,requestedBudgets):null);
+        :((retrospectiveBuild&&typeof tkpFreezeLatestApplies==='function'&&tkpFreezeLatestApplies(sourceRows)&&!tkpHasFrozenLatestReplay(sourceRows))
+          ?null
+          :(typeof tkpRestoreCurrentCouponSnapshotIfFresh==='function'
+          ?tkpRestoreCurrentCouponSnapshotIfFresh(sourceRows,requestedBudgets):null));
       let snapshotQueued=false;
       let snapshotPersistence=Promise.resolve(true);
       if(!restoredSnapshot){
