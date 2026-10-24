@@ -1506,7 +1506,7 @@ function recommendedHorsePanelHTML(x){
       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;line-height:1.55;">${shown.html}</div>
       <div style="margin-top:5px;font-size:10.5px;color:#64748b;font-weight:750;">No: ${shown.summary}</div>
       ${excludedHtml}${syncNote}
-      <div style="margin-top:6px;font-size:10.5px;color:#334155;line-height:1.4;font-weight:650;">${esc(couponReady?(couponLeg.distributionPlan?.reason||'Kesin Normal kupon seçimi; ayak ve bütçe planı birlikte uygulanır.'):plan.reason)}</div>
+      <div style="margin-top:6px;font-size:10.5px;color:#334155;line-height:1.4;font-weight:650;">${(()=>{const full=String(couponReady?(couponLeg.distributionPlan?.reason||'Kesin Normal kupon seçimi; ayak ve bütçe planı birlikte uygulanır.'):plan.reason).trim();const parts=full.split(' · ');const short=parts.slice(0,3).join(' · ');return short.length<full.length?`<span title="${esc(full)}" style="cursor:help;">${esc(short)} <span style="color:#2563eb;">…detay</span></span>`:esc(full);})()}</div>
     </div>`)}</div>`;
 }
 

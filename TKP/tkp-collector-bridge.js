@@ -485,9 +485,11 @@ function tkpMisliImportSummary(job,payload){
  function xFutureRaceEntries(){
   const now=Date.now();
   return xRaces().map((race,index)=>({race,index,start:xRaceDateTime(race,index)}))
-    // V1.1.101: saat alanı/cache takılı kalsa bile sonuç gelmiş bir ayak ASLA gelecekte
-    // sayılmaz. X ve T-40 yalnız gerçekten başlamamış, sonuçsuz koşulara uygulanır.
-    .filter(item=>!xRaceHasResult(item.race)&&item.start&&Date.parse(item.start)>now+1000);
+    // V1.1.101: sonuç gelmiş (kirlenmiş) bir ayak ASLA taranmaz — "hatalı veri kabul etmesin".
+    // KULLANICI (zaman kavramı olmasın): başlamış ama SONUÇSUZ ayaklar da taranır; çalıştığı için
+    // geç toplanabiliyor. Zaman şartı (start>now) kaldırıldı; sonuç-koruması (!xRaceHasResult)
+    // korundu. Backtest uygunluğu ayrıca snapshot_time_verified / pre_race_only ile gate'lenir.
+    .filter(item=>!xRaceHasResult(item.race)&&item.start);
  }
  function xRaceStartAt(){
   const future=xFutureRaceEntries();
