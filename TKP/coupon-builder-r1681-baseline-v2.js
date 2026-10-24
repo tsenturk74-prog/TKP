@@ -4824,6 +4824,70 @@ function tkpApplyFinalSurpriseTablePriority(built){
   }
 }
 
+// ===== OTO-BH KAPSAMA KURALI (kullanıcı onaylı; harness ölçümü: 6/6 168→179,
+// ROI +487→+348, bütçe 3000). Zor ayak (difficulty≥55 veya ≥11 at) VEYA daha önce
+// o koşu şartında BH kazanmış ayaklarda, ilk 3 sürpriz (BH) atını — TR'ye bakmadan —
+// üç kupona da ekler; güncel tavanı (maxBudgetTL) aşmaz. globalThis.__TKP_BH_RULE=false
+// ile kapatılabilir. Kazanan İzmir 24.10 #6 (BH-3, TR 12) gibi düşük-TR BH'leri de kapsar.
+function tkpBhRuleCondKey(r){
+  const dist=Number(r&&r.distance)||0;
+  const dband=dist<=1200?'a':dist<=1600?'b':dist<=2000?'c':'d';
+  const n=((r&&r.horses)||[]).length;
+  const fband=n<=8?'1':n<=11?'2':'3';
+  return [String((r&&r.surface)||'?'),String((r&&r.breed)||'?'),dband,fband].join('|');
+}
+function tkpBhRuleGrp(no){const s=String(no);const m=s.match(/-E\d+$/i);return m?m[0]:s;}
+function tkpBhWonConditions(){
+  const d=globalThis.db; if(!d||!Array.isArray(d.races))return new Set();
+  const sig=d.races.length+'|'+String((d.learning_state&&d.learning_state.outcome_signature)||'');
+  const cache=globalThis.__tkpBhWonCondCache;
+  if(cache&&cache.sig===sig)return cache.set;
+  const set=new Set();
+  for(const r of d.races){
+    const horses=(r.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+    if(horses.length<6)continue;
+    const w=horses.find(h=>Number(h.winner)===1||Number(h.finish_position)===1); if(!w)continue;
+    let sr=[]; try{sr=tkpRankedSurpriseRows(r,horses)||[];}catch(_e){continue;}
+    const winNo=tkpBhRuleGrp(w.horse_no);
+    if(sr.slice(0,3).some(x=>x&&x.horse&&tkpBhRuleGrp(x.horse.horse_no)===winNo))set.add(tkpBhRuleCondKey(r));
+  }
+  globalThis.__tkpBhWonCondCache={sig,set};
+  return set;
+}
+function tkpBhRuleIsHardLeg(leg){
+  const d=Number((leg&&leg.distributionPlan&&leg.distributionPlan.difficulty)??(leg&&leg.confidencePlan&&leg.confidencePlan.difficulty));
+  if(Number.isFinite(d))return d>=55;
+  return (((leg&&leg.r&&leg.r.horses)||(leg&&leg.allHorses)||[]).length)>=11;
+}
+function tkpApplyBhCoverageRule(built){
+  if(globalThis.__TKP_BH_RULE===false)return;
+  if(!built)return;
+  const cap=Number(TKP_COUPON_FEE_POLICY&&TKP_COUPON_FEE_POLICY.maxBudgetTL)||3000;
+  let wonCond=null;
+  for(const key of ['main','alt','surprise']){
+    const coupon=built[key]; if(!coupon||coupon.error||!Array.isArray(coupon.legs))continue;
+    const unit=Number(coupon.unit)||1;
+    let touched=false;
+    for(const leg of coupon.legs){
+      const r=leg&&leg.r; if(!r)continue;
+      if(!tkpBhRuleIsHardLeg(leg)){ if(wonCond===null)wonCond=tkpBhWonConditions(); if(!wonCond.has(tkpBhRuleCondKey(r)))continue; }
+      let sr=[]; try{sr=tkpRankedSurpriseRows(r,r.horses||leg.allHorses||[])||[];}catch(_e){continue;}
+      const top=sr.slice(0,3).map(x=>x&&x.horse).filter(Boolean);
+      const have=new Set((leg.picks||[]).map(h=>tkpBhRuleGrp(h.horse_no)));
+      for(const h of top){
+        const no=tkpBhRuleGrp(h.horse_no); if(have.has(no))continue;
+        if(typeof isNonRunner==='function'&&isNonRunner(h))continue;
+        const combos=coupon.legs.reduce((a,l)=>a*Math.max(1,(l.picks||[]).length),1);
+        const next=combos/Math.max(1,(leg.picks||[]).length)*((leg.picks||[]).length+1)*unit;
+        if(next>cap+1e-9)continue; // tavan aşılıyorsa ekleme (elle ekleme için yer kalsın)
+        leg.picks=dedupeEkuri(leg.picks.concat([h]),leg.r,key); have.add(no); touched=true;
+      }
+    }
+    if(touched)recalcCouponCost(coupon);
+  }
+}
+if(typeof globalThis!=='undefined')globalThis.tkpApplyBhCoverageRule=tkpApplyBhCoverageRule;
+
 function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
   // Her aktif kupon en az bir TEK taşır. Bütçe şekli de önce 2–3 atlı bir
   // ayakla, bu mümkün değilse ikinci rol-bazlı TEK ile sıkıştırılır. Çok güçlü
@@ -4942,6 +5006,9 @@ function tkpFinalizeCouponSetFast(built,key,safeBudgets,started){
   tkpDiversifyCoupon(built.surprise,[built.main,built.alt],'surprise',1);
   // R18.9 son BH/ODB kapsama kilidi: V320/shape/diversify sonrasında da 6/7/8+ ayaklarda korunur.
   tkpApplyBmbRescueSwap(built.main);tkpApplyBmbRescueSwap(built.alt);tkpApplyBmbRescueSwap(built.surprise);
+  // OTO-BH KAPSAMA: zor/kanıtlı ayaklarda ilk 3 sürpriz BH'yi (TR'ye bakmadan) ekle,
+  // tavanı aşmadan. Bütçe-yükseltme/cap finalize bundan SONRA, eklenen atları hesaba katar.
+  tkpApplyBhCoverageRule(built);
   for(const [key,c] of [['main',built.main],['alt',built.alt],['surprise',built.surprise]]){
     if(!c||c.error)continue;
     recalcCouponCost(c);
@@ -5500,6 +5567,10 @@ async function tkpBuildCouponSetAdaptiveCriticalAsync(raceResults,budgets={},opt
       if(typeof tkpApplyBmbRescueSwap==='function'){
         for(const role of ['main','alt','surprise'])tkpApplyBmbRescueSwap(candidate[role]);
       }
+      // OTO-BH KAPSAMA (kullanıcı onaylı; ölçüm: 6/6 168→179): zor/kanıtlı ayaklarda
+      // ilk 3 sürpriz BH'yi (TR'ye bakmadan) üç kupona ekle, tavanı aşmadan. bt_full'ün
+      // ölçtüğü sıra: bmbRescue SONRASI, bridge/bütçe ÖNCESİ.
+      tkpApplyBhCoverageRule(candidate);
       tkpBridgeUnprovenBhToCoupons(candidate);
       for(const role of ['main','alt','surprise'])if(candidate[role]?.legs)tkpCaptureCoverageAudit('canonical-final-'+role,candidate[role].legs,{cost:candidate[role].cost,capTL:3000});
       const completeCandidate=['main','alt','surprise'].every(k=>candidate[k]&&!candidate[k].error&&candidate[k].legs?.length===6);
