@@ -1901,7 +1901,7 @@ function couponVariantCompactHTML(res, shortTitle){
       ${globalThis.TKP_COUPON_POLICY?.html(res)||''}
     </div>
     <table><thead><tr><th>Ayak</th><th>At No</th><th>Durum</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="compactFoot"><span class="tkpCouponCostAmount"><b>${res.currentPricing?'Güncel maliyet:':'Maliyet:'}</b> ${fmt2(res.currentPricing?.cost??res.cost)} TL</span>${res.currentPricing?` <small>Kayıtlı maliyet: ${fmt2(res.cost)} TL</small>`:''}${editingLocked?'':`<button type="button" class="tkpCouponSaveBtn" title="Düzenlenen kuponları son kayıt olarak kaydet" style="margin-left:8px;padding:2px 9px;font-size:11px;border:1px solid #15803d;background:#f0fdf4;color:#166534;border-radius:6px;cursor:pointer;">💾 Son kayıt</button>`}</p>
+    <p class="compactFoot"><span class="tkpCouponCostAmount"><b>${res.currentPricing?'Güncel maliyet:':'Maliyet:'}</b> ${fmt2(res.currentPricing?.cost??res.cost)} TL</span>${res.currentPricing?` <small>Kayıtlı maliyet: ${fmt2(res.cost)} TL</small>`:''}</p>
     ${payoutLine}
   </div>`;
 }
@@ -1957,9 +1957,6 @@ function renderCouponCard(typeKey){
   });
   container.querySelectorAll('.legAddOtherSelect').forEach(sel=>{
     sel.onchange=()=>{ const val=sel.value; if(val && typeof addHorseToOtherCoupons==='function') addHorseToOtherCoupons(typeKey, sel.dataset.leg, val); };
-  });
-  container.querySelectorAll('.tkpCouponSaveBtn').forEach(btn=>{
-    btn.onclick=(e)=>{ e.preventDefault(); const ok=(typeof tkpSaveCouponSnapshotNow==='function')&&tkpSaveCouponSnapshotNow(); const t=btn.textContent; btn.disabled=true; btn.textContent=ok?'✓ Kaydedildi':'Kaydedilemedi'; setTimeout(()=>{try{btn.textContent=t;btn.disabled=false;}catch(_){}} ,1600); };
   });
   // offsetHeight okumaları zorunlu reflow üretir. Kart tıklamasını bloklamasın;
   // hizalama bir sonraki frame'de yapılsın.
