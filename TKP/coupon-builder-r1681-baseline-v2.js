@@ -5914,17 +5914,12 @@ function tkpCouponLegIsSingle(typeKey,legNo){
 function tkpCouponMeetingLocked(raceResults,now=new Date()){
   const races=(raceResults||[]).map(x=>x?.r||x).filter(Boolean);
   if(!races.length)return false;
-  if(races.some(r=>typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(r?.horses||[])))return true;
-  const starts=[];
-  for(const r of races){
-    const date=String(r?.race_date||r?.date||'').trim();
-    const time=String(r?.tjk_race_time||r?.race_time||r?.start_time||r?.time||'').trim();
-    const tm=time.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:\s|$)/);if(!tm)continue;
-    let y,m,d;const iso=date.match(/^(\d{4})-(\d{2})-(\d{2})/),tr=date.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/);
-    if(iso){y=+iso[1];m=+iso[2];d=+iso[3];}else if(tr){y=+tr[3];m=+tr[2];d=+tr[1];}else continue;
-    const start=new Date(y,m-1,d,+tm[1],+tm[2],0,0);if(!Number.isNaN(start.getTime()))starts.push(start.getTime());
-  }
-  return starts.length?now.getTime()>=Math.min(...starts):false;
+  // KULLANICI (zaman kavramı olmasın): "yarış başladı" diye kilitleme KALDIRILDI. Kullanıcı
+  // eve gelince çoğu yarışta geç veri topluyor; yarış başlamış olsa da SONUÇ gelene kadar
+  // düzenleme/üretim açık kalır. Toplantı YALNIZ bütün ayaklar sonuçlanınca kilitlenir
+  // (geçmişi değiştirmenin anlamı yok + "hatalı/sonuçla kirlenmiş veri kabul etmesin").
+  // Backtest uygunluğu ayrıca snapshot bayraklarıyla (backtest_eligible vb.) gate'lenir.
+  return races.every(r=>typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(r?.horses||[]));
 }
 function tkpCouponGenerationPolicy(raceResults){
   const hasRaces=Array.isArray(raceResults)&&raceResults.length>0;
