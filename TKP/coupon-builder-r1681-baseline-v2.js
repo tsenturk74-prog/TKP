@@ -4876,7 +4876,19 @@ function tkpApplyBhCoverageRule(built){
       const r=leg&&leg.r; if(!r)continue;
       if(!tkpBhRuleIsHardLeg(leg)){ if(wonCond===null)wonCond=tkpBhWonConditions(); if(!wonCond.has(tkpBhRuleCondKey(r)))continue; }
       let sr=[]; try{sr=tkpRankedSurpriseRows(r,r.horses||leg.allHorses||[])||[];}catch(_e){continue;}
-      const top=sr.slice(0,3).map(x=>x&&x.horse).filter(Boolean);
+      // AKILLI BH SECIMI (harness: 182/%30.5 ROI+373; kor 179/+348'i hem 6/6 hem ROI'de gecer).
+      // BH = AGF>=6 (gercek surpriz); icinden GIZLI-FAVORI (TKP ayak-tablo sira 1-3, %5-24 kazanir)
+      // VEYA yorumcu destekli (ypuan>=9, %7.6) VEYA piyasa destekli (agf>=5, %6) olanlar secilir.
+      // Olu/ilgisiz surprizler (agf<2, sinyalsiz, %1.2) ELENIR -> "ilgisiz BH eklenmez".
+      const _hs=(r.horses||leg.allHorses||[]).filter(h=>h);
+      const _byAgf=_hs.slice().sort((a,b)=>(Number(b.agf)||0)-(Number(a.agf)||0));
+      const _agfRank=h=>{const i=_byAgf.findIndex(x=>tkpBhRuleGrp(x.horse_no)===tkpBhRuleGrp(h.horse_no));return i<0?99:i+1;};
+      const _byScore=_hs.slice().sort((a,b)=>(Number(b.score??b.tkp_display_score)||0)-(Number(a.score??a.tkp_display_score)||0));
+      const _scoreRank=h=>{const i=_byScore.findIndex(x=>tkpBhRuleGrp(x.horse_no)===tkpBhRuleGrp(h.horse_no));return i<0?99:i+1;};
+      const _yp=h=>Number(h.ypuan)||0;
+      const _cand=sr.map(x=>x&&x.horse).filter(Boolean).filter(h=>_agfRank(h)>=6&&(_scoreRank(h)<=3||_yp(h)>=9||(Number(h.agf)||0)>=5));
+      const _sc=h=>(_scoreRank(h)<=3?(4-_scoreRank(h))*20:0)+_yp(h)*2+(Number(h.agf)||0);
+      const top=_cand.sort((a,b)=>_sc(b)-_sc(a)).slice(0,3);
       const have=new Set((leg.picks||[]).map(h=>tkpBhRuleGrp(h.horse_no)));
       for(const h of top){
         const no=tkpBhRuleGrp(h.horse_no); if(have.has(no))continue;
