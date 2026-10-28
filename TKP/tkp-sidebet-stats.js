@@ -6,6 +6,15 @@
   'use strict';
   const LABELS={cifte:'Çifte',sirali_ikili:'Sıralı İkili',sirali_uclu:'Sıralı Üçlü',uclu_bahis:'Üçlü',tabela:'Tabela (4lü)',sirali_5li:'Sıralı 5li'};
   const ORDER=['cifte','sirali_ikili','sirali_uclu','uclu_bahis','tabela','sirali_5li'];
+  // Backtest (tum gecmis) onerisi: hicbiri +EV degil; en az kotu Cifte. "OYNA" = en iyi cep.
+  const ONERI={
+    cifte:{t:'🟢 OYNA · açık ayakta',c:'#166534'},
+    sirali_ikili:{t:'🟡 Seçici · BH koşusunda',c:'#b45309'},
+    sirali_uclu:{t:'🟡 Seçici · BH koşusunda',c:'#b45309'},
+    uclu_bahis:{t:'🟡 Seçici · BH koşusunda',c:'#b45309'},
+    tabela:{t:'❌ OYNAMA · yapısal zarar',c:'#b91c1c'},
+    sirali_5li:{t:'❌ OYNAMA · yapısal zarar',c:'#b91c1c'}
+  };
   function tkpRenderSidebetStats(){
     try{
       const el=document.getElementById('sidebetStatsTable'); if(!el)return;
@@ -24,11 +33,11 @@
         const roi=a.cost?Math.round(100*(a.ret-a.cost)/a.cost):null;
         const avgWin=a.hit?Math.round(a.ret/a.hit):0;
         const col=roi==null?'#64748b':(roi>=0?'#166534':roi>=-20?'#b45309':'#b91c1c');
-        const flag=roi==null?'':(roi>=-15?' 🟡 en az kötü':(roi<=-70?' ❌ oynama':''));
-        rows+=`<tr><td>${LABELS[p]||p}</td><td class="num">${a.res}</td><td class="num">${hitPct}</td><td class="num" style="color:${col};font-weight:700">${roi==null?'—':'%'+roi}${flag}</td><td class="num">${avgWin.toLocaleString('tr-TR')}</td></tr>`;
+        const o=ONERI[p]||{t:'',c:'#64748b'};
+        rows+=`<tr><td>${LABELS[p]||p}</td><td class="num">${a.res}</td><td class="num">${hitPct}</td><td class="num" style="color:${col};font-weight:700">${roi==null?'—':'%'+roi}</td><td class="num">${avgWin.toLocaleString('tr-TR')}</td><td style="color:${o.c};font-weight:700;white-space:nowrap">${o.t}</td></tr>`;
       }
       if(!rows){ el.innerHTML='<div class="empty">Henüz sonuçlu yan bahis kaydı yok.</div>'; return; }
-      el.innerHTML='<p class="muted" style="margin:0 0 6px;font-size:11px;">Sonuçlu '+L.length+' kayıttan otomatik. ROI = (ikramiye−maliyet)/maliyet; negatifse ganyan kesintisi sistemin avantajını yiyor. Çifte en az kötü; Tabela/5li yapısal zararlı. Altılı asıl kazanç hattıdır.</p><div class="tableWrap"><table><thead><tr><th>Ürün</th><th>Sonuçlu</th><th>Tutma %</th><th>ROI</th><th>Tutunca ort. ikramiye (1 misli)</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      el.innerHTML='<p class="muted" style="margin:0 0 6px;font-size:11px;">Tüm geçmiş (sonuçlu '+L.length+' kayıt + sistem backtest\'i) üzerinden otomatik. ROI negatifse ganyan kesintisi sistemin avantajını yiyor. Hiçbiri +EV değil; OYNA = en az kötü cep. Asıl kazanç Altılı.</p><div class="tableWrap"><table><thead><tr><th>Ürün</th><th>Sonuçlu</th><th>Tutma %</th><th>ROI</th><th>Tutunca ort. ikramiye</th><th>Öneri (OYNA)</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
     }catch(e){ try{console.warn('sidebet stats render',e);}catch(_){} }
   }
   if(typeof globalThis!=='undefined')globalThis.tkpRenderSidebetStats=tkpRenderSidebetStats;
