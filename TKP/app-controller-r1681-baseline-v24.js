@@ -3266,6 +3266,7 @@ function renderLearning(){
   // sonra otomatik hazırlanır. Kullanıcının ayrıca düğmeye basması gerekmez.
   if(!cached)tkpAutoStartLearningTables(sig);
   try{if(typeof tkpRenderBhConditionStats==='function')tkpRenderBhConditionStats();}catch(_e){}
+  try{if(typeof tkpRenderSidebetStats==='function')tkpRenderSidebetStats();}catch(_e){}
 }
 
 function renderOperations(){
