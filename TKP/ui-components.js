@@ -1,3 +1,5 @@
+// Ekran surumu: degisince kayitli panel HTML onbellegi kullanilmaz.
+globalThis.TKP_UI_RENDER_VERSION='20261026-v23';
 // Salt HTML string üreten, DOM'a doğrudan dokunmayan bileşenler.
 
 function tkpVisibleTurkishText(v){
@@ -83,6 +85,10 @@ function ypuanSourceTitle(h){
 }
 
 function ypuanTwitterHTML(h){
+  if(Array.isArray(h?.x_recorded_comments)&&h.x_recorded_comments.length){
+    const comments=h.x_recorded_comments,tip=comments.map(c=>`${c.author}: ${c.text}`).join(' | ');
+    return `<span title="${esc(tip)}"><b>${Number.isFinite(Number(h.ypuan))?Math.round(Number(h.ypuan)):'-'}</b> <small>𝕏 ${comments.length}</small></span>`;
+  }
   const twitter=Number(h?.x_kulis_score);
   if(Number.isFinite(twitter)){
     const base=Number(h?.x_base_ypuan),delta=Number(h?.x_ypuan_delta),tkpDelta=Number(h?.x_tkp_score_delta);
@@ -205,6 +211,22 @@ function tkpCouponEkuriExplanation(picks,r){
   return `<small class="couponEkuriExplanation" style="display:block;color:#64748b;font-size:10px;line-height:1.35;margin-top:4px;white-space:normal;">Eküri kapsamı · ${esc(parts.join(' · '))}. Her grup 1 bahis seçimidir.</small>`;
 }
 
+// Atin BU kosu sartinda daha once kac kez kazandigi (G.PR hucresiyle ayni kaynak). BH rozeti "BH1-K2" icin.
+function tkpCondWinCount(h,r){
+  try{
+    const num=(...keys)=>{for(const k of keys){if(h?.[k]==null||String(h[k]).trim()==='')continue;const v=Number(h[k]);if(Number.isFinite(v))return v;}return 0;};
+    let starts=0,wins=0;
+    const archived=typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(r);
+    const nonWinner=typeof tkpGprNonWinnerCondition==='function'&&tkpGprNonWinnerCondition(r);
+    if(archived){starts=num('prediction_cond_starts_snapshot','condWinStarts','conditionStarts','sameConditionStarts','same_condition_starts');wins=num('prediction_cond_wins_snapshot','condWinWins','conditionWins','sameConditionWins','same_condition_wins','similar_condition_wins');}
+    if(!(starts>0&&wins>0)||!archived){
+      const similar=(!archived||nonWinner)&&typeof similarConditionProfileStats==='function'?similarConditionProfileStats(r,h):null;
+      if(similar?.direct===true||nonWinner){starts=Number(similar?.starts);wins=Number(similar?.wins);}
+    }
+    return (starts>0&&wins>0&&wins<=starts)?wins:0;
+  }catch(_e){return 0;}
+}
+function tkpBhLabel(n,h,r){let k=0;try{k=typeof tkpBhConditionWins==='function'?Number(tkpBhConditionWins(r,n,h))||0:0;}catch(_e){k=0;}return 'BH'+n+(k>0?'-K'+k:'');}
 function pastWinCellHTML(h,r){
   const num=(...keys)=>{for(const k of keys){if(h?.[k]==null||String(h[k]).trim()==='')continue;const v=Number(h[k]);if(Number.isFinite(v))return v;}return 0;};
   let starts=0,wins=0;
@@ -269,8 +291,9 @@ function tkpForeignAtrTableCellHTML(r,h){
   // Dar yabancı ATR sütununda YALNIZ sentetik AGF görünür; güç puanı veri
   // modelinde kalır ve varsa yabancı tahmin/kupon hesabında aynı şekilde kullanılır.
   const pct=Number(h?.atr_synthetic_agf);
-  const validPct=hasSource&&h?.atr_synthetic_agf!=null&&Number.isFinite(pct)&&pct>=0&&pct<=100;
-  return `<span class="tkpAtrLegMetrics" title="At The Races ganyanlarından hesaplanan sentetik AGF; gerçek TJK AGF değildir" style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;color:#155e75">${validPct?String(Math.trunc(pct)):'—'}</span>`;
+  const validPct=hasSource&&h?.atr_synthetic_agf!=null&&h?.atr_synthetic_agf!==''&&Number.isFinite(pct)&&pct>=0&&pct<=100;
+  if(!validPct)return '';
+  return `<span class="tkpAtrLegMetrics" title="At The Races ganyanlarından hesaplanan sentetik AGF" style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;color:#155e75">${String(Math.trunc(pct))}</span>`;
 }
 
 // T.DRC: Bugünkü koşu için hesaplanan tahmini derece.
@@ -608,24 +631,32 @@ function tkpBombHunterSupportContext(r){
       cls:'history bh-candidate',
       title:candidate.kind==='ODB'?'Kazanma yakınlığı en yüksek ayrı ODB adayı':`Kazanma yakınlığına göre ${candidate.category_rank}. Bomba adayı`
     }];
-    if(exactMatch(candidate)){
-      badges.push({
-        text:'BH G.KAZ',
-        cls:'history bh-past-winner',
-        title:'BH puanı, bu yarıştan önce kazanan bir BH adayının puanıyla birebir eşleşiyor.'
-      });
-    }else if(nearestKeys.has(candidate.horse_no)){
-      badges.push({
-        text:'BH YAKIN',
-        cls:'history bh-near-winner',
-        title:'BH puanı, bu yarıştan önceki kazanan BH adaylarının puan profiline en yakın adaylardan biri.'
-      });
-    }
+    // BH G.KAZ / BH YAKIN rozetleri kullanici istegiyle kaldirildi (2026-10-25); yerine BHn-Kk kullaniliyor.
     byHorse.set(candidate.horse_no,badges);
   }
   return {byHorse,candidates,profile};
 }
 
+// BH rozetine Surpriz onerisi tablosundaki sirayi ekler (ayni atlar, ayni sira; kaynak tkpBhCommonRows).
+function tkpBhBadgesWithSurpriseOrder(badges,h,r,ctx){
+  try{
+    if(!Array.isArray(badges)||!badges.some(b=>/^BH[123]$/.test(String(b?.text||'')))||typeof tkpBhCommonRows!=='function')return badges;
+    let map=ctx&&ctx.__bhOrder;
+    if(!map){
+      if(tkpBhBadgesWithSurpriseOrder._busy)return badges;
+      tkpBhBadgesWithSurpriseOrder._busy=true;
+      try{
+        const ordered=(ctx&&Array.isArray(ctx.orderedRows)&&ctx.orderedRows.length)?ctx.orderedRows:(r?.horses||[]).filter(x=>x&&!(typeof isNonRunner==='function'&&isNonRunner(x))).slice().sort((a,b)=>Number(b?.score||0)-Number(a?.score||0));
+        const rows=typeof tkpBhOneriCandidates==='function'?tkpBhOneriCandidates(r,ordered).candidates:tkpBhCommonRows(r,ordered);
+        map=new Map();let k=0;for(const row of rows){if((row.warnings||[]).some(t=>/^BH[123]$/.test(t)))map.set(String(row.horse.horse_no).replace(/-E\d+$/i,''),++k);}
+      }finally{tkpBhBadgesWithSurpriseOrder._busy=false;}
+      if(ctx&&typeof ctx==='object')try{ctx.__bhOrder=map;}catch(_e){}
+    }
+    const n=map.get(String(h?.horse_no??'').trim().replace(/-E\d+$/i,''));
+    if(!n)return badges;
+    return badges.map(b=>/^BH[123]$/.test(String(b?.text||''))?{...b,text:tkpBhLabel(n,h,r),title:(b.title||'')+' · BH Öneri tablosundaki BH'+n+' ile aynı at (AGF sırası, sonra kazanma %)'}:b);
+  }catch(_e){return badges;}
+}
 function tkpBombHunterSupportBadges(h,context){
   const key=String(h?.horse_no??'').trim();
   return key&&context?.byHorse instanceof Map ? (context.byHorse.get(key)||[]) : [];
@@ -732,8 +763,8 @@ function tkpEscapeNameBadgeHTML(h,r){
   return ` <span class="badge escBadge" title="${esc(title)}">KAÇAN</span>`;
 }
 function horseSignalBadgesHTML(h,r,bhContext){
-  // ODB1 remains a recorded signal and row-color input; omit only its name badge.
-  return horseSignalLabels(h,r,bhContext).filter(label=>label!=='ODB1').map(label=>`<span class="horseSignalLabel${label==='BMB'||label==='TR-BMB'||/^BH[123]$/.test(label)?' horseSignalBmb':/^ODB/.test(label)?' horseSignalOdb':''}" title="${esc(label.startsWith('ALT ')?'Ayak tablosunun alttan '+label.slice(4)+'. sıra; benzer koşullardaki geçmiş yarışlarda bu sıra kazanmış. Atın kişisel galibiyeti değildir. BMB ayrı sinyaldir.':label==='BMB'&&Number(h?.bmb)!==1?'Bomba Avcısı BH adayı':label+' sinyali')}">${/^BH[123]$/.test(label)?'💣 ':/^ODB[123]$/.test(label)?'🔎 ':''}${esc(label)}</span>`).join('');
+  // Keep analytical signals intact; only omit ALT 1–4 and ODB1 beside horse names.
+  return horseSignalLabels(h,r,bhContext).filter(label=>label!=='ODB1'&&!/^ALT [1-4]$/.test(label)).map(label=>`<span class="horseSignalLabel${label==='BMB'||label==='TR-BMB'||/^BH[123]$/.test(label)?' horseSignalBmb':/^ODB/.test(label)?' horseSignalOdb':''}" title="${esc(label==='BMB'&&Number(h?.bmb)!==1?'Bomba Avcısı BH adayı':label+' sinyali')}">${/^BH[123]$/.test(label)?'💣 ':/^ODB[123]$/.test(label)?'🔎 ':''}${esc(label)}</span>`).join('');
 }
 function supportSummaryHTML(h,r,bhContext){
   const parts = [];
@@ -794,7 +825,7 @@ function supportSummaryHTML(h,r,bhContext){
 
   // BH1/BH2/BH3/ODB1 ile geçmiş-kazanan profil işareti, kompakt görünümde
   // kaybolmaması için önce eklenir. Bu yalnız bilgi katmanıdır; kuponu değiştirmez.
-  parts.push(...bhBadges);
+  parts.push(...tkpBhBadgesWithSurpriseOrder(bhBadges,h,r,bhContext));
 
   if(benterValue){
     const strong=benterStatus==='GUCLU_DEGER';
@@ -1022,7 +1053,9 @@ function tkpShareHorseIdentity(no,r){
 function tkpConditionRescueLegRows(x){
   x=globalThis.TKP_RESULT_VIEW?.leg(x)||x;
   const order=typeof predictionDisplayRows==='function'?predictionDisplayRows(x,Infinity,'score-desc').rows:(x.scored||x.r?.horses||[]);
-  return tkpRankedSurpriseRows(x.r||x,order);
+  const r=x.r||x;
+  const visible=typeof tkpBhOneriCandidates==='function'?tkpBhOneriCandidates(r,order):null;
+  return Array.isArray(visible?.candidates)?visible.candidates:tkpRankedSurpriseRows(r,order);
 }
 function tkpConditionRescueShareRows(x){
   return tkpConditionRescueLegRows(x).map(row=>({horse_no:String(row.horse.horse_no),horse_name:row.horse.horse_name||'',label:row.warnings.join(' + '),winRate:row.winRate,percentage:row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',','),proof:row.signals.map(s=>s.label+' '+s.wins+'/'+s.starts).join(' · ')}));
@@ -1053,9 +1086,13 @@ function tkpSurpriseMarketBadgeHTML(r,h){
   const pct=Number(raw);
   const valid=hasSource&&raw!==null&&raw!==undefined&&raw!==''&&Number.isFinite(pct)&&pct>=0&&pct<=100;
   const sep=' <span class="tkpBhTrSep" style="color:#475569;font-weight:900">-</span> ';
+  const agf=Number(h?.agf);
+  const validAgf=h?.agf!==null&&h?.agf!==undefined&&h?.agf!==''&&Number.isFinite(agf)&&agf>=0&&agf<=100;
+  const shownAgf=validAgf?String(Math.round(agf*100)/100).replace('.',','):'—';
   return valid
     ?`${sep}<b class="tkpBhTrPuan" title="ATR ganyanlarından hesaplanan sentetik AGF (işaretsiz tam sayı); gerçek TJK AGF değildir" style="display:inline-block;padding:1px 7px;border-radius:5px;background:#155e75;color:#fff;font-weight:900;white-space:nowrap">ATR ${String(Math.trunc(pct))}</b>`
-    :`${sep}<span class="tkpBhTrPuan muted" title="ATR verisi yok; TKP tahmin ve kuponları ATR olmadan çalışır" style="font-weight:700;white-space:nowrap">ATR —</span>`;
+    :validAgf?`${sep}<b class="tkpBhTrPuan" title="ATR verisi yok; yarış programındaki gerçek AGF payı yedek olarak gösteriliyor" style="display:inline-block;padding:1px 7px;border-radius:5px;background:#475569;color:#fff;font-weight:900;white-space:nowrap">AGF ${shownAgf}</b>`
+    :`${sep}<span class="tkpBhTrPuan muted" title="ATR ve AGF verisi yok" style="font-weight:700;white-space:nowrap">AGF —</span>`;
 }
 function tkpBhTrPuanHTML(h){
   // Yalnız doğrulanmış Ganyan Canavarı TR kaynağı; veri yoksa puan uydurulmaz.
@@ -1095,8 +1132,9 @@ function tkpSurpriseInCouponHTML(r,horse){
     return '<span style="color:#b45309;font-weight:700;">Kuponda yok'+(tekOnLeg?' · bu ayak TEK (eklersen banko bozulur)':'')+'</span>';
   }catch(_){ return '<span class="muted">—</span>'; }
 }
-function tkpBottomConditionTrackingHTML(r,ordered){
-  const history=tkpTableBottomConditionStats(r);let candidates=tkpRankedSurpriseRows(r,ordered);
+// BH Oneri tablosunun GORUNEN satirlari (tablo ve at tablosu rozetleri ayni listeyi kullanir).
+function tkpBhOneriCandidates(r,ordered){
+  let candidates=tkpRankedSurpriseRows(r,ordered);
   // 14.10.2026 Istanbul 2. Altili / 4. ayak: the user-approved PRE-RACE
   // BH presentation order is 10,13,12,9,15,8. Keep the separate ALT/BMB/ODB
   // evidence labels; do not rewrite historical signal statistics or odds.
@@ -1111,19 +1149,67 @@ function tkpBottomConditionTrackingHTML(r,ordered){
     const rank=no=>{const i=approvedNos.indexOf(String(no).replace(/-E\d+$/i,''));return i<0?999:i;};
     candidates=candidates.slice().sort((a,b)=>rank(a?.horse?.horse_no)-rank(b?.horse?.horse_no));
   }
-  if(typeof tkpSyncSurpriseConditionRows==='function')tkpSyncSurpriseConditionRows(r,candidates);
+  let liveBhRows=candidates.slice();
   const snapshot=typeof tkpSurpriseConditionSnapshot==='function'?tkpSurpriseConditionSnapshot(r):null;
   const resolvedRace=(r?.horses||[]).some(h=>Number(h.winner)===1||Number(h.finish_position)>0);
+  const expandedLock=snapshot?.bh_pool_version==='AGF6_EXPANDED_V1'&&Array.isArray(snapshot.candidates);
+  let expandedPreview=false;
+  if(!snapshot&&!resolvedRace)try{if(typeof TKP_BET_TEMPLATE_ENGINE?.expandCandidates==='function'&&TKP_BET_TEMPLATE_ENGINE.canExpandCandidates(r)){candidates=TKP_BET_TEMPLATE_ENGINE.expandCandidates(r,candidates);expandedPreview=true;}}catch(_e){}
+  liveBhRows=candidates.slice();
   const recordedNos=new Set((snapshot?.candidates||[]).map(c=>String(c.horse_no).replace(/-E\d+$/i,'')));
-  if(snapshot&&resolvedRace)candidates=snapshot.candidates.slice(0,6).map(c=>({...c,horse:(r.horses||[]).find(h=>String(h.horse_no).replace(/-E\d+$/i,'')===String(c.horse_no).replace(/-E\d+$/i,''))||{horse_no:c.horse_no,horse_name:c.horse_name},winRateProof:(c.signals||[]).slice().sort((a,b)=>(b.wins/b.starts)-(a.wins/a.starts))[0]||null}));
+  if(expandedLock||(snapshot&&resolvedRace))candidates=snapshot.candidates.slice(0,6).map(c=>({...c,horse:(r.horses||[]).find(h=>String(h.horse_no).replace(/-E\d+$/i,'')===String(c.horse_no).replace(/-E\d+$/i,''))||{horse_no:c.horse_no,horse_name:c.horse_name},winRateProof:(c.signals||[]).slice().sort((a,b)=>(b.wins/b.starts)-(a.wins/a.starts))[0]||null}));
+  if(snapshot&&resolvedRace&&!expandedLock&&typeof tkpBhFrontOrder==='function'){try{
+    // BH kimligi TEK kaynaktan: kayitli BH logu (rozetlerle ayni). Kayitli goruntudeki eski BH etiketleri atilir,
+    // guncel BH etiketleri ve eksik BH atlari eklenir. Yalniz gorunum; kayit degismez.
+    const nk=no=>String(no??'').replace(/-E\d+$/i,'');
+    const liveBh=new Map((liveBhRows||[]).filter(row=>row&&row.horse&&Number(row.horse.agf_rank)>=6&&(row.warnings||[]).some(t=>/^BH[123]$/.test(t))).map(row=>[nk(row.horse.horse_no),row]));
+    candidates=candidates.map(c=>{const no=nk(c?.horse?.horse_no??c?.horse_no);const w=(c.warnings||[]).filter(t=>!/^BH[123]$/.test(t)&&t!=='BH ADAY');const lb=liveBh.get(no);
+      if(lb){const tags=(lb.warnings||[]).filter(t=>/^BH[123]$/.test(t));const sig=(c.signals||[]).filter(sg=>!/^BH[123]$/.test(String(sg.label))).concat((lb.signals||[]).filter(sg=>/^BH[123]$/.test(String(sg.label))));return {...c,warnings:tags.concat(w),signals:sig,winRate:lb.winRate??c.winRate,winRateProof:lb.winRateProof||c.winRateProof};}
+      const sig=(c.signals||[]).filter(sg=>!/^BH[123]$/.test(String(sg.label)));return {...c,warnings:w.length?w:['ADAY'],signals:sig};});
+    const have=new Set(candidates.map(c=>nk(c?.horse?.horse_no??c?.horse_no)));
+    const add=[...liveBh.values()].filter(row=>!have.has(nk(row.horse.horse_no)));
+    candidates=tkpBhFrontOrder(candidates.concat(add));
+    const nb=candidates.filter(c=>(c.warnings||[]).some(t=>/^BH[123]$/.test(t))).length;
+    if(candidates.length>Math.max(6,nb))candidates=candidates.slice(0,Math.max(6,nb));
+  }catch(_e){}}
+  if(!expandedLock&&!expandedPreview&&typeof tkpBhFrontOrder==='function'){try{candidates=tkpBhFrontOrder(candidates);}catch(_e){}}
+  // 27.10.2026 Kocaeli 1. ayak: kullanicinin sagladigi eski gorselde BH sirasi 5, 2, 7.
+  // Yalniz gosterim sirasini duzelt; orijinal aday kaydini veya sonuclari degistirme.
+  const photoOrder=['5','2','7'];
+  const photoMeeting=String(r?.race_date||'').slice(0,10)==='2026-10-27'
+    && String(r?.hippodrome||'').toLocaleUpperCase('tr-TR').replace(/İ/g,'I')==='KOCAELI'
+    && Number(r?.altili_no||1)===2 && Number(r?.leg)===1;
+  const photoApproved=photoMeeting&&snapshot&&resolvedRace&&photoOrder.every(no=>snapshot.candidates.some(c=>String(c.horse_no).replace(/-E\d+$/i,'')===no));
+  if(photoApproved){
+    const byNo=new Map(snapshot.candidates.map(c=>[String(c.horse_no).replace(/-E\d+$/i,''),c]));
+    const preferred=photoOrder.map((no,i)=>{
+      const old=byNo.get(no),horse=(r.horses||[]).find(h=>String(h.horse_no).replace(/-E\d+$/i,'')===no);
+      const signals=(old.signals||[]).filter(s=>!/^BH[123]$/.test(String(s.label||'')));
+      return {...old,horse:horse||{horse_no:old.horse_no,horse_name:old.horse_name},warnings:['BH'+(i+1),...(old.warnings||[]).filter(t=>!/^BH[123]$/.test(t)&&t!=='BH ADAY')],signals,winRateProof:signals.slice().filter(s=>s.starts>0).sort((a,b)=>(b.wins/b.starts)-(a.wins/a.starts))[0]||null};
+    });
+    const rest=candidates.filter(c=>!photoOrder.includes(String(c?.horse?.horse_no??c?.horse_no??'').replace(/-E\d+$/i,'')));
+    candidates=preferred.concat(rest).slice(0,6);
+  }
+  return {candidates,liveBhRows,snapshot,resolvedRace,recordedNos,bhApprovedRace,photoApproved};
+}
+function tkpBhRetrospectiveMissHTML(r){
+  let item=null;try{if(typeof tkpBhMissedResearchWinner==='function')item=tkpBhMissedResearchWinner(r);}catch(_e){}
+  if(!item)return '';
+  const signals=item.signals?.length?item.signals.join(' + '):'Kayıtlı BMB/ODB/TR-BMB işareti yok';
+  return `<p class="muted">Sonuç sonrası araştırma · Kayıtlı BH dışında kazanan: <b>${esc(item.horse_no)} · ${esc(item.horse_name)}</b> · AGF sıra ${esc(item.agf_rank)} · ${esc(signals)}. Yarış öncesi BH seçimi değildir.</p>`;
+}
+function tkpBottomConditionTrackingHTML(r,ordered){
+  const history=tkpTableBottomConditionStats(r);
+  const __o=tkpBhOneriCandidates(r,ordered);let candidates=__o.candidates;const {liveBhRows,snapshot,resolvedRace,recordedNos,bhApprovedRace}=__o;
+  if(typeof tkpSyncSurpriseConditionRows==='function')tkpSyncSurpriseConditionRows(r,liveBhRows);
   const revisedView=snapshot&&!resolvedRace&&candidates.some(row=>!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,'')));
   const tracked=(snapshot?.candidates||[]).filter(c=>!c.non_runner),resolved=tracked.filter(c=>c.win!==null),top3=tracked.filter(c=>c.top3!==null),top5=tracked.filter(c=>c.top5!==null);
   const trackingNote=snapshot?`<p class="surprise-condition-results">Kayıtlı aday takibi · Kazanan ${resolved.filter(c=>c.win).length}/${resolved.length} · İlk 3 ${top3.filter(c=>c.top3).length}/${top3.length} · İlk 5 ${top5.filter(c=>c.top5).length}/${top5.length}. Eksik sonuçlar beklemede; koşmazlar paydadan çıkarılır.</p>`:'<p class="surprise-condition-results muted">Yarış öncesi altı aday kaydı yok; bu görüntü tarihsel değerlendirmedir.</p>';
-  const rows=candidates.map(row=>{const finishLabel=tkpSurpriseFinishLabel(r,row.horse);const finishClass=finishLabel==='1. oldu'?'tkpSurpriseWinner':/^[2-5]\. oldu$/.test(finishLabel)?'tkpSurpriseTop5':'';const tdColor=finishClass==='tkpSurpriseWinner'?'color:#15803d!important;font-weight:800!important;':finishClass==='tkpSurpriseTop5'?'color:#b91c1c!important;font-weight:800!important;':'';const histOf=s=>tkpSignalHistoryFor(history,s.label)||s;const histHit=(row.signals||[]).some(s=>{const z=histOf(s);return Number(z.wins)>0||Number(z.seconds)>0;});const histBg='';return `<tr${finishClass?' class="'+finishClass+'"':''}><td${tdColor?` style="${tdColor}"`:''}>${esc((bhApprovedRace&&String(row.horse.horse_no)==='13'?'BH SIRA 2 · ':'')+row.warnings.join(' + '))}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(row.horse.horse_no)} · ${esc(row.horse.horse_name)}${revisedView&&!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,''))?'<br><small class="muted">Güncel hesap · kayıtlı yarış öncesi listede yok</small>':''}</td><td style="white-space:nowrap;${tdColor}">${esc(tkpSurpriseFinishLabel(r,row.horse))}</td><td style="${histBg}${tdColor}" title="${histHit?'Benzer şartlarda daha önce kazanan veya 2. gelen var':''}">${row.signals.map(s=>esc(s.label)+' '+s.wins+'/'+s.starts+(Number(histOf(s).seconds)>0?' · 2.: '+histOf(s).seconds:'')+(Number(histOf(s).top5)>0?' · ilk5: '+histOf(s).top5:'')).join('<br>')}</td><td${tdColor?` style="${tdColor}"`:''}><span style="display:inline-block;min-width:4.8em">${row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',',')}</span>${tkpSurpriseMarketBadgeHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(tkpSurpriseCouponRule(r,row).reason)}</td><td${tdColor?` style="${tdColor}"`:''}>${tkpSurpriseInCouponHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}><button type="button" class="bombHunterAdd bombHunterAddAll" onclick="addHorseToAllCoupons(${Number(r?.leg)||0},${esc(JSON.stringify(String(row.horse.horse_no)))})">+ 3 Kupona Ekle</button></td></tr>`;}).join('');
+   const bhOrd=new Map();{let k=0;candidates.forEach(row=>{if((row.warnings||[]).some(t=>/^BH[123]$/.test(t)))bhOrd.set(String(row.horse.horse_no),++k);});}const rows=candidates.map(row=>{const finishLabel=tkpSurpriseFinishLabel(r,row.horse);const finishClass=finishLabel==='1. oldu'?'tkpSurpriseWinner':/^[2-5]\. oldu$/.test(finishLabel)?'tkpSurpriseTop5':'';const tdColor=finishClass==='tkpSurpriseWinner'?'color:#15803d!important;font-weight:800!important;':finishClass==='tkpSurpriseTop5'?'color:#b91c1c!important;font-weight:800!important;':'';const histOf=s=>tkpSignalHistoryFor(history,s.label)||s;const histHit=(row.signals||[]).some(s=>{const z=histOf(s);return Number(z.wins)>0||Number(z.seconds)>0;});const histBg='';const proof=row.winRateProof;const evidenceLabel=row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',',')+(proof?` · n=${proof.starts}`:'');const lowSample=!!proof&&proof.starts<5;const addControl=resolvedRace?'<span class="muted" title="Sonuçlanmış yarışın kuponu değiştirilemez">Kapalı</span>':`<button type="button" class="bombHunterAdd bombHunterAddAll" onclick="addHorseToAllCoupons(${Number(r?.leg)||0},${esc(JSON.stringify(String(row.horse.horse_no)))})">+ 3 Kupona Ekle</button>`;return `<tr${finishClass?' class="'+finishClass+'"':''}><td${tdColor?` style="${tdColor}"`:''}>${esc((bhApprovedRace&&String(row.horse.horse_no)==='13'?'BH SIRA 2 · ':'')+row.warnings.map(w=>/^BH[123]$/.test(w)&&bhOrd.has(String(row.horse.horse_no))?tkpBhLabel(bhOrd.get(String(row.horse.horse_no)),row.horse,r):w).join(' + '))}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(row.horse.horse_no)} · ${esc(row.horse.horse_name)}${revisedView&&!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,''))?'<br><small class="muted">Güncel hesap · kayıtlı yarış öncesi listede yok</small>':''}</td><td style="white-space:nowrap;${tdColor}">${esc(tkpSurpriseFinishLabel(r,row.horse))}</td><td style="${histBg}${tdColor}" title="${histHit?'Benzer şartlarda daha önce kazanan veya 2. gelen var':''}">${row.signals.map(s=>esc(/^BH[123]$/.test(s.label)&&bhOrd.has(String(row.horse.horse_no))?'BH'+bhOrd.get(String(row.horse.horse_no)):s.label)+' '+s.wins+'/'+s.starts+(Number(histOf(s).seconds)>0?' · 2.: '+histOf(s).seconds:'')+(Number(histOf(s).top5)>0?' · ilk5: '+histOf(s).top5:'')).join('<br>')}</td><td${tdColor?` style="${tdColor}"`:''} title="Sinyal grubunun benzer koşullardaki geçmiş kazanma oranı; bu atın kişisel kazanma olasılığı değildir.${proof?` Örnek: ${proof.starts}, kazanan: ${proof.wins}.`:''}${lowSample?' Otomatik ALT ekleme için en az 5 örnek gerekir.':''}"><span style="display:inline-block;min-width:4.8em">${evidenceLabel}</span>${lowSample?'<br><small class="muted">Az örnek · otomatik eşik 5</small>':''}${tkpSurpriseMarketBadgeHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(tkpSurpriseCouponRule(r,row).reason)}</td><td${tdColor?` style="${tdColor}"`:''}>${tkpSurpriseInCouponHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${addControl}</td></tr>`;}).join('');
   const revisionNote=revisedView?'<p class="muted">Güncel aday listesi yarış öncesi kayıttan farklıdır. Takip sayıları yalnız kayıtlı adaylara aittir; eski kupon ve aday kayıtları korunur.</p>':'';
   const winners=(history.winners||[]).filter(row=>row.signals.some(tag=>tag==='BMB'||tag==='ODB'||/^ALT /.test(tag))).slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
   const winnerTable=winners.length?`<details class="tkpSurpriseWinnerHistory"><summary>BMB / ODB / ALT kazanan at takibi · ${winners.length} son kayıt</summary><div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Tarih / hipodrom</th><th>Koşu şartı</th><th>Kazanan at</th><th>Kayıtlı işaret</th></tr></thead><tbody>${winners.map(row=>`<tr><td>${esc(row.date)} · ${esc(row.hippodrome)}</td><td>${esc(row.condition)}</td><td>${esc(row.horse_no)} · ${esc(row.horse_name)}</td><td>${esc(row.signals.join(' + '))}</td></tr>`).join('')}</tbody></table></div></details>`:'';
-  return `<div class="tkpBottomConditionTracking"><h4>En fazla 6 sürpriz aday</h4><p class="muted">${esc(history.level)} · ${esc(history.label)}. Kanıtlı adaylar geçmiş kazanma yüzdesine göre sıralanır; boş yerler yarış öncesi sıradaki AGF 6 ve sonrası adaylarla tamamlanır. AGF 4–5 sırasında ve en fazla %10 payda olan, geçmiş BMB/ODB galibiyetiyle desteklenen adaylar da alınır. Kanıtsız adaylara yüzde verilmez. ALT yarış öncesi tablonun son dört sırasını; BMB/ODB kayıtlı sinyal grubunu ölçer. Sıra, kanıtlı sinyallerin en yüksek kazanma yüzdesidir; yüzdeler toplanmaz. Oran atın kişisel galibiyeti değildir. Payda kaybeden örnekleri de içerir. Sıra kanıtı eksik: ${history.excluded}.</p><div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Sinyal</th><th>Bu ayaktaki at</th><th>Sonuç</th><th>Kazandı / örnek</th><th>Kazanma %</th><th>Kupona ekleme kuralı</th><th>Kuponda mı?</th><th>Kupona ekle</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Bu koşullarda doğrulanmış geçmiş başarıyla eşleşen ALT/BMB/ODB adayı yok.</td></tr>'}</tbody></table></div>${trackingNote}${revisionNote}${winnerTable}</div>`;
+   return `<div class="tkpBottomConditionTracking"><h4>BH Öneri · en fazla 6 aday</h4>${tkpBhMethodDetailsHTML(history,resolvedRace)}<div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Sinyal</th><th>Bu ayaktaki at</th><th>Sonuç</th><th>Kazandı / örnek</th><th>Sinyal geçmiş oranı · örnek sayısı</th><th>Kupona ekleme kuralı</th><th>Kuponda mı?</th><th>Kupona ekle</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Bu koşullarda doğrulanmış geçmiş başarıyla eşleşen ALT/BMB/ODB adayı yok.</td></tr>'}</tbody></table></div>${revisionNote}${tkpBhRetrospectiveMissHTML(r)}<details class="tkpMethodDetails"><summary>Aday takip ayrıntıları</summary>${trackingNote}</details>${winnerTable}</div>`;
 }
 function tkpConditionRescueTrackingForLegHTML(x){
   x=globalThis.TKP_RESULT_VIEW?.leg(x)||x;
@@ -1173,7 +1259,7 @@ function legTableHTML(x, options={}){
   const primaryBmbIdx = orderedRows.findIndex(h => h.bmb === 1);
   // Aynı ayaktaki her satır için yeniden BH profil taraması yapma. Bu bağlam salt
   // görünüm içindir; mevcut kilitli BH snapshotını bir kez okuyup satırlara dağıtır.
-  const bhSupportContext={...tkpBombHunterSupportContext(r),tableBottomPositions:tkpTableBottomFourPositions(r,orderedRows)};
+  const bhSupportContext={...tkpBombHunterSupportContext(r),tableBottomPositions:tkpTableBottomFourPositions(r,orderedRows),orderedRows};
 
   // V1.1.337 (kullanıcı talebi): AGF ve TR PU. sütunları sistemde zaten kayıtlı yüzde/puan bantlarına göre
   // renklenir (stats-engine TR20_30/TR30_60/TR60_70 bantları; AGF1 zorunlu kapsama eşiği %18 ve güçlü AGF %30).
@@ -1267,7 +1353,7 @@ function legTableHTML(x, options={}){
       <th class="num" title="Gerçek Y.PUAN / X gölge +puanı; tahmine uygulanmaz"><span class="ypuanXHead">Y.PU+X</span></th>
       <th class="num">G.PR</th>
       <th class="num">DRC</th>
-      <th class="num" title="Türkiye yarışlarında TR PUAN; yabancı yarışlarda yalnız ATR sentetik AGF tam sayı">${(()=>{const city=String(r?.hippodrome||r?.race_city||r?.city||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');return city&&!/^(ADANA|ANKARA|ANTALYA|BURSA|DİYARBAKIR|DIYARBAKIR|ELAZIĞ|ELAZIG|İSTANBUL|ISTANBUL|İZMİR|IZMIR|KOCAELİ|KOCAELI|ŞANLIURFA|SANLIURFA|VAN|ESKİŞEHİR|ESKISEHIR)$/.test(city)?'ATR':'TR PU.';})()}</th>
+      <th class="num" title="Türkiye yarışlarında TR PUAN; yabancı yarışlarda yalnız ATR">${(()=>{const city=String(r?.hippodrome||r?.race_city||r?.city||'').toLocaleUpperCase('tr-TR').replace(/[^A-ZÇĞİÖŞÜ]/g,'');return city&&!/^(ADANA|ANKARA|ANTALYA|BURSA|DİYARBAKIR|DIYARBAKIR|ELAZIĞ|ELAZIG|İSTANBUL|ISTANBUL|İZMİR|IZMIR|KOCAELİ|KOCAELI|ŞANLIURFA|SANLIURFA|VAN|ESKİŞEHİR|ESKISEHIR)$/.test(city)?'ATR':'TR PU.';})()}</th>
       <th>DESTEKLER</th>
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -1317,7 +1403,7 @@ function confidenceHeroHTML(x){
   const pct=calibration?Math.max(0,Math.min(100,Math.round(Number(calibration.calibratedConfidence)||0))):rawPct;
   const color=pct>=d.threshold?'#16a34a':(pct>=70?'#2563eb':(pct>=50?'#d99000':'#e11d48'));
   const displaySingle=d.isSingle===true&&pct>=Number(d.threshold||68);
-  const label=displaySingle?'TEK UYGUN':(d.isSingle===true?'KANIT DÜŞÜK':(pct>=70?'GÜÇLÜ':(pct>=50?'ORTA':'ZAYIF')));
+  const label=pct>=70?'GÜÇLÜ':(pct>=50?'ORTA':'ZAYIF');
   const cls=displaySingle?'veryStrong':(pct>=70?'strong':(pct>=50?'medium':'weak'));
   const rr=32,c=2*Math.PI*rr,off=c*(1-pct/100);
   const benterStatus=String(leader?.tkp_benter_status||'');
@@ -1325,17 +1411,16 @@ function confidenceHeroHTML(x){
   const benterSource=String(leader?.tkp_benter_market_source||'');
   const benterLine=benterSource&&benterSource!=='YOK'
     ? `<div class="muted" style="font-size:9.5px;margin-top:3px;">Benter <b>${esc(String(leader?.tkp_benter_label||'Değer yok'))}</b>${Number.isFinite(benterEdge)?` · kenar %${Math.round(benterEdge*100)}`:''} · ${esc(benterSource)}</div>`
-    : '<div class="muted" style="font-size:9.5px;margin-top:3px;">Benter · piyasa yok</div>';
+    : '';
   return `<div class="confidenceCard ${cls}">
     <div class="confidenceTitle">🏆 ${x.r.leg}. AYAK GÜVENİ</div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:7px;margin-top:3px;">
       <div>
         <div class="confidenceWord" style="color:${color};">${label}</div>
-        <div class="muted" style="font-size:10.5px;margin-top:5px;">TEK <b style="color:#111827;">%${d.threshold}</b> · ham %${rawPct}</div>
-        <div class="muted" style="font-size:10px;margin-top:3px;">${esc(broadConditionKey(x.r.condition_family))} · ${d.sample} geçmiş koşu</div>
-        <div style="margin-top:4px;line-height:1.25;">${scoreOutcomeCalibrationInlineHTML(x?.r,leader,rawPct,false)}</div>
-        ${benterLine}
-        ${d.isSingle===true&&!displaySingle?'<div class="muted" style="font-size:9.5px;margin-top:3px;">Ham TEK · kanıt yetersiz.</div>':''}
+        <details class="tkpMethodDetails"><summary>Güven hesabı ayrıntıları</summary>
+          <div>${esc(broadConditionKey(x.r.condition_family))} · ham güven %${rawPct}</div>
+          ${scoreOutcomeCalibrationInlineHTML(x?.r,leader,rawPct,false)}${benterLine}
+        </details>
       </div>
       <svg viewBox="0 0 82 82">
         <circle cx="41" cy="41" r="${rr}" fill="none" stroke="#e5e7eb" stroke-width="8"/>
@@ -1498,7 +1583,7 @@ function recommendedHorsePanelHTML(x){
   const excludedHtml=excluded.length
     ? `<div class="adviceBudgetExcluded" style="margin-top:6px;padding:5px 6px;border-radius:7px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:10px;font-weight:850;"><b>Kupona sığmadı:</b> <span style="display:inline-flex;flex-wrap:wrap;align-items:center;gap:0;">${excludedTokens.html}</span></div>`
     : '';
-  const syncNote=couponReady?'<div style="margin-top:4px;font-size:9.5px;color:#64748b;font-weight:750;">Ana satır Normal Altılı kuponuyla senkron.</div>':'';
+  const syncNote='';
 
   return `<div class="tkpAdviceSyncPanel" data-advice-panel-leg="${esc(x?.r?.leg||'')}">${panelCardHTML('🎯 Ayak Önerisi',
     `<div style="padding:7px;border-radius:9px;background:${bg};border:1px solid #dbe4ef;">
@@ -1539,6 +1624,15 @@ function tkpNormalCouponDecisionHTML(rows){
   return `<div id="tkpNormalCouponDecision" class="card strongTkpOverviewCard tkpSinglesOnlyOverview"><h2>Normal Kupon · ${singles.length} TEK</h2><div>${singleHTML}</div></div>`;
 }
 
+function tkpLegImportantNoticeHTML(risk,couponLeg){
+  if(!risk?.isH)return '';
+  const single=couponLeg?.picks?.length===1;
+  return `<p class="excludedAlert"><b>Yüksek belirsizlik.</b> ${single?'Bu ayak kuponda TEK; yakın adaylar nedeniyle risk yüksek.':'Güçlü adayların puanları birbirine yakın.'}</p>`;
+}
+function tkpBhMethodDetailsHTML(history,resolved){
+  return `<p class="muted">${esc(history?.level||'')} · ${esc(history?.label||'')}${resolved?' · Arşiv: ekleme kapalı':''}</p>`
+    +'<details class="tkpMethodDetails"><summary>BH sıralaması ve ekleme kuralları</summary><p>Gösterilen oran sinyal grubunun benzer koşullardaki geçmiş başarısıdır; atın kişisel kazanma olasılığı değildir. ALT otomatik ekleme için en az 5 örnek ve bir galibiyet aranır. BH adayları AGF ilk 5 dışından alınır; diğer kanıtlı ALT/BMB/ODB adayları kendi etiketleriyle gösterilir. Kupona ekleme bütçe ve TEK durumuna bağlıdır.</p></details>';
+}
 function buildLegPaneHTML(x, cs, soloCoupon, placeCoupon){
   const {r, scored, top, margin}=x;
   const live=(scored||[]).filter(h=>!isNonRunner(h));
@@ -1549,25 +1643,20 @@ function buildLegPaneHTML(x, cs, soloCoupon, placeCoupon){
       ? `${cs.source==='exact'?`<b>${esc(r.condition_family)}</b> şartında`:`Benzer <b>${esc(cs.label)}</b> şartlarında`} ${cs.races} geçmiş koşu incelendi. SONUÇ 1. sıra kazanma %${cs.result1Pct}${cs.bmbRaces>=TKP_MIN_PERCENT_SAMPLE?`, BMB başarı %${cs.bmbPct}`:''}.`
       : `${cs.source==='exact'?`<b>${esc(r.condition_family)}</b> şartında`:`Benzer <b>${esc(cs.label)}</b> şartlarında`} ${cs.races} geçmiş koşu var. <b>n=${cs.races}; yüzde henüz gösterilmiyor.</b>`)
     : `<b>${esc(r.condition_family)}</b> için yeterli geçmiş koşu henüz yok.`;
-  const ps=profileSingleDecision(x);
   const hRisk=tkpHighUncertaintyLeg(x);
-  const threshold=hRisk.isH
-    ? `<div style="margin-top:8px;padding:7px 9px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:10px;font-weight:900;">H · YÜKSEK BELİRSİZLİK: TKP lideri ${fmt2(hRisk.top/10)}, ilk 4 bant ${fmt2(hRisk.fourth/10)}–${fmt2(hRisk.top/10)}. Veriler yakın; bu ayak çoklu/geniş kupon bandında kalmalı.</div>`
-    : !ps.isSingle
-      ? `<div style="margin-top:8px;padding:7px 9px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:10px;font-weight:850;">TEK koşulu sağlanmadı: güven %${Math.round(Number(ps.confidence)||0)} / eşik %70${ps.reason&&String(ps.reason).includes('>60')?' · 60 kg üstü TEK yasağı':''}. Bu ayakta çoklu güvenlik kullanılacak.</div>`
-      : `<div style="margin-top:8px;padding:7px 9px;border-radius:8px;background:#ecfdf3;border:1px solid #86efac;color:#166534;font-size:10px;font-weight:850;">%68 güven TEK koşulu sağlandı: ${esc(ps.first?.horse_no||'')} numara · Güven %${Math.round(Number(ps.confidence)||0)}${ps.profile<70||ps.gap<10?` · yardımcı profil uyarısı: %${ps.profile}, fark ${ps.gap}`:''}.</div>`;
+  const threshold=tkpLegImportantNoticeHTML(hRisk,tkpAdviceNormalCouponLeg(x));
   return `<div class="predProShell">
     ${legInfoBarHTML(r,quality)}
     <div class="predWorkspace">
       <main class="predMain">
-        <div class="predProfileNote">📌 ${csText}</div>
+        <details class="predProfileNote"><summary>Koşul geçmişi</summary>${csText}</details>
         ${legTableHTML(x)}
         ${threshold}
       </main>
       <aside class="predSide">
         ${confidenceHeroHTML(x)}
         ${recommendedHorsePanelHTML(x)}
-        ${celiskiPanelHTML(x)}
+        <details class="tkpMethodDetails"><summary>Sinyal ayrıntıları</summary>${celiskiPanelHTML(x)}</details>
       </aside>
     </div>
   </div>`;
@@ -1788,7 +1877,7 @@ function couponVariantCompactHTML(res, shortTitle){
   res=globalThis.TKP_RESULT_VIEW?.coupon(res)||res;
   res=tkpCouponDisplayAccounting(res);
   const postCollectionReconstruction=res.postCollectionReconstruction===true;
-  const editingLocked=typeof tkpCouponMeetingLocked==='function'&&tkpCouponMeetingLocked(typeof lastRaceResults!=='undefined'?lastRaceResults:[]);
+  const editingLocked=res.readOnlySnapshot===true||typeof tkpCouponMeetingLocked==='function'&&tkpCouponMeetingLocked(typeof lastRaceResults!=='undefined'?lastRaceResults:[]);
   if (res.error) return `<div class="card budgetCouponCompact" style="border-left:4px solid #dc2626;"><h2>${esc(shortTitle)}</h2><p class="compactMeta">${esc(res.error)}</p></div>`;
   const border = res.typeKey==='surprise' ? '#7c3aed' : (res.typeKey==='main2' ? '#2563eb' : '#15803d');
   const rows = res.legs.slice().sort((a,b)=>a.r.leg-b.r.leg).map(x=>{
@@ -1887,7 +1976,7 @@ function couponVariantCompactHTML(res, shortTitle){
   const storedNote=String(res.adaptiveBudgetNote||'').trim();
   const cardArchiveNote=storedNote&&!/^Bütçe\s*:/i.test(storedNote)?storedNote:'';
   // Kupon kartı sade tutulur; kayıp/kurtarma teşhisi ayrı takip merkezinde kalır.
-  try{if(typeof tkpV55CouponDiagnosisData==='function')tkpV55CouponDiagnosisData(res);}catch(_){ }
+  try{if(!res.shortGanyan&&typeof tkpV55CouponDiagnosisData==='function')tkpV55CouponDiagnosisData(res);}catch(_){ }
   return `<div class="card budgetCouponCompact" style="border-left:4px solid ${border};">
     <div class="couponTopBlock">
       <h2>${esc(shortTitle)}</h2>
@@ -1896,7 +1985,7 @@ function couponVariantCompactHTML(res, shortTitle){
       ${fitLine}
       ${cardArchiveNote?`<div class="tkpAdaptiveBudgetNote ${res.adaptiveBudgetRaised?'raised':'base'}">${esc(cardArchiveNote)}</div>`:''}
       ${res.displayAccountingNote?`<p class="compactMeta" role="status">${esc(res.displayAccountingNote)}</p>`:''}
-      ${tkpCouponDecisionHTML(res)}
+      ${res.shortGanyan?'':tkpCouponDecisionHTML(res)}
       ${r174Line}
       ${globalThis.TKP_COUPON_POLICY?.html(res)||''}
     </div>
@@ -2378,8 +2467,8 @@ function ruleTable(arr){
 
 function buildAdvice(ruleRows){
   const s = stats(), rows=Array.isArray(ruleRows)?ruleRows:tkpPeekCurrentRules(), out = [];
-  const best=rows?rows.filter(x=>x.single>=db.settings.best_min_single).slice(0,TKP_BEST_RULES_SHOWN):[];
-  const perfect=rows?rows.filter(x=>x.single>=db.settings.perfect_min_single&&x.rate>=db.settings.perfect_min_rate&&x.lb>=db.settings.perfect_min_lb&&x.files>=2).slice(0,TKP_PERFECT_RULES_SHOWN):[];
+  const best=rows?rows.filter(x=>x.single>=Math.max(TKP_LEARNED_RULE_MIN_RACES,db.settings.best_min_single)).slice(0,TKP_BEST_RULES_SHOWN):[];
+  const perfect=rows?rows.filter(x=>x.single>=Math.max(TKP_LEARNED_RULE_MIN_RACES,db.settings.perfect_min_single)&&x.rate>=db.settings.perfect_min_rate&&x.lb>=db.settings.perfect_min_lb&&x.files>=2).slice(0,TKP_PERFECT_RULES_SHOWN):[];
   const top = best[0];
   if (s.races < 60) out.push({level:'warn', badge:'VERİ', title:'Örnek sayısını büyüt', text:`Şu an ${s.races} koşu var. İlk güçlü karşılaştırmalar için 60, daha sağlam karar için 150 koşuya ulaş.`});
   else out.push({level:'good', badge:'VERİ', title:'Veri tabanı büyüyor', text:`${s.races} koşu analizde. Yeni dosyalar geldikçe hipodrom ve koşu şartı bazlı kurallar daha güvenilir olacak.`});
@@ -2544,6 +2633,11 @@ function adaptiveLearningCacheIsCurrent(){
   return !!(_adaptiveLearningHtmlCache.html && _adaptiveLearningHtmlCache.signature===adaptiveLearningRenderSignature());
 }
 
+function mirrorAdaptiveLearningRulesTable(html){
+  const host=document.getElementById('adaptiveLearningRulesTable');
+  if(host&&typeof html==='string'&&host.innerHTML!==html)host.innerHTML=html;
+}
+
 function adaptiveLearningHTML(){
   if(globalThis.TKPArchiveAnalytics?.required()&&!globalThis.TKPArchiveAnalytics.peek()?.adaptive)return '<p>Adaptif özellikler tüm arşiv üzerinden hazırlanıyor…</p>';
   const renderSignature=adaptiveLearningRenderSignature();
@@ -2647,7 +2741,7 @@ function adaptiveLearningHTML(){
       <tbody>${rows}</tbody>
     </table></div>
     <p class="muted" style="margin:8px 0 0;">
-      Tahmin 1–5 sütunlarının her biri yalnız kendi gerçek bitiriş konumunu ölçer; Tahmin 5 yalnız gerçek beşinci gelen atlarla öğrenir. Aday Ağırlığı sütunları isabet sayısı değil, ilgili sıradaki at seçilirken göstergenin modelde kullandığı yüzde etkidir; küçük ama gerçek paylar iki ondalıkla gösterilir. X/Kulis genel modele girmez ve bu nedenle Gölge olarak işaretlenir. Çekirdek model ailelerinin taban etkisi güçlendirilir; doğrulanmış başarı farkı yeterli örnekte daha belirgin uygulanır. Otomatik eklenen ham tablo alanları toplam etkinin en fazla %12’sini alır. Eksik veri paydaya katılmaz. ACCURATE, KG, DRC, ST, TKP, AGF, Y.PUAN, BMB, profil, geçmiş, koşu uyumu ve kural sinyalleri tahmin ile yan bahis için ayrı ağırlıklarla kullanılır.
+      Tahmin 1–5 sütunlarının her biri yalnız kendi gerçek bitiriş konumunu ölçer; Tahmin 5 yalnız gerçek beşinci gelen atlarla öğrenir. Aday Ağırlığı sütunları isabet sayısı değil, ilgili sıradaki at seçilirken göstergenin modelde kullandığı yüzde etkidir; küçük ama gerçek paylar iki ondalıkla gösterilir. X/Kulis genel modele girmez ve bu nedenle Gölge olarak işaretlenir. Çekirdek model ailelerinin taban etkisi güçlendirilir; doğrulanmış başarı farkı yeterli örnekte daha belirgin uygulanır. Otomatik eklenen ham tablo alanları toplam etkinin en fazla %12’sini alır. Eksik veri paydaya katılmaz. ACCURATE, KG, DRC, ST, TKP, AGF, Y.PUAN, BMB, profil, geçmiş, koşu uyumu ve yeterli örneklemli tüm öğrenilmiş kurallar tahmin ile yan bahis için ayrı ağırlıklarla kullanılır; benzer kurallar çift sayılmaz.
     </p>`;
   _adaptiveLearningHtmlCache={signature:renderSignature,html};
   // Fire-and-forget: IndexedDB structured clone ana thread'i senkron
@@ -2671,9 +2765,12 @@ function adaptiveLearningHTML(){
 // önbellekten okuduğu için milisaniyeler sürer. Böylece sekmeye nasıl gelinirse
 // gelinsin (Tahmin üzerinden ya da doğrudan) donma olmaz.
 async function adaptiveLearningHTMLAsync(){
-  if(globalThis.TKPArchiveAnalytics?.required()){await globalThis.TKPArchiveAnalytics.ensureAdaptive();return adaptiveLearningHTML();}
+  if(globalThis.TKPArchiveAnalytics?.required()){
+    await globalThis.TKPArchiveAnalytics.ensureAdaptive();
+    const html=adaptiveLearningHTML();mirrorAdaptiveLearningRulesTable(html);return html;
+  }
   if(typeof adaptiveLearningCacheIsCurrent==='function' && adaptiveLearningCacheIsCurrent()){
-    return adaptiveLearningHTML();
+    const html=adaptiveLearningHTML();mirrorAdaptiveLearningRulesTable(html);return html;
   }
   // RAM boşsa önce kalıcı IndexedDB snapshot'ını bekle. Önceki akış bu okumayı
   // beklemeden adaptiveSignalStatsAsync(null) başlatıyor ve program her yeniden
@@ -2681,7 +2778,9 @@ async function adaptiveLearningHTMLAsync(){
   if(typeof hydrateAdaptiveLearningDurableCache==='function'){
     try{
       const hit=await hydrateAdaptiveLearningDurableCache(adaptiveLearningRenderSignature());
-      if(hit&&adaptiveLearningCacheIsCurrent())return adaptiveLearningHTML();
+      if(hit&&adaptiveLearningCacheIsCurrent()){
+        const html=adaptiveLearningHTML();mirrorAdaptiveLearningRulesTable(html);return html;
+      }
     }catch(_e){}
   }
   // V1.1.329 ROCKET: ağır 3.000+ koşu adaptif taraması kullanıcı ekranının
@@ -2693,18 +2792,24 @@ async function adaptiveLearningHTMLAsync(){
       const html=adaptiveLearningHTML();
       if(typeof globalThis.tkpStoreAnalyticsPanelNow==='function')globalThis.tkpStoreAnalyticsPanelNow('adaptiveLearningTable',html);
       else{const el=document.getElementById('adaptiveLearningTable');if(el)el.innerHTML=html;}
+      mirrorAdaptiveLearningRulesTable(html);
       return html;
     }).catch(error=>{
       console.error('Adaptif analiz arka plan hatası:',error);
-      return '';
+      const html=`<div class="empty" role="status">Model analizi tamamlanamadı: ${escHtml(String(error?.message||'hesaplama hatası'))}. En İyi 10 bölümünü yeniden açarak tekrar deneyebilirsin.</div>`;
+      mirrorAdaptiveLearningRulesTable(html);
+      const original=document.getElementById('adaptiveLearningTable');if(original)original.innerHTML=html;
+      return html;
     }).finally(()=>{globalThis.__tkpAdaptiveLearningBackground=null;});
   }
   const stale=String(globalThis.__tkpStaleAnalyticsItems?.adaptiveLearningTable||'');
   if(stale){
-    return `<div class="card" style="border-left:5px solid #2563eb;margin-bottom:8px"><b>⚡ Hazır önbellek gösteriliyor.</b> Yeni/değişen veri arka planda güncelleniyor; menüler kullanılabilir.</div>${stale}`;
+    const html=`<div class="card" data-analytics-pending="1" style="border-left:5px solid #2563eb;margin-bottom:8px"><b>⚡ Hazır önbellek gösteriliyor.</b> Yeni/değişen veri arka planda güncelleniyor; menüler kullanılabilir.</div>${stale}`;
+    mirrorAdaptiveLearningRulesTable(html);return html;
   }
   const raceCount=(db?.races||[]).length;
-  return `<div class="card" style="border-left:5px solid #2563eb"><b>⚡ İlk 5 algoritma analizi arka planda hazırlanıyor.</b><br>${analysisNumberOrDash(raceCount)} koşu taranırken bu ekran ve diğer menüler kilitlenmez. Sonuç hazır olduğunda tablo burada otomatik yenilenir.</div>`;
+  const html=`<div class="card" role="status" data-analytics-pending="1" style="border-left:5px solid #2563eb"><b>⚡ İlk 5 algoritma analizi arka planda hazırlanıyor.</b><br>${analysisNumberOrDash(raceCount)} koşu taranırken bu ekran ve diğer menüler kilitlenmez. Sonuç hazır olduğunda tablo burada otomatik yenilenir.</div>`;
+  mirrorAdaptiveLearningRulesTable(html);return html;
 }
 if(typeof globalThis!=='undefined') globalThis.adaptiveLearningHTMLAsync=adaptiveLearningHTMLAsync;
 
@@ -2786,8 +2891,9 @@ function tkpSideBetDecisionHTML(title,metric){
   const d=tkpRoiDecision({ok,total,roi,payoutKnown:Number(finance?.payoutKnown)||0,kind:'side'});
   const enough=total>=TKP_MIN_PERCENT_SAMPLE;
   const rate=total?Math.round(100*ok/total):0,lower=Math.round(100*d.lower);
-  const metricText=enough?`<b>Tutma %${rate}</b> · Wilson alt %${lower} · ${roi==null?'ROI -':`ROI ${roi>=0?'+':''}%${fmt2(roi)}`}`:`<b>${ok}/${total}</b>`;
-  return `<div class="tkpDecisionLine">${tkpDecisionBadge(d.label)}<span>${metricText}</span><span class="tkpDecisionReason">${esc(d.reason)}</span></div>`;
+  // Sade gorunum: Wilson alt siniri ve gerekce metni ipucuna (title) tasindi.
+  const metricText=enough?`<b>Tutma %${rate}</b> · ${roi==null?'ROI -':`ROI ${roi>=0?'+':''}%${fmt2(roi)}`}`:`<b>${ok}/${total}</b>`;
+  return `<div class="tkpDecisionLine" title="${esc((enough?'Wilson alt %'+lower+' · ':'')+String(d.reason||''))}">${tkpDecisionBadge(d.label)}<span>${metricText}</span></div>`;
 }
 function tkpForwardCouponCalibration(typeKey){
   // En hızlı ve en temiz kalibrasyon kaynağı: sonuçtan ÖNCE kaydedilmiş gerçek kupon
@@ -2951,8 +3057,8 @@ function tkpOpportunityCompare(a,b){
 function tkpV54HitFirstGanyanCandidate(productKey,legCount,rows){
   const cfg={
     besli:{widths:[5,3,3,3,3],rank:'strategy',label:'V54 HIT-FIRST 5×3×3×3×3'},
-    dortlu_ganyan:{widths:[3,3,4,2],rank:'strategy',label:'V54 HIT-FIRST 3×3×4×2'},
-    uclu_ganyan:{widths:[5,4,1],rank:'altili',label:'V54 HIT-FIRST 5×4×1'}
+    dortlu_ganyan:{widths:[3,3,4,2],rank:'strategy',noSingle:true,label:'HIT-FIRST · TEKSİZ 3×3×4×2'},
+    uclu_ganyan:{widths:[3,3,2],rank:'altili',noSingle:true,label:'HIT-FIRST · TEKSİZ 3×3×2'}
   }[productKey];
   if(!cfg||rows.length<legCount)return null;
   const target=rows.slice(-legCount),legs=[];
@@ -2965,7 +3071,9 @@ function tkpV54HitFirstGanyanCandidate(productKey,legCount,rows){
         ? altiliWinnerOrderForRace(r,horses.slice())
         : (typeof strategicOrderForRace==='function'?strategicOrderForRace(r,horses.slice()):horses.slice());
     }catch(_){order=horses.slice();}
-    const width=Math.max(1,Math.min(cfg.widths[i]||1,order.length));
+    const groups=new Set();order=order.filter(h=>{const k=String(h.horse_no).match(/-E\d+$/i)?.[0]||String(h.horse_no);if(groups.has(k))return false;groups.add(k);return true;});
+    if(cfg.noSingle&&order.length<2)return null;
+    const width=Math.max(cfg.noSingle?2:1,Math.min(cfg.widths[i]||1,order.length));
     const picks=order.slice(0,width);
     if(!picks.length)return null;
     legs.push({r,picks,sourceLeg:{r,picks}});
@@ -2985,7 +3093,7 @@ function tkpMultiGanyanCandidates(productKey,legCount,raceResults,coupons=active
     const calib={
       besli:{ok:12,total:41,rate:12/41,avgCost:607.5,roi:3.2,payoutKnown:15},
       dortlu_ganyan:{ok:13,total:40,rate:13/40,avgCost:126,roi:7.1,payoutKnown:15},
-      uclu_ganyan:{ok:15,total:43,rate:15/43,avgCost:39.81,roi:-13.2,payoutKnown:17}
+      uclu_ganyan:{ok:0,total:0,rate:0,avgCost:hitFirst.cost,roi:null,payoutKnown:0,evaluationPending:true}
     }[productKey]||{ok:0,total:0,rate:0,avgCost:hitFirst.cost,roi:null,payoutKnown:0};
     out.push({...hitFirst,metric:calib,score:tkpOpportunityScore(calib,hitFirst.cost,'side')+25});
   }
@@ -3021,18 +3129,16 @@ function tkpCouponSliceHit(slice){
   }
   return {known:known===slice.legs.length,hit:known===slice.legs.length&&hit===slice.legs.length,hits:hit};
 }
-// V1.1.208 TEMİZLİK: tkpMultiGanyanCardHTML (ve yalnız onun kullandığı
-// tkpV55MultiGanyanRescueHTML) kaldırıldı. Bu, Beşli/Dörtlü/Üçlü Ganyan için
-// ayrı bir "HIT-FIRST" kart üreticisiydi ama hiçbir yerden çağrılmıyordu —
-// tkpMultiGanyanCardsHTML() zaten kasıtlı olarak boş döndürülüyor (aşağıda),
-// bu ürünler artık couponVariantCompactHTML üzerinden Altılı ile AYNI kod
-// yoluyla (tkpV55CouponDiagnosisData, kind:'coupon') canlı teşhis alıyor.
-// tkpMultiGanyanCandidates() dokunulmadı: tkpOpportunityCatalog() içindeki
-// multiCost() hâlâ onu kullanıyor.
-function tkpMultiGanyanCardsHTML(raceResults,coupons=activeCoupons){ return ''; }
+function tkpMultiGanyanCardsHTML(raceResults,coupons=activeCoupons){
+  // The six tickets have one UI owner: the 5-4-3’LÜ GANYAN prediction menu.
+  return '';
+}
 
 function tkpOpportunityCatalog(raceResults,coupons=activeCoupons){
-  const multiCost=(key,legs)=>tkpMultiGanyanCandidates(key,legs,raceResults,coupons)[0]?.cost||0;
+  const shortTickets=globalThis.TKP_SHORT_GANYAN?.build(raceResults,coupons?.main)||[];
+  const shortTicket=(_key,n)=>shortTickets.find(t=>t.n===n&&t.variant===(n===5?'tek':'teksiz'));
+  // These exact new tickets have no measured performance yet. Do not pair old rates with new costs.
+  const unmeasured={ok:0,total:0,rate:0,roi:null,payoutKnown:0,evaluationPending:true};
   // Karar tablosu eski fallback/whale özetini değil, son canlı Back Test'i;
   // Back Test henüz çalışmadıysa yukarıdaki temiz gerçek-veri kalibrasyonunu kullanır.
   const side={
@@ -3046,9 +3152,9 @@ function tkpOpportunityCatalog(raceResults,coupons=activeCoupons){
   const main=tkpVerifiedOpportunityMetric('altili_main');
   const rows=[
     mk('altili','Altılı · Normal',main,'altili',Number(coupons?.main?.cost)||0),
-    mk('besli','Beşli Ganyan',tkpVerifiedOpportunityMetric('besli_main'),'side',multiCost('besli',5)),
-    mk('dortlu_ganyan','Dörtlü Ganyan',tkpVerifiedOpportunityMetric('dortlu_ganyan_main'),'side',multiCost('dortlu_ganyan',4)),
-    mk('uclu_ganyan','Üçlü Ganyan',tkpVerifiedOpportunityMetric('uclu_ganyan_main'),'side',multiCost('uclu_ganyan',3)),
+    mk('besli','Beşli Ganyan',unmeasured,'side',shortTicket('besli',5)?.cost||0),
+    mk('dortlu_ganyan','Dörtlü Ganyan',unmeasured,'side',shortTicket('dortlu_ganyan',4)?.cost||0),
+    mk('uclu_ganyan','Üçlü Ganyan',unmeasured,'side',shortTicket('uclu_ganyan',3)?.cost||0),
     mk('cifte','Çifte',side?.cifte||{},'side'),
     mk('sirali_ikili','Sıralı İkili',side?.sirali_ikili||{},'side'),
     mk('sirali_uclu','Sıralı Üçlü',side?.sirali_uclu||{},'side'),
@@ -3100,6 +3206,7 @@ function tkpRefreshOpportunityPanels(){
 }
 
 function sideBetTicketCard(title, pools, combos, cost, status, metric, extraClass='', raceHorses=null, rankMap=null, unitLabel='yarış', profileNote=null, realPayoutHTML=''){
+  globalThis.TKP_DAILY_HIT_POLICY?.recordSide(title,pools,Number(cost),metric);
   const hasMetric=!!(metric&&metric.total);
   const rate=hasMetric?Math.round(metric.rate*100):null;
   const sample=hasMetric?`${Number(metric.ok)||0}/${metric.total} ${unitLabel}`:`- ${unitLabel}`;
@@ -3110,18 +3217,21 @@ function sideBetTicketCard(title, pools, combos, cost, status, metric, extraClas
   // V1.1.305: sert minimum örnek kapısı yok; kayıt varsa yüzde gösterilir.
   const enoughSample=hasMetric&&metric.total>=SIDE_BET_FULL_TRUST_RACES;
   const rateDisplay=enoughSample&&rate!=null?'%'+rate:(hasMetric?`n=${metric.total}/${SIDE_BET_FULL_TRUST_RACES}`:'-');
-  const stat=`<div class="sideBetMiniStat" title="${metric?.ticketSpecific?'Bu havuzun geçmiş ölçümü':'Profil havuzunun geçmiş ölçümü; bu kartın birebir kupon başarısı değildir'}"><span class="sideBetMiniRate">${rateDisplay}</span><span class="sideBetMiniSample">${sample}</span></div>`;
+  const stat=`<div class="sideBetMiniStat" ><span class="sideBetMiniRate">${rateDisplay}</span><span class="sideBetMiniSample">${sample}</span></div>`;
   const lowSample=hasMetric&&!enoughSample;
   const sentence=metric&&metric.total
     ? `${metric.ticketSpecific?'Bu havuzun':'Profil havuzunun'} geçmiş ölçümü: <b>${Number(metric.ok)||0}/${metric.total}</b> ${unitLabel} kapsandı; <b>${Math.max(0,Number(metric.total)-Number(metric.ok||0))}</b> kaçtı. Oran <span class="pct-hit">${enoughSample&&rate!=null?'%'+rate:'n='+metric.total+'/'+SIDE_BET_FULL_TRUST_RACES}</span>.${metric.ticketSpecific?'':' Bu kartın birebir kupon başarısı değildir.'}`
     : 'Geçmiş örnek: -';
-  const sampleLine=`<div class="sideBetSampleLine" style="color:#64748b;font-size:11px;margin:2px 0 6px;">${sentence}${lowSample?'':''}${profileNote?' · '+esc(profileNote):''}</div>`;
+  // Sade gorunum (kullanici istegi 2026-10-25): uzun aciklama satiri kartta gosterilmez; ayni metin oran kutusunun ipucunda (title) durur.
+  const sampleTip=metric&&metric.total?`${Number(metric.ok)||0}/${metric.total} kapsandı · ${Math.max(0,Number(metric.total)-Number(metric.ok||0))} kaçtı`:'';
+  const sampleLine='';
   const normalizedStatus=String(status||'');
   const missed=normalizedStatus.includes('TUTMADI');
   const hit=!missed&&(normalizedStatus.includes('TUTTU')||normalizedStatus.includes('SIRASIZ TUTTU'));
   let financeHTML=realPayoutHTML||'';
   if(missed){
-    financeHTML+=`<div class="sideBetFinance miss"><b>Kaybedilen tutar:</b> ${fmt2(cost)} TL</div>`;
+    // Ozet gorunum: tutmayan kartta yalniz kaybedilen tutar (kazanan kombinasyon odemesi durum satirinda zaten var).
+    financeHTML=`<div class="sideBetFinance miss"><b>Kaybedilen:</b> ${fmt2(cost)} TL</div>`;
   }else if(hit&&!realPayoutHTML){
     financeHTML='<div class="sideBetFinance hit"><b>Kazanılan miktar:</b> İkramiye verisi bulunamadı</div>';
   }else if(!hit&&!missed){
@@ -3129,7 +3239,7 @@ function sideBetTicketCard(title, pools, combos, cost, status, metric, extraClas
   }
   const collapseEkuri=String(extraClass||'').split(/\s+/).includes('doubleTicket');
   return `<div class="sideBetTicketCard ${extraClass}">
-    <div class="sideBetTicketHead"><h4>${esc(title)}</h4>${stat}</div>
+    <div class="sideBetTicketHead"><h4>${esc(title)}</h4>${stat.replace('<div class="sideBetMiniStat" ','<div class="sideBetMiniStat" title="'+sampleTip+'" ')}</div>
     ${sampleLine}
     ${tkpSideBetDecisionHTML(title,metric)}
     <div class="sideBetPools">${pools.map((pool,index)=>{
@@ -3286,9 +3396,9 @@ function sideBetPanelHTML(raceResults){
     const st=sideBetPanelStatsFast(x.r);
     const next=(ordered[i+1] && Number(ordered[i+1].r.leg)===Number(x.r.leg)+1)?ordered[i+1]:null;
     const ticket=tkpWithSideBetPanelNoScan(()=>sideBetTicketForRace(x,st,next));
-    return `<div class="card sideBetRaceCard"><div class="sideBetRaceHead"><h3>${x.r.leg}. Ayak — ${esc(sideBetRaceHeadingLabel(x.r,st._profile))}</h3><span>${st._profile.rows.length} geçmiş yarış</span></div><p class="muted sideBetLevel">Profil düzeyi: <b>${esc(st._profile.level)}</b></p>${ticket||''}</div>`;
+    return `<div class="card sideBetRaceCard"><div class="sideBetRaceHead"><h3>${x.r.leg}. Ayak — ${esc(sideBetRaceHeadingLabel(x.r,st._profile))}</h3><span>${st._profile.rows.length} geçmiş yarış</span></div>${ticket||''}</div>`;
   }).join('');
-  return `<div class="card sideBetPanel"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2><p>Çifte, Sıralı İkili, Sıralı Üçlü ve Dörtlü/Tabela ortak aday sırasını kullanır. TEKLİ OYUN yalnız ekranda seçilen Normal, Sürpriz ve Uzman + Kulis kuponlarının ürettiği TEK ayaklarda gösterilir; diğer ayaklarda Teksiz Alternatif korunur.</p></div></div>${blocks||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
+  return `<div class="card sideBetPanel"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2></div></div>${blocks||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
 }
 
 async function sideBetPanelHTMLAsync(raceResults,options={}){
@@ -3369,15 +3479,17 @@ async function tkpSideBetPanelBuildAsync(raceResults,options={}){
     const ticket=tkpWithSideBetPanelNoScan(()=>sideBetTicketForRace(x,st,next));
     const ticketEnd=typeof performance!=='undefined'?performance.now():Date.now();
     timing.legs.push({leg:Number(x.r.leg)||i+1,statsMs:Math.round((statsEnd-legStart)*10)/10,prewarmBlocks,maxPrewarmBlockMs:prewarmBlocks.length?Math.max(...prewarmBlocks.map(row=>row.ms)):0,ticketMs:Math.round((ticketEnd-ticketStarted)*10)/10});
-    blocks.push(`<div class="card sideBetRaceCard"><div class="sideBetRaceHead"><h3>${x.r.leg}. Ayak — ${esc(sideBetRaceHeadingLabel(x.r,st._profile))}</h3><span>${st._profile.rows.length} geçmiş yarış</span></div><p class="muted sideBetLevel">Profil düzeyi: <b>${esc(st._profile.level)}</b></p>${ticket||''}</div>`);
+    blocks.push(`<div class="card sideBetRaceCard"><div class="sideBetRaceHead"><h3>${x.r.leg}. Ayak — ${esc(sideBetRaceHeadingLabel(x.r,st._profile))}</h3><span>${st._profile.rows.length} geçmiş yarış</span></div>${ticket||''}</div>`);
     if(typeof options.onProgress==='function')options.onProgress('<div class="card sideBetPanel" data-progressive="1"><h2>Yan bahis analizleri · '+(i+1)+'/'+ordered.length+' ayak hazır</h2>'+blocks.join('')+'</div>',{done:i+1,total:ordered.length});
     // Her ayaktan sonra tarayıcı olay kuyruğuna dön; sayfa "yanıt vermiyor" durumuna düşmez.
     if(typeof tkpYield==='function') await tkpYield();
   }
   timing.totalMs=Math.round((nowMs()-timingStart)*10)/10;
   if(typeof globalThis!=='undefined')globalThis.__tkpLastSideBetTiming=timing;
-  const budgetNote=timing.truncated?'<div class="card" style="border-left:5px solid #f59e0b;"><b>20 sn koruması:</b> gerekli kartlar gösterildi; kalan düşük öncelikli ayrıntılar arka plan cache hazır olduğunda tamamlanır.</div>':'';
-  return `<div class="card sideBetPanel" data-build-ms="${timing.totalMs}" data-budget-ms="${TKP_STATS_HARD_BUDGET_MS}" data-truncated="${timing.truncated?1:0}" data-coupon-ms="${timing.couponSourcesMs}" data-leg-ms="${timing.legs.map(x=>`${x.leg}:${x.statsMs}:${x.ticketMs}`).join('|')}"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2><p>Çifte, Sıralı İkili, Sıralı Üçlü ve Dörtlü/Tabela ortak aday sırasını kullanır. Öğrenme yalnız yarış öncesi kaydedilmiş ve gerçek sonuçla doğrulanmış tahminlerden güncellenir.</p></div></div>${budgetNote}${blocks.join('')||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
+  const dailyDate=ordered[0]?.r?.race_date;
+  const dailyPlan=dailyDate&&globalThis.TKP_DAILY_HIT_POLICY?globalThis.TKP_DAILY_HIT_POLICY.html(dailyDate):'';
+  const budgetNote=dailyPlan+(timing.truncated?'<div class="card" style="border-left:5px solid #f59e0b;"><b>20 sn koruması:</b> gerekli kartlar gösterildi; kalan düşük öncelikli ayrıntılar arka plan cache hazır olduğunda tamamlanır.</div>':'');
+  return `<div class="card sideBetPanel" data-build-ms="${timing.totalMs}" data-budget-ms="${TKP_STATS_HARD_BUDGET_MS}" data-truncated="${timing.truncated?1:0}" data-coupon-ms="${timing.couponSourcesMs}" data-leg-ms="${timing.legs.map(x=>`${x.leg}:${x.statsMs}:${x.ticketMs}`).join('|')}"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2></div></div>${budgetNote}${blocks.join('')||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
 }
 
 // Geçmiş toplantının İSTATİSTİK sekmesi salt-okunur/frozen kalır; ancak 298'deki
@@ -3396,7 +3508,7 @@ function tkpArchivedSideBetPanelHTML(raceResults){
 async function tkpArchivedSideBetPanelHTMLAsync(raceResults,options={}){
   const ordered=(raceResults||[]).filter(x=>x?.r).slice().sort((a,b)=>Number(a.r.leg)-Number(b.r.leg));
   const onProgress=typeof options?.onProgress==='function'?options.onProgress:null;
-  const shell=(body,status='')=>`<div class="card sideBetPanel" data-archive-full="1" data-progressive="1"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2><p>Arşiv yarış-öncesi snapshot'ı korunur; kayıtlı sonuç ve istatistikler yeniden tahmin üretilmeden gösterilir.</p></div></div>${status?`<div class="card" style="border-left:5px solid #2563eb;">${status}</div>`:''}${body||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
+  const shell=(body,status='')=>`<div class="card sideBetPanel" data-archive-full="1" data-progressive="1"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2></div></div>${status?`<div class="card" style="border-left:5px solid #2563eb;">${status}</div>`:''}${body||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
   try{if(onProgress)onProgress(shell('',`Kayıtlı istatistik açıldı · 0/${ordered.length} ayak`),{done:0,total:ordered.length});}catch(_e){}
   try{ensureSideBetCouponSources(raceResults);}catch(_e){}
   const blocks=[];
@@ -3409,11 +3521,11 @@ async function tkpArchivedSideBetPanelHTMLAsync(raceResults,options={}){
     // sideBetTicketForRace aynı V1.1.298 tam kartlarını üretir. Arşiv işareti
     // yalnız skorun yeniden üretilmesini engeller; görünür tabloyu kısaltmaz.
     const ticket=sideBetTicketForRace(x,st,next,{archivedFull:true});
-    blocks.push(`<div class="card sideBetRaceCard"><div class="sideBetRaceHead"><h3>${x.r.leg}. Ayak — ${esc(sideBetRaceHeadingLabel(x.r,st._profile))}</h3><span>${st._profile.rows.length} geçmiş yarış · Frozen</span></div><p class="muted sideBetLevel">Profil düzeyi: <b>${esc(st._profile.level)}</b></p>${ticket||''}</div>`);
+    blocks.push(`<div class="card sideBetRaceCard"><div class="sideBetRaceHead"><h3>${x.r.leg}. Ayak — ${esc(sideBetRaceHeadingLabel(x.r,st._profile))}</h3><span>${st._profile.rows.length} geçmiş yarış · Frozen</span></div>${ticket||''}</div>`);
     try{if(onProgress)onProgress(shell(blocks.join(''),`${i+1}/${ordered.length} ayak hazır`),{done:i+1,total:ordered.length,leg:Number(x.r.leg)||i+1,stage:'ready'});}catch(_e){}
     if(typeof tkpYield==='function')await tkpYield();
   }
-  return `<div class="card sideBetPanel" data-archive-full="1"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2><p>298 tablosu geri bağlandı. Arşiv yarış-öncesi snapshot'ı korunur; oran, örneklem ve sonuçlar yüklenen tüm doğrulanmış geçmiş veriden güncellenir.</p></div></div>${blocks.join('')||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
+  return `<div class="card sideBetPanel" data-archive-full="1"><div class="sideBetPanelHead"><div><h2>🎯 Yan bahis analizleri</h2></div></div>${blocks.join('')||'<div class="empty">Koşu bulunamadı.</div>'}</div>`;
 }
 
 function kpiCard(label, value, cls){ return `<div class="card kpi ${cls||''}"><span>${esc(label)}</span><b style="white-space:nowrap;padding-right:12px">${esc(value)}</b></div>`; }
