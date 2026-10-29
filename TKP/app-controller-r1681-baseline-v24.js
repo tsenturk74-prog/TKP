@@ -2238,11 +2238,14 @@ function tkpSchedulePreRaceEvidenceCapture(raceResults){
         let resultKnown=false;try{resultKnown=raceHasConfirmedResult(r?.horses||[]);}catch(_e){}
         if(!resultKnown){
           try{if(tkpForwardTrackingSync([one]))forwardChanged=true;}catch(_e){}
-          try{if(typeof tkpWeeklyModelTrackerSync==='function'&&tkpWeeklyModelTrackerSync([one]))weeklyChanged=true;}catch(_e){}
+          try{if(typeof tkpWeeklyModelTrackerSync==='function'&&tkpWeeklyModelTrackerSync([one],{deferMaintenance:true}))weeklyChanged=true;}catch(_e){}
         }
         if(typeof tkpYieldToUi==='function')await tkpYieldToUi();
         else await new Promise(resolve=>setTimeout(resolve,0));
       }
+      // Keep each leg cooperative above, then do the archive-wide aggregation and
+      // promotion check once for the whole capture instead of once per leg.
+      try{if(typeof tkpWeeklyModelTrackerFlushBulkMaintenance==='function')tkpWeeklyModelTrackerFlushBulkMaintenance();}catch(_e){}
     }finally{globalThis.__tkpBulkPipelineActive=previousBulk;}
     _tkpPreRaceEvidencePendingSignature='';
     _tkpPreRaceEvidenceDoneSignature=signature;
@@ -5197,6 +5200,36 @@ function tkpBombHunterIsOdbRow(r,row){
   if(Number(h?.odb)===1||h?.bmb_source==='ŞABLON KURALI')return true;
   try{return typeof isOdbCandidate==='function'&&isOdbCandidate(h,r);}catch(_e){return false;}
 }
+// Bugunku kayitli programin arsiv gorunumu, bitmis bir yaris anlami tasimaz.
+function tkpBombHunterCanQualify(r){
+  if(!r||raceHasConfirmedResult(r.horses||[]))return false;
+  if(!(typeof tkpIsArchivedReadOnly==='function'&&tkpIsArchivedReadOnly(r)))return true;
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  return String(r.race_date||'').slice(0,10)===today;
+}
+// AGF bilinmeden veya favori bandindayken bir ata BH kimligi verilemez.
+function tkpBombHunterAgfEligible(r,row){
+  const h=row?.h||(r?.horses||[]).find(x=>String(x?.horse_no||'')===String(row?.horse_no||''));
+  if(!h||(typeof isNonRunner==='function'&&isNonRunner(h)))return false;
+  const raw=h.agf_rank??row?.agf_rank,n=Number(raw);
+  return raw!==null&&raw!==undefined&&String(raw).trim()!==''&&Number.isInteger(n)&&n>=6&&n<99;
+}
+// Ek kanit ayni kosuyu ikinci kez saymaz; kaynak kayitlar yerinde korunur.
+function tkpBombHunterEffectiveLog(){
+  const byKey=new Map();
+  for(const row of (Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log:[]))if(row&&!byKey.has(row.race_key))byKey.set(row.race_key,row);
+  for(const row of (Array.isArray(db?.settings?.bh_agf_requalifications)?db.settings.bh_agf_requalifications:[]))if(row?.candidates?.length)byKey.set(row.race_key,row);
+  return [...byKey.values()];
+}
+// Ilk kayit aynen kalir; AGF sonradan geldiginde ayri, zamanli bir ek kanit tutulur.
+function tkpBombHunterStoredRecord(r){
+  const key=tkpBombHunterRaceKey(r),extra=Array.isArray(db?.settings?.bh_agf_requalifications)?db.settings.bh_agf_requalifications:[];
+  for(let i=extra.length-1;i>=0;i--)if(extra[i]?.race_key===key&&extra[i]?.candidates?.length)return extra[i];
+  return (Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log:[]).find(z=>z?.race_key===key)||null;
+}
+function tkpBombHunterFrozenAgfReady(r,record){
+  return !!record?.candidates?.length&&record.candidates.every(c=>c.agf_rank!==null&&c.agf_rank!==undefined&&String(c.agf_rank).trim()!==''&&Number.isInteger(Number(c.agf_rank))&&Number(c.agf_rank)>=6&&Number(c.agf_rank)<99&&tkpBombHunterAgfEligible(r,c));
+}
 function tkpBombHunterThreeFromRows(r,rows){
   const normalized=(rows||[]).map((row,index)=>{
     const h=row?.h||(r?.horses||[]).find(x=>String(x?.horse_no||'')===String(row?.horse_no||''))||null;
@@ -5204,11 +5237,11 @@ function tkpBombHunterThreeFromRows(r,rows){
     const near=Number(row?.near_win_score);
     return {...row,h,score,horse_no:String(row?.horse_no??h?.horse_no??''),horse_name:row?.horse_name??h?.horse_name??'',
       reasons:Array.isArray(row?.reasons)?row.reasons:[],near_win_score:Number.isFinite(near)?near:tkpBombHunterNearWinScore(r,{...row,h,score}),_source_order:index};
-  }).filter(row=>row.horse_no);
+  }).filter(row=>row.horse_no&&tkpBombHunterAgfEligible(r,row));
   const byNear=(a,b)=>Number(b.near_win_score||0)-Number(a.near_win_score||0)||Number(b.score||0)-Number(a.score||0)||a._source_order-b._source_order;
   const odb=normalized.filter(row=>tkpBombHunterIsOdbRow(r,row)).sort(byNear)[0]||null;
-  // Kullanıcı kuralı: BH havuzu üç bağımsız BMB ve bir ayrı ODB taşır.
-  const bombs=normalized.filter(row=>row!==odb&&!tkpBombHunterIsOdbRow(r,row)).sort(byNear).slice(0,3);
+  // Kullanıcı kuralı (29.10.2026): BH havuzu DÖRT bağımsız BMB (BH1-4) ve bir ayrı ODB taşır.
+  const bombs=normalized.filter(row=>row!==odb&&!tkpBombHunterIsOdbRow(r,row)).sort(byNear).slice(0,4);
   const selected=bombs.map((row,index)=>({...row,kind:'BOMBA',category_rank:index+1}));
   if(odb)selected.push({...odb,kind:'ODB',category_rank:1});
   return selected.map((row,index)=>({...row,rank:index+1}));
@@ -5235,7 +5268,7 @@ function tkpBombHunterCompleteArchivedPortfolio(r,rows){
     try{return !(typeof isOdbCandidate==='function'&&isOdbCandidate(x.h,r));}catch(_e){return true;}
   }).sort(preRaceOrder);
   for(const x of bombPool){
-    if(bombCount>=3)break;
+    if(bombCount>=4)break;
     source.push({...x,kind:'BOMBA',near_win_score:tkpBombHunterNearWinScore(r,x),reasons:[...x.reasons,'Kayıtlı yarış öncesi BH tamamlaması']});
     used.add(x.horse_no); bombCount++;
   }
@@ -5290,34 +5323,45 @@ function tkpBombHunterCandidatesLive(r){
 // Champion coverage motoru BH adaylarını aynı canlı/sonuç-sızıntısız hesapla okuyabilsin.
 // P1/TEK katmanı bu fonksiyonu kullanmaz; yalnız P5 kurtarma katmanı en güçlü 1 BH'yi alır.
 // BH TABLO KİLİDİ (R19.47.47): BH adayları yarış sonucu yokken ilk kez NON-EMPTY hesaplandığı anda
-// db.bomb_hunter_shadow_log'a yazılır ve sonrasında X/AGF/BMB/TR vb. hiçbir yeni veriyle
-// yeniden hesaplanmaz. Tüm okuyucular (tablo, kupon, paylaşım, rapor) bu kapıdan geçer.
+// Gecerli AGF6+ kaydi X/BMB/TR puanlari degistiginde yeniden hesaplanmaz.
+// AGF bilinmeden olusmus veya favori bandina dusmus eski kayit ayrica yeniden nitelendirilir;
+// ilk kayit korunur. Tablo, kupon, paylasim ve rapor ayni nitelikli kaydi okur.
 let __tkpBhSaveTimer=null;
 function tkpBombHunterRecordCandidates(c){
   return c.map((z,i)=>({rank:i+1,kind:z.kind,category_rank:z.category_rank,horse_no:String(z.h.horse_no),horse_name:z.h.horse_name||'',score:Number(Number(z.score).toFixed(4)),near_win_score:Number(z.near_win_score||0),agf_rank:z.h.agf_rank??null,reasons:z.reasons}));
 }
 function tkpBombHunterEnsureFrozen(r){
-  if(!r) return null;
+  if(!r)return null;
   const log=tkpBombHunterEnsureLog(),key=tkpBombHunterRaceKey(r);
-  let rec=log.find(z=>z&&z.race_key===key);
-  if(rec&&Array.isArray(rec.candidates)&&rec.candidates.length) return rec;
-  if(raceHasConfirmedResult(r.horses||[])) return rec||null;
+  let rec=tkpBombHunterStoredRecord(r);
+  const hasCandidates=!!rec?.candidates?.length;
+  const closed=!tkpBombHunterCanQualify(r);
+  if(hasCandidates&&(closed||tkpBombHunterFrozenAgfReady(r,rec)))return rec;
+  if(closed)return rec||null;
   const c=tkpBombHunterCandidatesLive(r);
-  if(!c.length) return rec||null;
+  if(!c.length)return rec||null;
   const fresh={race_key:key,race_date:r.race_date||'',hippodrome:r.hippodrome||'',leg:Number(r.leg)||0,created_at:new Date().toISOString(),model:BH_MODEL_VERSION,candidates:tkpBombHunterRecordCandidates(c)};
-  if(rec){ rec.candidates=fresh.candidates; rec.model=fresh.model; rec.created_at=fresh.created_at; }
-  else { log.push(fresh); rec=fresh; }
-  if(!__tkpBhSaveTimer) __tkpBhSaveTimer=setTimeout(()=>{ __tkpBhSaveTimer=null; try{ saveDB(false); }catch(_){ } },1500);
+  if(hasCandidates){
+    db.settings=db.settings||{};
+    if(!Array.isArray(db.settings.bh_agf_requalifications))db.settings.bh_agf_requalifications=[];
+    Object.assign(fresh,{record_role:'AGF_REQUALIFICATION',previous_created_at:rec.created_at||'',previous_model:rec.model||'',previous_candidate_nos:rec.candidates.map(z=>String(z.horse_no)),agf_field:(r.horses||[]).map(h=>({horse_no:String(h.horse_no),agf_rank:h.agf_rank??null,agf:h.agf??null}))});
+    db.settings.bh_agf_requalifications.push(fresh);rec=fresh;
+  }else if(rec){rec.candidates=fresh.candidates;rec.model=fresh.model;rec.created_at=fresh.created_at;}
+  else{log.push(fresh);rec=fresh;}
+  if(!__tkpBhSaveTimer)__tkpBhSaveTimer=setTimeout(()=>{__tkpBhSaveTimer=null;try{saveDB(false);}catch(_){}},1500);
   return rec;
 }
 function tkpBombHunterCandidates(r){
   let rec=null;
   try{ rec=tkpBombHunterEnsureFrozen(r); }catch(_e){ rec=null; }
-  if(!rec||!Array.isArray(rec.candidates)||!rec.candidates.length) return tkpBombHunterCandidatesLive(r);
+  if(!rec||!Array.isArray(rec.candidates)||!rec.candidates.length){
+    if(!tkpBombHunterCanQualify(r))return [];
+    return tkpBombHunterCandidatesLive(r);
+  }
   const hs=r?.horses||[],out=[];
   for(const c of rec.candidates){
     const h=hs.find(x=>String(x.horse_no)===String(c.horse_no))||hs.find(x=>baseHorseName(x.horse_name)===baseHorseName(c.horse_name));
-    if(!h) continue;
+    if(!h||!tkpBombHunterAgfEligible(r,{...c,h})) continue;
     out.push({h,kind:c.kind,category_rank:c.category_rank,score:Number(c.score)||0,near_win_score:Number(c.near_win_score)||0,reasons:Array.isArray(c.reasons)?c.reasons.slice():[],frozen:true});
   }
   return out;
@@ -5335,7 +5379,7 @@ function tkpBombHunterEnsureLog(){ if(!Array.isArray(db.bomb_hunter_shadow_log))
 // bilinçli olarak artırılır; sürüm uyuşmazlığında (ve yarış henüz sonuçlanmamışken --
 // sonuçlanan yarış hâlâ kesin kilitli, geçmiş/backtest sızıntısı olmaz) TÜM aday listesi
 // gerçek algoritmayla SIFIRDAN yeniden hesaplanır, yalnız zorunlu sinyaller eklenmez.
-const BH_MODEL_VERSION='BH-SHADOW-8-V46-3BOMB-1ODB-NEAR-WIN';
+const BH_MODEL_VERSION='BH-SHADOW-8-V47-AGF6-QUALIFIED';
 function tkpBombHunterSync(raceResults){
   if(typeof tkpSyncSurpriseConditionResults==="function")tkpSyncSurpriseConditionResults(raceResults);
   const log=tkpBombHunterEnsureLog(); let changed=false;
@@ -5343,9 +5387,9 @@ function tkpBombHunterSync(raceResults){
     const r=x?.r||x; if(!r) continue;
     const key=tkpBombHunterRaceKey(r);
     const hasResult=raceHasConfirmedResult(r.horses||[]);
-    let rec=log.find(z=>z&&z.race_key===key);
-    if(!rec && !hasResult){
-      rec=tkpBombHunterEnsureFrozen(r); if(rec) changed=true;
+    let rec=tkpBombHunterStoredRecord(r);
+    if(!hasResult){
+      const previous=rec;rec=tkpBombHunterEnsureFrozen(r);if(rec&&rec!==previous)changed=true;
     }
     // BH KILIDI: model / X / AGF güncellemeleri mevcut aday sırası ve puanlarını değiştiremez.
     // Yeni model yalnız ilk kez oluşturulacak koşular için geçerlidir.
@@ -5382,7 +5426,7 @@ function tkpBombHunterWinningScoreProfile(beforeDate){
   // puanlarını taşır; ekran hem birebir kazanan puanı hem de en yakın güncel adayı işaretler.
   const winnerScores=[];
   const cutoff=String(beforeDate||'').trim();
-  for(const rec of tkpBombHunterEnsureLog()){
+  for(const rec of tkpBombHunterEffectiveLog()){
     if(!rec?.evaluated_at||!Array.isArray(rec.candidates)) continue;
     if(cutoff && String(rec.race_date||'')>=cutoff) continue;
     for(const c of rec.candidates){
@@ -5417,7 +5461,7 @@ function tkpBombHunterMatchesPastWinningScore(candidate,profile){
   return profile.scores.some(v=>Math.round(Number(v)*100)===Math.round(score*100));
 }
 function tkpBombHunterStats(){
-  const done=tkpBombHunterEnsureLog().filter(r=>r?.evaluated_at&&Array.isArray(r.candidates)&&r.candidates.length);
+  const done=tkpBombHunterEffectiveLog().filter(r=>r?.evaluated_at&&Array.isArray(r.candidates)&&r.candidates.length);
   let races=done.length, anyWin=0,anyTop3=0,anyTop5=0,firstWin=0,secondWin=0,odbSample=0,odbWin=0,odbTop3=0,odbTop5=0;
   // KÖK FIX (v1.1.230): firstWin zaten hesaplanıyordu ama hiçbir yerde gösterilmiyordu;
   // 2. aday (secondWin) hiç hesaplanmıyordu. "BH 1./2. öğrenme" kullanıcı gereksinimi bu
@@ -5501,7 +5545,7 @@ function tkpBombHunterPanelHTML(raceResults){
       const r=x?.r||x; if(!r) continue;
       const key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(r):'';
       const hasResult=typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(r.horses||[]);
-      const existing=key?initialLog.find(z=>z?.race_key===key):null;
+      const existing=key?tkpBombHunterStoredRecord(r):null;
       if(!existing && !hasResult){
         // Yarış henüz bitmedi ve hiç snapshot yok: ilk (ve TEK) canlı hesap
         // burada donar. Sonradan sonuç gelse bile bu picks bir daha değişmez.
@@ -5524,7 +5568,7 @@ function tkpBombHunterPanelHTML(raceResults){
       ? db.bomb_hunter_shadow_log : initialLog;
     const rows=(raceResults||[]).map(x=>{
       const r=x?.r||x, key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(r):'';
-      const rec=key?log.find(z=>z?.race_key===key):null;
+      const rec=key?tkpBombHunterStoredRecord(r):null;
       const snapshotRows=(Array.isArray(rec?.candidates)?rec.candidates:[]).slice();
       // Eski BH4 kaydında ODB satırı liste dışında kalmış olabilir. Yalnız yarış
       // öncesinde zaten dondurulmuş açık ODB işareti varsa üçüncü kategoriye eklenir;
@@ -5553,7 +5597,7 @@ function tkpBombHunterPanelHTML(raceResults){
   }
   tkpBombHunterSync(raceResults);
   const rows=(raceResults||[]).map(x=>{
-    const r=x?.r||x, key=tkpBombHunterRaceKey(r), rec=tkpBombHunterEnsureLog().find(z=>z?.race_key===key);
+    const r=x?.r||x, key=tkpBombHunterRaceKey(r), rec=tkpBombHunterStoredRecord(r);
     const rawCandsAll=rec?.candidates||tkpBombHunterCandidates(r).map((z,i)=>({rank:i+1,kind:z.kind,category_rank:z.category_rank,horse_no:String(z.h.horse_no),horse_name:z.h.horse_name||'',score:z.score,near_win_score:z.near_win_score,reasons:z.reasons}));
 
     // V1.1.166 BH görünüm kilidi: aday zaten Normal/Geniş/Sürpriz kuponlardan birinde
@@ -6367,12 +6411,14 @@ async function renderPredictionScreen(displayRaces2, logPayload, renderOptions={
         ${raceResults.map(x => `<button class="predLegTab" data-predleg="leg-${x.r.leg}">${x.r.leg}. AYAK</button>`).join('')}
         <button class="predLegTab" data-predleg="bombhunter">💣 SÜRPRİZ ÖNERİ</button>
         <button class="predLegTab" data-predleg="stats">İSTATİSTİK</button>
+        <button class="predLegTab" data-predleg="shortganyan">5-4-3’LÜ GANYAN</button>
       </div>`;
       let panesHtml = `
         <div class="predLegPane active" data-predpane="overview">${overviewHtml || '<div class="empty">Koşu bulunamadı.</div>'}</div>
         ${raceResults.map(x => `<div class="predLegPane" data-predpane="leg-${x.r.leg}"></div>`).join('')}
         <div class="predLegPane" data-predpane="bombhunter"></div>
         <div class="predLegPane" data-predpane="stats"></div>
+        <div class="predLegPane" data-predpane="shortganyan"></div>
       `;
       const altSwitchHtml='';
       lastRaceResults = raceResults;
@@ -6410,6 +6456,14 @@ async function renderPredictionScreen(displayRaces2, logPayload, renderOptions={
         }
         if(key==='bombhunter'){
           const built=safeSection(() => tkpBombHunterPanelHTML(raceResults), 'Bomba Avcısı');
+          predictionPaneHtml.set(key,built);
+          return built;
+        }
+        if(key==='shortganyan'){
+          const built=safeSection(() => {
+            if(typeof globalThis.TKP_SHORT_GANYAN?.panel!=='function')throw new Error('Kısa Ganyan motoru yüklenemedi.');
+            return globalThis.TKP_SHORT_GANYAN.panel(raceResults,activeCoupons);
+          }, '5-4-3 Ganyan');
           predictionPaneHtml.set(key,built);
           return built;
         }
@@ -6547,6 +6601,22 @@ async function renderPredictionScreen(displayRaces2, logPayload, renderOptions={
           predictionPaneHtml.set('bombhunter',built);
           if(pane.classList.contains('active')){pane.innerHTML=built;delete pane.dataset.tkpDetached;}
           else{detachPredictionPane(pane);setPredictionPaneHtml('bombhunter',pane,built);}
+          return true;
+        }catch(_e){return false;}
+      };
+      globalThis.__tkpRefreshShortGanyanPane=()=>{
+        try{
+          if(renderGeneration!==_tkpPredictionRenderGeneration)return false;
+          const pane=predRoot&&predRoot.querySelector('.predLegPane[data-predpane="shortganyan"]');
+          if(!pane)return false;
+          const wasBuilt=predictionPaneHtml.has('shortganyan')||predictionPaneFragments.has('shortganyan')||(pane.firstChild&&pane.dataset.tkpDetached!=='1');
+          if(!wasBuilt)return false;
+          predictionPaneHtml.delete('shortganyan');
+          predictionPaneFragments.delete('shortganyan');
+          const built=safeSection(()=>globalThis.TKP_SHORT_GANYAN.panel(raceResults,activeCoupons),'5-4-3 Ganyan');
+          predictionPaneHtml.set('shortganyan',built);
+          if(pane.classList.contains('active')){pane.innerHTML=built;delete pane.dataset.tkpDetached;}
+          else{detachPredictionPane(pane);setPredictionPaneHtml('shortganyan',pane,built);}
           return true;
         }catch(_e){return false;}
       };

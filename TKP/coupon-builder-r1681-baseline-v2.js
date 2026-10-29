@@ -4303,7 +4303,7 @@ function tkpBridgeUnprovenBhToCoupons(built){
       if(ordered.length<7||typeof tkpRankedSurpriseRows!=='function')continue;
       const rows=tkpRankedSurpriseRows(race,ordered)||[];
       // Yalnız yarış öncesi BH1/BH2/BH3 etiketleri; sıralama panelden gelir.
-      const bh=rows.filter(z=>z?.horse&&isRunner(z.horse)&&z.warnings?.some(t=>/^BH[123]$/.test(String(t))));
+      const bh=rows.filter(z=>z?.horse&&isRunner(z.horse)&&z.warnings?.some(t=>/^BH[1-4]$/.test(String(t))));
       // Aynı at birden çok BH etiketiyle gelebilir; rollere sıra dağılımı yap.
       const unique=[...new Map(bh.map(z=>[horseKey(z.horse),z])).values()];
       const target=unique[index];
@@ -4853,7 +4853,7 @@ function tkpBhWonConditions(){
     const w=horses.find(h=>Number(h.winner)===1||Number(h.finish_position)===1); if(!w)continue;
     let sr=[]; try{sr=tkpRankedSurpriseRows(r,horses)||[];}catch(_e){continue;}
     const winNo=tkpBhRuleGrp(w.horse_no);
-    if(sr.slice(0,3).some(x=>x&&x.horse&&tkpBhRuleGrp(x.horse.horse_no)===winNo))set.add(tkpBhRuleCondKey(r));
+    if(sr.slice(0,4).some(x=>x&&x.horse&&tkpBhRuleGrp(x.horse.horse_no)===winNo))set.add(tkpBhRuleCondKey(r));
   }
   globalThis.__tkpBhWonCondCache={sig,set};
   return set;
@@ -4888,7 +4888,8 @@ function tkpApplyBhCoverageRule(built){
       const _yp=h=>Number(h.ypuan)||0;
       const _cand=sr.map(x=>x&&x.horse).filter(Boolean).filter(h=>_agfRank(h)>=6&&(_scoreRank(h)<=3||_yp(h)>=9||(Number(h.agf)||0)>=5));
       const _sc=h=>(_scoreRank(h)<=3?(4-_scoreRank(h))*20:0)+_yp(h)*2+(Number(h.agf)||0);
-      const top=_cand.sort((a,b)=>_sc(b)-_sc(a)).slice(0,3);
+      // 29.10.2026 kullanici: BH3 degil BH4'e kadar kupona zorunlu kapsama (butce tavani yine korur).
+      const top=_cand.sort((a,b)=>_sc(b)-_sc(a)).slice(0,4);
       const have=new Set((leg.picks||[]).map(h=>tkpBhRuleGrp(h.horse_no)));
       for(const h of top){
         const no=tkpBhRuleGrp(h.horse_no); if(have.has(no))continue;

@@ -1,5 +1,6 @@
 (function(root){'use strict';
 const VERSION='CONDITION-TEMPLATE-V1';
+const BH_POOL_CUTOVER='2026-10-27T21:37:17.575Z';
 const snapshotIndexes=new WeakMap();
 const preparing=new WeakMap();
 const dateFormat=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'});
@@ -55,6 +56,49 @@ function rank(r,pos,model='common',prior=null){
  return rows.slice().sort((a,b)=>score(b)-score(a)||(Number(a.prediction_order_snapshot)||999)-(Number(b.prediction_order_snapshot)||999)||identity(a).localeCompare(identity(b),undefined,{numeric:true}));
 }
 function raceKey(r){return [r.file_id||r.meeting_uid||'',r.id||r.race_uid||'',r.race_date||r.date||'',r.hippodrome||'',r.altili_no||1,r.leg||0].join('|');}
+function canExpandCandidates(r){
+ try{
+  const log=root.db?.bomb_hunter_shadow_log;if(!Array.isArray(log))return true;
+  if(typeof root.tkpBombHunterRaceKey!=='function')return log.length===0;
+  const key=root.tkpBombHunterRaceKey(r),rec=log.find(x=>x?.race_key===key&&Array.isArray(x.candidates)&&x.candidates.length);
+  if(!rec)return true;
+  const at=Date.parse(rec.created_at);return Number.isFinite(at)&&at>=Date.parse(BH_POOL_CUTOVER);
+ }catch(_e){return false;}
+}
+function extraCandidates(r){
+ const out=[],seen=new Set();
+ for(const h of r?.horses||[]){
+  if(!h||!running(h)||/\(KOŞMAZ\)/i.test(String(h.horse_name||'')))continue;
+  try{if(typeof root.isNonRunner==='function'&&root.isNonRunner(h))continue;}catch(_e){continue;}
+  const agf=Number(h.agf_rank),no=identity(h);if(!Number.isFinite(agf)||agf<6||!no||seen.has(no))continue;
+  const tags=[];if(Number(h.bmb)===1)tags.push('BMB');
+  try{if(typeof root.isOdbCandidate==='function'&&root.isOdbCandidate(h,r))tags.push('ODB');}catch(_e){}
+  let tr=Number(h.tr_bmb_candidate)===1;
+  if(!tr)try{if(typeof root.trGanyanProfileForHorse==='function')tr=!!root.trGanyanProfileForHorse(r,h)?.isBmb;}catch(_e){}
+  if(tr)tags.push('TR-BMB');if(!tags.length)continue;
+  seen.add(no);out.push({horse_no:String(h.horse_no),horse_name:String(h.horse_name||''),agf_rank:agf,signals:tags});
+ }
+ return out;
+}
+function expandCandidates(r,rows){
+ const hs=(r?.horses||[]).filter(h=>{if(!h||!running(h)||/\(KOŞMAZ\)/i.test(String(h.horse_name||''))||!Number.isFinite(Number(h.agf_rank))||Number(h.agf_rank)<6)return false;try{return typeof root.isNonRunner!=='function'||!root.isNonRunner(h);}catch(_e){return false;}});
+ const available=new Map(hs.map(h=>[identity(h),h])),used=new Set(),out=[];
+ for(const row of rows||[]){const no=identity(row?.horse);if(!available.has(no)||used.has(no)||!(row?.warnings||[]).some(x=>/^BH[1-4]$/.test(x)))continue;out.push({...row,horse:available.get(no)});used.add(no);if(out.length>=4)break;}
+ const byNo=new Map((rows||[]).map(row=>[identity(row?.horse),row]));
+ const extra=new Map(extraCandidates(r).map(row=>[identity(row.horse_no),row]));
+ const ranked=hs.slice().sort((a,b)=>Number(a.agf_rank)-Number(b.agf_rank)||identity(a).localeCompare(identity(b),undefined,{numeric:true}));
+ for(const horse of ranked){const no=identity(horse);if(used.has(no))continue;let row=byNo.get(no);const signals=extra.get(no)?.signals||[];
+  if(row)row={...row,horse,warnings:[...new Set([...(row.warnings||[]),...signals])]};
+  else row={horse,warnings:signals.length?['ADAY',...signals]:['ADAY'],signals:[],winRate:null,winRateProof:null};
+  out.push(row);used.add(no);if(out.length>=6)break;
+ }
+ return out;
+}
+function expandedPoolHash(rec){
+ const p={race_key:rec?.race_key,captured_at:rec?.captured_at,bh_pool_version:rec?.bh_pool_version,candidates:(rec?.candidates||[]).map(c=>({horse_no:c.horse_no,horse_name:c.horse_name,warnings:c.warnings,signals:c.signals,winRate:c.winRate})),agf_field:rec?.agf_field,extra_candidates:rec?.extra_candidates};
+ const s=JSON.stringify(p);let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return 'fnv1a32:'+h.toString(16).padStart(8,'0');
+}
+function validExpandedPool(rec){return rec?.bh_pool_version==='AGF6_EXPANDED_V1'&&rec.bh_pool_hash===expandedPoolHash(rec);}
 function get(log,r){const index=snapshotIndexes.get(log);if(index?.length===log.length)return index.byKey.get(raceKey(r))||null;return log.length<=500?log.find(x=>x.race_key===raceKey(r))||null:null;}
 async function prepare(log){
  if(snapshotIndexes.get(log)?.length===log.length)return;
@@ -75,7 +119,9 @@ function sync(log,r,rows,now=new Date().toISOString()){
   const today=dateFormat.format(new Date(now));
   if(resolved||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<today||!rows?.length)return false;
   const start=Date.parse(r.race_start_at||r.start_at||'');if(Number.isFinite(start)&&Date.parse(now)>=start)return false;
-  rec={race_key:key,race_date:date,file_id:r.file_id,race_id:r.id,hippodrome:r.hippodrome,leg:r.leg,condition_family:r.condition_family,surface:r.surface,distance:r.distance,breed:r.breed,captured_at:now,version:VERSION,evidence_class:'PRE_RESULT_CANDIDATE_SNAPSHOT',candidates:rows.slice(0,6).map(row=>({horse_no:String(row.horse.horse_no),horse_name:row.horse.horse_name||'',warnings:(row.warnings||[]).slice(),signals:JSON.parse(JSON.stringify(row.signals||[])),winRate:row.winRate??null,finish_position:null,win:null,top3:null,top5:null}))};
+  const useExpanded=canExpandCandidates(r),expanded=useExpanded?expandCandidates(r,rows):rows.slice(0,6);
+  rec={race_key:key,race_date:date,file_id:r.file_id,race_id:r.id,hippodrome:r.hippodrome,leg:r.leg,condition_family:r.condition_family,surface:r.surface,distance:r.distance,breed:r.breed,captured_at:now,version:VERSION,evidence_class:'PRE_RESULT_CANDIDATE_SNAPSHOT',candidates:expanded.map(row=>({horse_no:String(row.horse.horse_no),horse_name:row.horse.horse_name||'',warnings:(row.warnings||[]).slice(),signals:JSON.parse(JSON.stringify(row.signals||[])),winRate:row.winRate??null,finish_position:null,win:null,top3:null,top5:null}))};
+  if(useExpanded){rec.bh_pool_version='AGF6_EXPANDED_V1';rec.extra_candidates=extraCandidates(r);rec.agf_field=(r.horses||[]).filter(h=>h&&running(h)&&!/\(KOŞMAZ\)/i.test(String(h.horse_name||''))).map(h=>{const raw=h.agf_rank,n=raw==null||typeof raw==='boolean'||String(raw).trim()===''?null:Number(raw);return {horse_no:String(h.horse_no||''),agf_rank:Number.isSafeInteger(n)&&n>0?n:null};});rec.bh_pool_hash=expandedPoolHash(rec);}
   log.push(rec);index.byKey.set(key,rec);index.length=log.length;changed=true;
  }
  if(!official(r))return changed;
@@ -91,7 +137,7 @@ function sync(log,r,rows,now=new Date().toISOString()){
  if(changed&&resolved){rec.results_updated_at=now;rec.result_integrity_status=r.result_integrity_status;}
  return changed;
 }
-const api=Object.freeze({VERSION,identity,combinations,trim,official,positions,outcome,rank,raceKey,sync,get,prepare});
+const api=Object.freeze({VERSION,identity,combinations,trim,official,positions,outcome,rank,raceKey,sync,get,prepare,extraCandidates,expandCandidates,canExpandCandidates,validExpandedPool});
 if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.TKP_BET_TEMPLATE_ENGINE=api;
 if(typeof document!=='undefined'){
  let queued=false;const pending=new Map();
