@@ -33,6 +33,21 @@ const TKP_SEGMENTED_BACKUP_COLLECTIONS=['files','races','bets','prediction_log',
 const TKP_BACKUP_MAGIC='TKPB';
 const TKP_SEGMENTED_FORMAT_VERSION=5;
 
+function tkpValidateFramedBackupEnvelope(envelope,version){
+  if(Number(version)<5)return;
+  if(!envelope||!Array.isArray(envelope.collections)||!envelope.manifest||typeof envelope.manifest!=='object'||Array.isArray(envelope.manifest))throw new Error('Yedek koleksiyon listesi veya sayımları eksik.');
+  const seen=new Set();
+  for(const row of envelope.collections){
+    const name=String(row?.name||'').trim(),count=row?.count,chunks=row?.chunks;
+    if(!name||['__proto__','prototype','constructor'].includes(name)||seen.has(name))throw new Error('Yedekte geçersiz veya yinelenmiş koleksiyon adı var.');
+    if(!Number.isSafeInteger(count)||count<0||!Number.isSafeInteger(chunks)||chunks<0||chunks>10000000||(count>0&&chunks===0))throw new Error(name+' koleksiyonunun sayımı geçersiz.');
+    if(!Object.prototype.hasOwnProperty.call(envelope.manifest,name)||envelope.manifest[name]!==count)throw new Error(name+' koleksiyonunun yedek sayımları uyuşmuyor.');
+    seen.add(name);
+  }
+  for(const name of Object.keys(envelope.manifest))if(!seen.has(name))throw new Error(name+' koleksiyonu yedek listesinde yok.');
+  if(!seen.has('files')||!seen.has('races'))throw new Error('Yedekte toplantı veya koşu koleksiyonu yok.');
+}
+
 function backupCounts(value){
   const keys=TKP_SEGMENTED_BACKUP_COLLECTIONS;
   const out={};
@@ -289,6 +304,7 @@ async function prepare(file,inputFormat='gzip'){
     const envLen=tkpReadU32(await reader.readExact(4));
     if(envLen>50*1024*1024)throw new Error('Yedek zarfı beklenenden çok büyük; dosya bozuk olabilir.');
     const envelope=JSON.parse(decoder.decode(await reader.readExact(envLen)));
+    tkpValidateFramedBackupEnvelope(envelope,formatVersion);
     preparedPortable=envelope.portable||null;
     preparedManifest=envelope.manifest||null;
     jsonParseMs=performance.now()-parseStarted;
@@ -333,6 +349,7 @@ async function persistSegmentedBackup(){
   const envLen=tkpReadU32(await reader.readExact(4));
   if(envLen>50*1024*1024)throw new Error('Yedek zarfı beklenenden çok büyük.');
   const envelope=JSON.parse(decoder.decode(await reader.readExact(envLen)));
+    tkpValidateFramedBackupEnvelope(envelope,formatVersion);
   const rawCollections=Array.isArray(envelope.collections)?envelope.collections:[];
   const descriptors=formatVersion>=5
     ?rawCollections.map(row=>({name:String(row?.name||''),chunks:Number(row?.chunks)||0,count:Number(row?.count)||0}))
@@ -356,7 +373,7 @@ async function persistSegmentedBackup(){
     }
     postMessage({type:'phase',phase:'parse-segment',name:descriptor.name,chunk:chunkIndex+1,chunks:descriptor.chunks,count:parsed.length,streamed:true});
     return parsed;
-  },{writeBatch:16,timeoutMs:300000,onProgress(info){const now=performance.now();if(now-lastProgress>250){lastProgress=now;postMessage({type:'progress',info});}}});
+  },{writeBatch:16,timeoutMs:300000,beforeCommit:async()=>{if((await reader.peek(1)).length)throw new Error('Yedek çerçevelerinden sonra beklenmeyen veri var.');},onProgress(info){const now=performance.now();if(now-lastProgress>250){lastProgress=now;postMessage({type:'progress',info});}}});
   if(!result?.ok)throw new Error('Akışlı IndexedDB yazımı doğrulanamadı.');
   preparedMetrics.indexedDbWriteMs=Math.round(performance.now()-started);
   preparedMetrics.totalMs=Math.round((preparedMetrics.gunzipMs||0)+(preparedMetrics.jsonParseMs||0)+preparedMetrics.indexedDbWriteMs);

@@ -341,6 +341,30 @@ function tkpV55MinimalOrderedAdds(order,picks,winner){
 
 function tkpV55Winner(r){return (r?.horses||[]).find(h=>tkpV55Num(h?.winner)===1||tkpV55Num(h?.finish_position)===1)||null;}
 function tkpV55HasResult(r){return !!tkpV55Winner(r);}
+function tkpV55FrozenBhEvidenceForHorseArrays(arrays){
+  const current=typeof lastRaceResults!=='undefined'&&Array.isArray(lastRaceResults)?lastRaceResults:[];
+  const log=typeof db==='object'&&Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log:[];
+  const list=Array.isArray(arrays?.[0])?arrays:[arrays];
+  const out=[];
+  for(const horses of list){
+    if(!Array.isArray(horses)||!horses.length)continue;
+    let race=current.map(x=>x?.r||x).find(r=>r?.horses===horses)||null;
+    if(!race){
+      const wanted=horses.map(h=>String(h?.horse_no??'').trim()).filter(Boolean).sort().join(',');
+      if(wanted){
+        const matches=current.map(x=>x?.r||x).filter(r=>Array.isArray(r?.horses)&&r.horses.length===horses.length&&r.horses.map(h=>String(h?.horse_no??'').trim()).filter(Boolean).sort().join(',')===wanted);
+        if(matches.length===1)race=matches[0];
+      }
+    }
+    if(!race||typeof tkpBombHunterRaceKey!=='function')continue;
+    const key=tkpBombHunterRaceKey(race),frozen=log.find(x=>x?.race_key===key&&x?.evaluated_at&&Array.isArray(x?.candidates)&&x.candidates.length);
+    if(!frozen)continue;
+    const candidates=(frozen.candidates||[]).filter(c=>c?.horse_no&&!(typeof tkpBombHunterWasPortfolioBackfill==='function'&&tkpBombHunterWasPortfolioBackfill(c)))
+      .map(c=>({rank:Number(c.rank)||null,kind:String(c.kind||'BOMBA'),horse_no:String(c.horse_no),horse_name:String(c.horse_name||''),finish_position:Number(c.finish_position)||null,win:!!c.win,top3:!!c.top3,top5:!!c.top5}));
+    out.push({race_key:key,race_date:String(frozen.race_date||race.race_date||''),hippodrome:String(frozen.hippodrome||race.hippodrome||''),leg:Number(frozen.leg||race.leg)||null,candidates});
+  }
+  return out;
+}
 function tkpV55LegResultInfo(r,h){
   if(!tkpV55HasResult(r))return {known:false,finish:0,cls:'waiting',label:''};
   const actual=(r?.horses||[]).find(x=>tkpV55SameHorse(x?.horse_no,h?.horse_no))||h;
@@ -591,9 +615,13 @@ function tkpV55SideBetRescueHTML(title,pools,combos,cost,status,raceHorses,rankM
     const missing=[];
     for(let i=0;i<required.length;i++)if(!normalized[i].some(no=>sameFn(no,required[i]?.horse_no)))missing.push({position:i+1,horse:required[i]});
     const limit=tkpV55SideBetLimit(title);
+    const frozenBh=tkpV55FrozenBhEvidenceForHorseArrays(raceHorses);
+    const bhCandidates=frozenBh.flatMap((race,index)=>race.candidates.map(c=>({...c,race_key:race.race_key,race_date:race.race_date,hippodrome:race.hippodrome,leg:race.leg,sidebet_leg:index+1})));
+    const bhWinnerRows=bhCandidates.filter(c=>c.finish_position&&c.finish_position<=normalized[c.sidebet_leg-1]?.length);
+    const bhDetail=bhWinnerRows.map(c=>`BH${c.rank||'?'} ${c.kind} ${c.horse_name||c.horse_no}: ${c.finish_position}.`).join(' · ');
     if(!missing.length){
       const row={title,status:'TUTTU',missing:0,cost:tkpV55Num(cost),rescueCost:tkpV55Num(cost),limit,detail:'Resmî sıra havuzlarda'};
-      tkpV55RegisterSideRuntime(row);tkpV55PersistDiagnostic({kind:'sidebet',product:title,status:'TUTTU',cost:row.cost,rescue_cost:row.rescueCost,max_budget:limit,missing_positions:0,rescuable:true});
+      tkpV55RegisterSideRuntime(row);tkpV55PersistDiagnostic({kind:'sidebet',product:title,status:'TUTTU',cost:row.cost,rescue_cost:row.rescueCost,max_budget:limit,missing_positions:0,rescuable:true,bh_candidates:bhCandidates,bh_winner_rows:bhWinnerRows,detail:bhDetail});
       // Teşhis kaydı tutulur; uzun açıklama yan bahis kartına basılmaz. İleri Takip'in
       // en altındaki ayrı "Yan Bahis Kurtarma Takibi" kartında gösterilir.
       return '';
@@ -613,9 +641,9 @@ function tkpV55SideBetRescueHTML(title,pools,combos,cost,status,raceHorses,rankM
     const practical=allFound&&totalAdds>0&&totalAdds<=2;
     const fits=rescueCost!=null&&(!limit||rescueCost<=limit+1e-9);
     const rescuable=practical&&fits;
-    const detail=details.join(' · ');
+    const detail=[...details,bhDetail].filter(Boolean).join(' · ');
     const row={title,status:'KAÇTI',missing:missing.length,cost:tkpV55Num(cost),rescueCost,limit,rescuable,detail,totalAdds};
-    tkpV55RegisterSideRuntime(row);tkpV55PersistDiagnostic({kind:'sidebet',product:title,status:'KAÇTI',cost:row.cost,rescue_cost:rescueCost,extra_cost:extra,max_budget:limit,missing_positions:missing.length,rescuable,needed_adds:missing.map(m=>m.neededAdds),winner_ranks:missing.map(m=>m.preRank),detail});
+    tkpV55RegisterSideRuntime(row);tkpV55PersistDiagnostic({kind:'sidebet',product:title,status:'KAÇTI',cost:row.cost,rescue_cost:rescueCost,extra_cost:extra,max_budget:limit,missing_positions:missing.length,rescuable,needed_adds:missing.map(m=>m.neededAdds),winner_ranks:missing.map(m=>m.preRank),bh_candidates:bhCandidates,bh_winner_rows:bhWinnerRows,detail});
     let verdict;
     if(!allFound)verdict='<b>Yarış öncesi canonical sırada bulunmadığı için sonradan kazanan eklenerek kurtarılmış sayılmaz.</b>';
     else if(totalAdds>2)verdict=`<b>Canonical genişletme +${totalAdds} aday ister; pratik +1/+2 kurtarma sınırını aşar.</b>`;
@@ -737,6 +765,19 @@ function tkpV55SideBetTrackingTextHTML(){
     .filter(x=>String(x?.algorithm_version||'')===TKP_V55_ALGORITHM_VERSION && String(x?.kind||'')==='sidebet');
   const runtime=Array.isArray(_tkpV55SideBetDiagnoses)?_tkpV55SideBetDiagnoses:[];
   const all=persisted.length?persisted:runtime;
+  const bhLog=(database&&Array.isArray(database.bomb_hunter_shadow_log)?database.bomb_hunter_shadow_log:[])
+    .filter(r=>r?.evaluated_at&&Array.isArray(r?.candidates)&&r.candidates.length);
+  const bhEvaluated=bhLog.map(r=>({race:r,candidates:(r.candidates||[]).filter(c=>c?.horse_no&&!(typeof tkpBombHunterWasPortfolioBackfill==='function'&&tkpBombHunterWasPortfolioBackfill(c))&&Number(c.finish_position)>0)})).filter(x=>x.candidates.length);
+  const bhRanks=[1,2,3,4].map(rank=>{
+    const samples=bhEvaluated.flatMap(x=>x.candidates.filter(c=>Number(c.rank)===rank));
+    const pct=(n,d)=>d?`%${(100*n/d).toFixed(1)}`:'—';
+    const wins=samples.filter(c=>Number(c.finish_position)===1).length,top3=samples.filter(c=>Number(c.finish_position)<=3).length,top5=samples.filter(c=>Number(c.finish_position)<=5).length;
+    return `<tr><td>BH ${rank}</td><td>${samples.length}</td><td>${wins} (${pct(wins,samples.length)})</td><td>${top3} (${pct(top3,samples.length)})</td><td>${top5} (${pct(top5,samples.length)})</td></tr>`;
+  }).join('');
+  const bhRecent=bhEvaluated.flatMap(x=>x.candidates.filter(c=>Number(c.finish_position)===1).map(c=>({race:x.race,c})))
+    .sort((a,b)=>String(b.race.race_date||'').localeCompare(String(a.race.race_date||''))).slice(0,12)
+    .map(({race,c})=>`<tr><td>${tkpV55Html(race.race_date||'—')}</td><td>${tkpV55Html(race.hippodrome||'—')}</td><td>${tkpV55Html(race.leg||'—')}</td><td>BH ${tkpV55Html(c.rank||'—')} · ${tkpV55Html(c.kind||'BOMBA')}</td><td>${tkpV55Html(c.horse_no||'')} ${tkpV55Html(c.horse_name||'')} · ${tkpV55Html(c.finish_position||1)}.</td></tr>`).join('');
+  const bhLearningHTML=`<h3>BH geçmişi · Yan bahis öğrenme verisi</h3><p class="muted">Yalnız yarış öncesi dondurulmuş BH adayları ve resmi sonuçlar kullanılır. ${bhEvaluated.length} doğrulanmış yarış ve ${bhEvaluated.reduce((n,x)=>n+x.candidates.length,0)} BH atı sıralara göre ölçüldü; eksik snapshot geçmişe eklenmez.</p><div class="tableWrap"><table><thead><tr><th>Aday sırası</th><th>At örneği</th><th>Kazandı</th><th>İlk 3</th><th>İlk 5</th></tr></thead><tbody>${bhRanks}</tbody></table></div>${bhRecent?`<details><summary>BH kazananları · son ${Math.min(12,bhEvaluated.flatMap(x=>x.candidates).filter(c=>Number(c.finish_position)===1).length)} kayıt</summary><div class="tableWrap"><table><thead><tr><th>Tarih</th><th>Hipodrom</th><th>Ayak</th><th>BH sinyali</th><th>Kazanan</th></tr></thead><tbody>${bhRecent}</tbody></table></div></details>`:'<p class="muted">Doğrulanmış BH kazanan kaydı yok.</p>'}`;
   const tkpLatestSideBetTrackingDate=rows=>{
     let latest='';
     for(const row of (Array.isArray(rows)?rows:[])){
@@ -756,7 +797,7 @@ function tkpV55SideBetTrackingTextHTML(){
     const detail=history.slice(-3).reverse().map(x=>`<p><b>${tkpV55Html(x.race_date||'—')} · ${tkpV55Html(x.product||x.title||label)}</b> · ${tkpV55Html(x.status||'KAYIT')} · ${x.rescuable===true&&x.status!=='TUTTU'?'kurtarılabilirdi':x.status==='TUTTU'?'kurtarma gerekmiyor':'kurtarma sınırı dışında'}${x.detail?' · '+tkpV55Html(x.detail):''}</p>`).join('');
     return `<tr><td>${tkpV55Html(label)}</td><td>${daily.length||'Kayıt yok'}</td><td>${history.length||'Kayıt yok'}</td><td>${history.length?rescued:'—'}</td><td>${tkpV55Html(last||'—')}</td><td>${history.length?`<details><summary>Son kayıtlar</summary>${detail}</details>`:'—'}</td></tr>`;
   }).join('');
-  const coverageHTML=`<h3>Tüm geçmiş · bahis türüne göre kurtarma</h3><p class="muted">Günlük kayıt yoksa bahis oynanmadı veya teşhis henüz kaydedilmedi; başarı/başarısızlık sayılmaz. Kurtarılabilir sayısı yalnız kayıtlı kaçış teşhisidir, kazanılmış kupon değildir.</p><div class="tableWrap"><table><thead><tr><th>Bahis</th><th>Son gün</th><th>Tüm geçmiş</th><th>Kurtarılabilir</th><th>Son kayıt tarihi</th><th>Ayrıntı</th></tr></thead><tbody>${coverage}</tbody></table></div>`;
+  const coverageHTML=`${bhLearningHTML}<h3>Tüm geçmiş · bahis türüne göre kurtarma</h3><p class="muted">Günlük kayıt yoksa bahis oynanmadı veya teşhis henüz kaydedilmedi; başarı/başarısızlık sayılmaz. Kurtarılabilir sayısı yalnız kayıtlı kaçış teşhisidir, kazanılmış kupon değildir.</p><div class="tableWrap"><table><thead><tr><th>Bahis</th><th>Son gün</th><th>Tüm geçmiş</th><th>Kurtarılabilir</th><th>Son kayıt tarihi</th><th>Ayrıntı</th></tr></thead><tbody>${coverage}</tbody></table></div>`;
   const rows=scoped.slice(-8).reverse();
   if(!rows.length)return `<div id="tkpSideBetRescueDailyPanel" class="card v55SideBetTrackingText"><h2>📝 Yan Bahis Kurtarma Takibi</h2><p class="muted">${displayDate?'Seçili gün için':'Bu gün için'} kaydedilmiş yan bahis kurtarma kaydı yok. Tüm geçmiş korunur; kayıt geldikçe burada yalnız o günün özeti görünür.</p>${coverageHTML}</div>`;
   const total=all.length;
@@ -778,5 +819,9 @@ function tkpV55SideBetTrackingTextHTML(){
 
 globalThis.TKP_V55_ALGORITHM_VERSION=TKP_V55_ALGORITHM_VERSION;
 globalThis.tkpV55DiagnosticsCenterHTMLAsync=tkpV55DiagnosticsCenterHTMLAsync;
+// İzleme Merkezi ayrı controller dosyasında çalışır; BH/yan bahis geçmişi
+// üreticisini açıkça dışa aktar ki cache fallback ve günlük panel yenilemesi
+// fonksiyona her açılışta erişebilsin.
+globalThis.tkpV55SideBetTrackingTextHTML=tkpV55SideBetTrackingTextHTML;
 globalThis.tkpInvalidateV55ExpertEvidenceCache=()=>{_tkpV55ExpertEvidenceCache=new WeakMap();_tkpV55ExpertOrderCache=new WeakMap();};
 if(typeof addEventListener==='function')addEventListener('tkp:db-changed',()=>{_tkpV55ExpertEvidenceCache=new WeakMap();_tkpV55ExpertOrderCache=new WeakMap();});

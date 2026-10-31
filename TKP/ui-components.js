@@ -16,7 +16,7 @@ const TKP_MIN_PERCENT_SAMPLE=1; // V1.1.305: 20 yarış zorunluluğu kaldırıld
 // OYNA etiketi kazanması için gereken minimum ödeme-bilinen örneklem. Gerçek
 // TJK ödemeleriyle yapılan holdout testinde n=36-121 arası "pozitif ROI"
 // örnekleri 4 zaman diliminin 3'ünde tersine döndü; bu eşiğin altı yalnız
-// TEMKİNLİ olabilir, asla tek başına OYNA tetiklemez.
+// PAS olabilir; asla tek başına OYNA tetiklemez.
 const TKP_SIDEBET_ROI_TRUST_SAMPLE=150;
 function tkpPercentOrSample(numerator,denominator){
   const n=Math.max(0,Number(denominator)||0),k=Math.max(0,Number(numerator)||0);
@@ -549,12 +549,18 @@ function tkpBombHunterSupportContext(r){
     const key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(r):'';
     const log=typeof db!=='undefined'&&Array.isArray(db?.bomb_hunter_shadow_log)
       ? db.bomb_hunter_shadow_log : [];
-    const frozen=typeof tkpBombHunterStoredRecord==='function'?tkpBombHunterStoredRecord(r):(key?log.find(row=>row?.race_key===key):null);
+    const frozen=typeof tkpBombHunterInitialRecord==='function'?tkpBombHunterInitialRecord(r):(typeof tkpBombHunterStoredRecord==='function'?tkpBombHunterStoredRecord(r):(key?log.find(row=>row?.race_key===key):null));
     const active=typeof tkpBombHunterCanQualify==='function'?tkpBombHunterCanQualify(r):!archivedReadOnly&&!(typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(r.horses||[]));
     if(active&&typeof tkpBombHunterCandidates==='function'){
       raw=tkpBombHunterCandidates(r)||[];
     }else if(Array.isArray(frozen?.candidates)&&frozen.candidates.length){
-      raw=frozen.candidates;
+      raw=frozen.candidates.map((c,index)=>{
+        const h=(r.horses||[]).find(x=>String(x.horse_no)===String(c.horse_no))||null;
+        if(!h)return null;
+        const candidate={...c,h,rank:Number(c.rank)||index+1,frozen:true};
+        try{if(typeof tkpBombHunterAgfEligible==='function'&&!tkpBombHunterAgfEligible(r,{...c,h}))return null;}catch(_e){return null;}
+        return candidate;
+      }).filter(Boolean);
     }else{
       const hasResult=typeof raceHasConfirmedResult==='function'
         ? raceHasConfirmedResult(r.horses||[])
@@ -570,7 +576,7 @@ function tkpBombHunterSupportContext(r){
     const storedOdb=(r.horses||[]).find(h=>Number(h?.odb)===1||h?.bmb_source==='ŞABLON KURALI');
     if(storedOdb)raw=raw.concat([{kind:'ODB',horse_no:String(storedOdb.horse_no||''),horse_name:storedOdb.horse_name||'',score:Number(storedOdb.prediction_score_snapshot??storedOdb.score)||0,reasons:['Kayıtlı ODB snapshotı']}]);
   }
-  const selected=typeof tkpBombHunterThreeFromRows==='function'?tkpBombHunterThreeFromRows(r,raw):raw.slice(0,5);
+  const selected=raw.length&&raw.every(row=>row?.frozen===true)?raw.slice(0,5):(typeof tkpBombHunterThreeFromRows==='function'?tkpBombHunterThreeFromRows(r,raw):raw.slice(0,5));
   const candidates=selected.map((row,index)=>{
     const rank=Number(row?.rank);
     return {
@@ -651,13 +657,13 @@ function tkpBhBadgesWithSurpriseOrder(badges,h,r,ctx){
       try{
         const ordered=(ctx&&Array.isArray(ctx.orderedRows)&&ctx.orderedRows.length)?ctx.orderedRows:(r?.horses||[]).filter(x=>x&&!(typeof isNonRunner==='function'&&isNonRunner(x))).slice().sort((a,b)=>Number(b?.score||0)-Number(a?.score||0));
         const rows=typeof tkpBhOneriCandidates==='function'?tkpBhOneriCandidates(r,ordered).candidates:tkpBhCommonRows(r,ordered);
-        map=new Map();let k=0;for(const row of rows){if((row.warnings||[]).some(t=>/^BH[1-4]$/.test(t)))map.set(String(row.horse.horse_no).replace(/-E\d+$/i,''),++k);}
+        map=new Map();for(const row of rows){const ranks=(row.warnings||[]).map(t=>Number(String(t).match(/^BH([1-4])$/)?.[1])).filter(Number.isInteger);if(ranks.length)map.set(String(row.horse.horse_no).replace(/-E\d+$/i,''),Math.min(...ranks));}
       }finally{tkpBhBadgesWithSurpriseOrder._busy=false;}
       if(ctx&&typeof ctx==='object')try{ctx.__bhOrder=map;}catch(_e){}
     }
     const n=map.get(String(h?.horse_no??'').trim().replace(/-E\d+$/i,''));
-    if(!n)return badges.filter(b=>!/^BH[1-4]$/.test(String(b?.text||'')));
-    return badges.map(b=>/^BH[1-4]$/.test(String(b?.text||''))?{...b,text:tkpBhLabel(n,h,r),title:(b.title||'')+' · BH Öneri tablosundaki BH'+n+' ile aynı at (AGF sırası, sonra kazanma %)'}:b);
+    if(!n)return badges;
+    return badges.map(b=>/^BH[1-4]$/.test(String(b?.text||''))?{...b,text:tkpBhLabel(n,h,r),title:(b.title||'')+' · BH Öneri tablosundaki ilk kayıtlı BH'+n+' sırası'}:b);
   }catch(_e){return badges;}
 }
 function tkpBombHunterSupportBadges(h,context){
@@ -1117,26 +1123,83 @@ function tkpSignalHistoryFor(history,label){
 }
 // Bu sürpriz/BH adayı ŞU AN kuponda mı? Hangi kupon(lar)da + o ayak TEK mi.
 // "Kuponda varsa göreyim, yoksa eklerim" (kullanıcı 2026-10-23).
+function tkpBhCouponEligibility(r,horse){
+  const ac=(typeof activeCoupons!=='undefined'&&activeCoupons)?activeCoupons:((typeof window!=='undefined'&&window.activeCoupons)?window.activeCoupons:null);
+  const result={hits:[],eligible:[],singles:[],editableCount:0};
+  if(!ac)return result;
+  const norm=n=>String(n==null?'':n).replace(/-E\d+$/i,'');
+  const target=norm(horse&&horse.horse_no);
+  const labels={main:'Normal',alt:'Sürpriz',surprise:'Uzman + Kulis'};
+  let meetingLocked=false;
+  try{meetingLocked=typeof tkpCouponMeetingLocked==='function'&&tkpCouponMeetingLocked(lastRaceResults);}catch(_e){}
+  for(const key of ['main','alt','surprise']){
+    const c=ac[key];if(!c||c.error||c.disabled||!Array.isArray(c.legs))continue;
+    const leg=c.legs.find(l=>Number(l&&l.r&&l.r.leg)===Number(r&&r.leg));
+    if(!leg||!Array.isArray(leg.picks))continue;
+    if(!leg.picks.length)continue;
+    const included=leg.picks.some(h=>norm(h&&h.horse_no)===target);
+    const isTek=leg.picks.length===1;
+    if(included){result.hits.push(labels[key]+(isTek?' (TEK)':''));continue;}
+    if(c.readOnlySnapshot||meetingLocked)continue;
+    result.editableCount++;
+    if(isTek){result.singles.push(labels[key]);continue;}
+    const hasHorse=(leg.allHorses||leg.r?.horses||[]).some(h=>norm(h&&h.horse_no)===target&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+    if(hasHorse)result.eligible.push(key);
+  }
+  return result;
+}
 function tkpSurpriseInCouponHTML(r,horse){
   try{
-    const ac=(typeof activeCoupons!=='undefined'&&activeCoupons)?activeCoupons:((typeof window!=='undefined'&&window.activeCoupons)?window.activeCoupons:null);
-    if(!ac) return '<span class="muted">—</span>';
-    const norm=n=>String(n==null?'':n).replace(/-E\d+$/i,'');
-    const target=norm(horse&&horse.horse_no);
-    const labels={main:'Normal',alt:'Sürpriz',surprise:'Uzman'};
-    const hits=[]; let tekOnLeg=false;
-    for(const key of ['main','alt','surprise']){
-      const c=ac[key]; if(!c||c.error||!Array.isArray(c.legs)) continue;
-      const leg=c.legs.find(l=>Number(l&&l.r&&l.r.leg)===Number(r&&r.leg)); if(!leg||!Array.isArray(leg.picks)) continue;
-      const isTek=leg.picks.length===1; if(isTek) tekOnLeg=true;
-      if(leg.picks.some(h=>norm(h&&h.horse_no)===target)) hits.push(labels[key]+(isTek?' (TEK)':''));
-    }
-    if(hits.length) return '<span style="color:#15803d;font-weight:800;">✓ Kuponda: '+esc(hits.join(', '))+'</span>';
-    return '<span style="color:#b45309;font-weight:700;">Kuponda yok'+(tekOnLeg?' · bu ayak TEK (eklersen banko bozulur)':'')+'</span>';
+    const state=tkpBhCouponEligibility(r,horse);
+    if(state.hits.length)return '<span style="color:#15803d;font-weight:800;">✓ Kuponda: '+esc(state.hits.join(', '))+'</span>';
+    if(state.eligible.length&&state.singles.length)return '<span style="color:#b45309;font-weight:700;">Kuponda yok · TEK korunuyor: '+esc(state.singles.join(', '))+'</span>';
+    if(state.eligible.length)return '<span style="color:#b45309;font-weight:700;">Kuponda yok</span>';
+    if(state.singles.length&&state.editableCount>0&&state.singles.length===state.editableCount)return '<span style="color:#b45309;font-weight:700;">Tüm düzenlenebilir kuponlarda TEK · korunuyor</span>';
+    if(state.singles.length)return '<span style="color:#b45309;font-weight:700;">Uygun kupon yok · TEK korunuyor: '+esc(state.singles.join(', '))+'</span>';
+    return '<span class="muted">Kuponda yok</span>';
   }catch(_){ return '<span class="muted">—</span>'; }
+}
+function tkpBhAddControlHTML(r,row,resolvedRace){
+  if(resolvedRace)return '<span class="muted" title="Sonuçlanmış yarışın kuponu değiştirilemez">Kapalı</span>';
+  const state=typeof tkpBhCouponEligibility==='function'?tkpBhCouponEligibility(r,row?.horse):{eligible:[],singles:[]};
+  const eligible=state.eligible||[];
+  if(!eligible.length)return state.singles?.length&&state.editableCount===state.singles.length
+    ?'<span class="muted" title="TEK ayaklar korunuyor">TEK korunuyor</span>'
+    :'<span class="muted">Uygun kupon yok</span>';
+  return `<button type="button" class="bombHunterAdd bombHunterAddAll" onclick="addHorseToEligibleCouponsFromBH(${Number(r?.leg)||0},${esc(JSON.stringify(String(row?.horse?.horse_no)))},this)">+ ${eligible.length} Uygun Kupona Ekle</button>`;
 }
 // BH Oneri tablosunun GORUNEN satirlari (tablo ve at tablosu rozetleri ayni listeyi kullanir).
 function tkpBhOneriCandidates(r,ordered){
+  const frozenSnapshot=typeof tkpSurpriseConditionSnapshot==='function'?tkpSurpriseConditionSnapshot(r):null;
+  const frozenResolved=(r?.horses||[]).some(h=>Number(h.winner)===1||Number(h.finish_position)>0);
+  const frozenRecordedNos=new Set((frozenSnapshot?.candidates||[]).map(c=>String(c.horse_no).replace(/-E\d+$/i,'')));
+  if(frozenSnapshot){
+    const candidates=(Array.isArray(frozenSnapshot.candidates)?frozenSnapshot.candidates:[]).slice(0,6).map(c=>{
+      const horse=(r?.horses||[]).find(h=>String(h.horse_no).replace(/-E\d+$/i,'')===String(c.horse_no).replace(/-E\d+$/i,''))||{horse_no:c.horse_no,horse_name:c.horse_name};
+      const rank=Number(horse.agf_rank),warnings=Array.isArray(c.warnings)?c.warnings.slice():[],signals=Array.isArray(c.signals)?c.signals.slice():[];
+      const bmb=Number(horse.bmb)===1&&horse.bmb_source!=='ŞABLON KURALI';
+      let odb=Number(horse.odb)===1||horse.bmb_source==='ŞABLON KURALI';
+      try{if(!odb&&typeof isOdbCandidate==='function')odb=!!isOdbCandidate(horse,r);}catch(_e){}
+      const hasSeparateSignal=warnings.some(tag=>/^ALT [1-4]$|^TR-BMB$/.test(String(tag)))||bmb||odb;
+      if(Number.isInteger(rank)&&rank>=1&&rank<=5&&!hasSeparateSignal)return null;
+      const keptWarnings=warnings.filter(tag=>{
+        if(Number.isInteger(rank)&&rank>=1&&rank<=5&&/^BH[1-4]$/.test(String(tag)))return false;
+        if(String(tag)==='BMB'&&!bmb)return false;
+        if(/^ODB\d*$/.test(String(tag))&&!odb)return false;
+        return true;
+      });
+      const keptSignals=signals.filter(s=>{
+        const label=String(s?.label||'');
+        if(Number.isInteger(rank)&&rank>=1&&rank<=5&&/^BH[1-4]$/.test(label))return false;
+        if(label==='BMB'&&!bmb)return false;
+        if(label==='ODB'&&!odb)return false;
+        return true;
+      });
+      return {...c,horse,warnings:keptWarnings,signals:keptSignals,winRateProof:keptSignals.slice().sort((a,b)=>(Number(b.wins)||0)/(Number(b.starts)||1)-(Number(a.wins)||0)/(Number(a.starts)||1))[0]||null};
+    }).filter(Boolean);
+    return {candidates,liveBhRows:candidates.slice(),snapshot:frozenSnapshot,resolvedRace:frozenResolved,recordedNos:frozenRecordedNos,bhApprovedRace:false,photoApproved:false,missingPreRaceSnapshot:false};
+  }
+  if(frozenResolved)return {candidates:[],liveBhRows:[],snapshot:null,resolvedRace:true,recordedNos:frozenRecordedNos,bhApprovedRace:false,photoApproved:false,missingPreRaceSnapshot:true};
   let candidates=tkpRankedSurpriseRows(r,ordered);
   // 14.10.2026 Istanbul 2. Altili / 4. ayak: the user-approved PRE-RACE
   // BH presentation order is 10,13,12,9,15,8. Keep the separate ALT/BMB/ODB
@@ -1196,6 +1259,7 @@ function tkpBhOneriCandidates(r,ordered){
     const rest=candidates.filter(c=>!photoOrder.includes(String(c?.horse?.horse_no??c?.horse_no??'').replace(/-E\d+$/i,'')));
     candidates=preferred.concat(rest).slice(0,6);
   }
+  liveBhRows=candidates.slice();
   return {candidates,liveBhRows,snapshot,resolvedRace,recordedNos,bhApprovedRace,photoApproved};
 }
 function tkpBhRetrospectiveMissHTML(r){
@@ -1211,8 +1275,8 @@ function tkpBottomConditionTrackingHTML(r,ordered){
   const revisedView=snapshot&&!resolvedRace&&candidates.some(row=>!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,'')));
   const tracked=(snapshot?.candidates||[]).filter(c=>!c.non_runner),resolved=tracked.filter(c=>c.win!==null),top3=tracked.filter(c=>c.top3!==null),top5=tracked.filter(c=>c.top5!==null);
   const trackingNote=snapshot?`<p class="surprise-condition-results">Kayıtlı aday takibi · Kazanan ${resolved.filter(c=>c.win).length}/${resolved.length} · İlk 3 ${top3.filter(c=>c.top3).length}/${top3.length} · İlk 5 ${top5.filter(c=>c.top5).length}/${top5.length}. Eksik sonuçlar beklemede; koşmazlar paydadan çıkarılır.</p>`:'<p class="surprise-condition-results muted">Yarış öncesi altı aday kaydı yok; bu görüntü tarihsel değerlendirmedir.</p>';
-   const bhOrd=new Map();{let k=0;candidates.forEach(row=>{if((row.warnings||[]).some(t=>/^BH[1-4]$/.test(t)))bhOrd.set(String(row.horse.horse_no),++k);});}const rows=candidates.map(row=>{const finishLabel=tkpSurpriseFinishLabel(r,row.horse);const finishClass=finishLabel==='1. oldu'?'tkpSurpriseWinner':/^[2-5]\. oldu$/.test(finishLabel)?'tkpSurpriseTop5':'';const tdColor=finishClass==='tkpSurpriseWinner'?'color:#15803d!important;font-weight:800!important;':finishClass==='tkpSurpriseTop5'?'color:#b91c1c!important;font-weight:800!important;':'';const histOf=s=>tkpSignalHistoryFor(history,s.label)||s;const histHit=(row.signals||[]).some(s=>{const z=histOf(s);return Number(z.wins)>0||Number(z.seconds)>0;});const histBg='';const proof=row.winRateProof;const evidenceLabel=row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',',')+(proof?` · n=${proof.starts}`:'');const lowSample=!!proof&&proof.starts<5;const addControl=resolvedRace?'<span class="muted" title="Sonuçlanmış yarışın kuponu değiştirilemez">Kapalı</span>':`<button type="button" class="bombHunterAdd bombHunterAddAll" onclick="addHorseToAllCoupons(${Number(r?.leg)||0},${esc(JSON.stringify(String(row.horse.horse_no)))})">+ 3 Kupona Ekle</button>`;return `<tr${finishClass?' class="'+finishClass+'"':''}><td${tdColor?` style="${tdColor}"`:''}>${esc((bhApprovedRace&&String(row.horse.horse_no)==='13'?'BH SIRA 2 · ':'')+row.warnings.map(w=>/^BH[1-4]$/.test(w)&&bhOrd.has(String(row.horse.horse_no))?tkpBhLabel(bhOrd.get(String(row.horse.horse_no)),row.horse,r):w).join(' + '))}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(row.horse.horse_no)} · ${esc(row.horse.horse_name)}${revisedView&&!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,''))?'<br><small class="muted">Güncel hesap · kayıtlı yarış öncesi listede yok</small>':''}</td><td style="white-space:nowrap;${tdColor}">${esc(tkpSurpriseFinishLabel(r,row.horse))}</td><td style="${histBg}${tdColor}" title="${histHit?'Benzer şartlarda daha önce kazanan veya 2. gelen var':''}">${row.signals.map(s=>esc(/^BH[1-4]$/.test(s.label)&&bhOrd.has(String(row.horse.horse_no))?'BH'+bhOrd.get(String(row.horse.horse_no)):s.label)+' '+s.wins+'/'+s.starts+(Number(histOf(s).seconds)>0?' · 2.: '+histOf(s).seconds:'')+(Number(histOf(s).top5)>0?' · ilk5: '+histOf(s).top5:'')).join('<br>')}</td><td${tdColor?` style="${tdColor}"`:''} title="Sinyal grubunun benzer koşullardaki geçmiş kazanma oranı; bu atın kişisel kazanma olasılığı değildir.${proof?` Örnek: ${proof.starts}, kazanan: ${proof.wins}.`:''}${lowSample?' Otomatik ALT ekleme için en az 5 örnek gerekir.':''}"><span style="display:inline-block;min-width:4.8em">${evidenceLabel}</span>${lowSample?'<br><small class="muted">Az örnek · otomatik eşik 5</small>':''}${tkpSurpriseMarketBadgeHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(tkpSurpriseCouponRule(r,row).reason)}</td><td${tdColor?` style="${tdColor}"`:''}>${tkpSurpriseInCouponHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${addControl}</td></tr>`;}).join('');
-  const revisionNote=revisedView?'<p class="muted">Güncel aday listesi yarış öncesi kayıttan farklıdır. Takip sayıları yalnız kayıtlı adaylara aittir; eski kupon ve aday kayıtları korunur.</p>':'';
+   const bhOrd=new Map();{let k=0;candidates.forEach(row=>{if((row.warnings||[]).some(t=>/^BH[1-4]$/.test(t)))bhOrd.set(String(row.horse.horse_no),++k);});}const rows=candidates.map(row=>{const finishLabel=tkpSurpriseFinishLabel(r,row.horse);const finishClass=finishLabel==='1. oldu'?'tkpSurpriseWinner':/^[2-5]\. oldu$/.test(finishLabel)?'tkpSurpriseTop5':'';const tdColor=finishClass==='tkpSurpriseWinner'?'color:#15803d!important;font-weight:800!important;':finishClass==='tkpSurpriseTop5'?'color:#b91c1c!important;font-weight:800!important;':'';const histOf=s=>tkpSignalHistoryFor(history,s.label)||s;const histHit=(row.signals||[]).some(s=>{const z=histOf(s);return Number(z.wins)>0||Number(z.seconds)>0;});const histBg='';const proof=row.winRateProof;const evidenceLabel=row.winRate==null?'Veri yok':'%'+(100*row.winRate).toFixed(1).replace('.',',')+(proof?` · n=${proof.starts}`:'');const lowSample=!!proof&&proof.starts<5;const addControl=tkpBhAddControlHTML(r,row,resolvedRace);return `<tr${finishClass?' class="'+finishClass+'"':''}><td${tdColor?` style="${tdColor}"`:''}>${esc((bhApprovedRace&&String(row.horse.horse_no)==='13'?'BH SIRA 2 · ':'')+row.warnings.map(w=>/^BH[1-4]$/.test(w)&&bhOrd.has(String(row.horse.horse_no))?tkpBhLabel(bhOrd.get(String(row.horse.horse_no)),row.horse,r):w).join(' + '))}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(row.horse.horse_no)} · ${esc(row.horse.horse_name)}${revisedView&&!recordedNos.has(String(row.horse.horse_no).replace(/-E\d+$/i,''))?'<br><small class="muted">Güncel hesap · kayıtlı yarış öncesi listede yok</small>':''}</td><td style="white-space:nowrap;${tdColor}">${esc(tkpSurpriseFinishLabel(r,row.horse))}</td><td style="${histBg}${tdColor}" title="${histHit?'Benzer şartlarda daha önce kazanan veya 2. gelen var':''}">${row.signals.map(s=>esc(/^BH[1-4]$/.test(s.label)&&bhOrd.has(String(row.horse.horse_no))?'BH'+bhOrd.get(String(row.horse.horse_no)):s.label)+' '+s.wins+'/'+s.starts+(Number(histOf(s).seconds)>0?' · 2.: '+histOf(s).seconds:'')+(Number(histOf(s).top5)>0?' · ilk5: '+histOf(s).top5:'')).join('<br>')}</td><td${tdColor?` style="${tdColor}"`:''} title="Sinyal grubunun benzer koşullardaki geçmiş kazanma oranı; bu atın kişisel kazanma olasılığı değildir.${proof?` Örnek: ${proof.starts}, kazanan: ${proof.wins}.`:''}${lowSample?' Otomatik ALT ekleme için en az 5 örnek gerekir.':''}"><span style="display:inline-block;min-width:4.8em">${evidenceLabel}</span>${lowSample?'<br><small class="muted">Az örnek · otomatik eşik 5</small>':''}${tkpSurpriseMarketBadgeHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${esc(tkpSurpriseCouponRule(r,row).reason)}</td><td${tdColor?` style="${tdColor}"`:''}>${tkpSurpriseInCouponHTML(r,row.horse)}</td><td${tdColor?` style="${tdColor}"`:''}>${addControl}</td></tr>`;}).join('');
+  const revisionNote=__o.missingPreRaceSnapshot?'<p class="muted">Yarış öncesi kilitli BH kaydı yok; sonuçtan geriye dönük sıra üretilmedi.</p>':revisedView?'<p class="muted">Güncel aday listesi yarış öncesi kayıttan farklıdır. Takip sayıları yalnız kayıtlı adaylara aittir; eski kupon ve aday kayıtları korunur.</p>':'';
   const winners=(history.winners||[]).filter(row=>row.signals.some(tag=>tag==='BMB'||tag==='ODB'||/^ALT /.test(tag))).slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
   const winnerTable=winners.length?`<details class="tkpSurpriseWinnerHistory"><summary>BMB / ODB / ALT kazanan at takibi · ${winners.length} son kayıt</summary><div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Tarih / hipodrom</th><th>Koşu şartı</th><th>Kazanan at</th><th>Kayıtlı işaret</th></tr></thead><tbody>${winners.map(row=>`<tr><td>${esc(row.date)} · ${esc(row.hippodrome)}</td><td>${esc(row.condition)}</td><td>${esc(row.horse_no)} · ${esc(row.horse_name)}</td><td>${esc(row.signals.join(' + '))}</td></tr>`).join('')}</tbody></table></div></details>`:'';
    return `<div class="tkpBottomConditionTracking"><h4>BH Öneri · en fazla 6 aday</h4>${tkpBhMethodDetailsHTML(history,resolvedRace)}<div class="tableWrap"><table class="compact" data-tkp-sort="preserve"><thead><tr><th>Sinyal</th><th>Bu ayaktaki at</th><th>Sonuç</th><th>Kazandı / örnek</th><th>Sinyal geçmiş oranı · örnek sayısı</th><th>Kupona ekleme kuralı</th><th>Kuponda mı?</th><th>Kupona ekle</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Bu koşullarda doğrulanmış geçmiş başarıyla eşleşen ALT/BMB/ODB adayı yok.</td></tr>'}</tbody></table></div>${revisionNote}${tkpBhRetrospectiveMissHTML(r)}<details class="tkpMethodDetails"><summary>Aday takip ayrıntıları</summary>${trackingNote}</details>${winnerTable}</div>`;
@@ -2853,20 +2917,21 @@ function tkpWilsonLower(ok,total,z=1.96){
   return Math.max(0,(centre-spread)/den);
 }
 function tkpDecisionBadge(label){
-  const key=String(label||'').toLocaleUpperCase('tr-TR');
-  const cls=key==='OYNA'?'play':(key==='PAS'?'pass':'caution');
-  return `<span class="tkpPlayDecision ${cls}">${esc(key||'TEMKİNLİ')}</span>`;
+  const raw=String(label||'').toLocaleUpperCase('tr-TR');
+  const key=raw==='OYNA'?'OYNA':'PAS';
+  const cls=key==='OYNA'?'play':'pass';
+  return `<span class="tkpPlayDecision ${cls}">${esc(key)}</span>`;
 }
 function tkpRoiDecision({ok=0,total=0,roi=null,payoutKnown=0,kind='generic'}={}){
   const n=Math.max(0,Number(total)||0),hits=Math.max(0,Number(ok)||0);
   const rate=n?hits/n:0,lower=tkpWilsonLower(hits,n),r=Number.isFinite(Number(roi))?Number(roi):null,pk=Math.max(0,Number(payoutKnown)||0);
-  let label='TEMKİNLİ',reason='Kayıt yok';
-  if(n<1){ label='TEMKİNLİ'; reason='Kayıt yok'; }
+  let label='PAS',reason='Kayıt yok; OYNA koşulları karşılanmadı';
+  if(n<1){ label='PAS'; reason='Kayıt yok'; }
   else if(kind==='altili'){
     if(r!=null&&r<0&&rate<0.10){label='PAS';reason='ROI negatif ve 6/6 oranı düşük';}
     else if(r!=null&&r>0&&rate>=0.10&&lower>=0.04){label='OYNA';reason='Pozitif ROI + tekrarlanabilir 6/6';}
-    else if(rate>=0.10&&lower>=0.03){label='TEMKİNLİ';reason='Tam isabet var; maliyet kontrollü tutulmalı';}
-    else if(r!=null&&r>0){label='TEMKİNLİ';reason='ROI pozitif ama tam isabet seyrek';}
+    else if(rate>=0.10&&lower>=0.03){label='PAS';reason='6/6 ve ROI birlikte OYNA eşiğini karşılamıyor';}
+    else if(r!=null&&r>0){label='PAS';reason='Pozitif ROI var; isabet/güven OYNA eşiğinin altında';}
     else if(lower<0.03){label='PAS';reason='Wilson alt sınırı zayıf';}
   }else{
     // V50 HIT-FIRST: önce gerçek isabet + Wilson; ROI yalnız ciddi zarar filtresidir.
@@ -2876,16 +2941,16 @@ function tkpRoiDecision({ok=0,total=0,roi=null,payoutKnown=0,kind='generic'}={})
     // (bkz. NOTLAR) pk=36-121 aralığındaki "pozitif ROI" örnekleri 4 zaman
     // diliminin 3'ünde tersine döndü -- küçük örneklemde pozitif ROI güvenilir
     // bir OYNA sinyali değil. OYNA artık en az TKP_SIDEBET_ROI_TRUST_SAMPLE
-    // ödeme-bilinen gözlem ister; onun altında en iyi ihtimalle TEMKİNLİ'dir.
+    // OYNA için bu sayıda ödeme-bilinen gözlem gerekir.
     // Ciddi zarar eşiği de -25 -> -15'e çekildi: gerçek para simülasyonunda
     // -13 ile -35 arası ROI bu ürün ailesinde İSTİSNA değil KURAL çıktı.
     const roiTrustworthy=pk>=TKP_SIDEBET_ROI_TRUST_SAMPLE;
     if(pk>=5&&r!=null&&r<=-15){label='PAS';reason='Ciddi negatif ROI; isabet maliyeti karşılamıyor';}
     else if(roiTrustworthy&&lower>=0.25&&r!=null&&r>=0){label='OYNA';reason='Yüksek isabet + güçlü Wilson + pozitif ROI (yeterli örneklem)';}
-    else if(lower>=0.25&&r!=null&&r>=0){label='TEMKİNLİ';reason=`Pozitif ROI ama örneklem küçük (n=${pk}<${TKP_SIDEBET_ROI_TRUST_SAMPLE}); tek dönemin şansı olabilir`;}
-    else if(lower>=0.45&&(r==null||r>-15)){label='TEMKİNLİ';reason='Çok yüksek isabet; ROI negatif olduğu için düşük maliyetle';}
-    else if(lower>=0.15&&(r==null||r>-15)){label='TEMKİNLİ';reason='Yüksek isabet / düşük maliyet adayı';}
-    else if(pk>=5&&r!=null&&r>=0&&rate>=0.20){label='TEMKİNLİ';reason='ROI pozitif fakat değişkenlik yüksek';}
+    else if(lower>=0.25&&r!=null&&r>=0){label='PAS';reason=`Pozitif ROI var; ödeme örneklemi OYNA için yetersiz (n=${pk}<${TKP_SIDEBET_ROI_TRUST_SAMPLE})`;}
+    else if(lower>=0.45&&(r==null||r>-15)){label='PAS';reason='İsabet yüksek; kârlılık/güven şartı OYNA eşiğini karşılamıyor';}
+    else if(lower>=0.15&&(r==null||r>-15)){label='PAS';reason='İsabet ve maliyet dengesi OYNA eşiğini karşılamıyor';}
+    else if(pk>=5&&r!=null&&r>=0&&rate>=0.20){label='PAS';reason='ROI pozitif; güven eşiği OYNA için yetersiz';}
     else {label='PAS';reason='İsabet-güven-maliyet dengesi zayıf';}
   }
   return {label,reason,rate,lower,roi:r,payoutKnown:pk,total:n,ok:hits};
@@ -2941,8 +3006,9 @@ function tkpForwardCouponCalibration(typeKey){
 }
 function tkpCouponDecisionData(res){
   const frozen=res?.decisionSnapshot;
-  const frozenLabel=String(frozen?.label||'').toLocaleUpperCase('tr-TR');
-  if(['PAS','TEMKİNLİ','OYNA'].includes(frozenLabel)){
+  const storedLabel=String(frozen?.label||'').toLocaleUpperCase('tr-TR');
+  const frozenLabel=storedLabel==='OYNA'?'OYNA':storedLabel?'PAS':'';
+  if(['PAS','OYNA'].includes(frozenLabel)){
     return {
       label:frozenLabel,
       summary:String(frozen.summary||'Kayıtlı yarış-öncesi karar'),
@@ -2956,11 +3022,11 @@ function tkpCouponDecisionData(res){
     rows=typeof tkpV55MeetingRows==='function'?tkpV55MeetingRows():[];
     metric=typeof tkpV55WindowMetric==='function'?tkpV55WindowMetric(typeKey,rows.slice(-28)):null;
   }catch(_){metric=null;}
-  if(!metric||!metric.n)return {label:'TEMKİNLİ',summary:'Doğrulanmış benzer yarış kaydı yok',reason:'Veri oluşana kadar maliyet kontrollü tutulur',frozen:false};
+  if(!metric||!metric.n)return {label:'PAS',summary:'Doğrulanmış benzer yarış kaydı yok',reason:'Veri oluşana kadar PAS',frozen:false};
   const lower=Math.round(100*wilson(metric.hits,metric.n));
   const rate=Math.round(100*metric.hits/metric.n);
   const enough=metric.n>=TKP_MIN_PERCENT_SAMPLE;
-  const label=!enough?'TEMKİNLİ':(lower>=18?'OYNA':lower>=7?'TEMKİNLİ':'PAS');
+  const label=enough&&lower>=18?'OYNA':'PAS';
   const pctText=enough?`%${rate} · Wilson alt %${lower}`:`n=${metric.n}`;
   return {label,summary:`Son 28 V55: ${metric.hits}/${metric.n} · ${pctText}`,reason:`6/6 toplantı bazlı · TEK hata ${metric.wrongSingles} · kapsam kaçışı ${metric.coverage} · tarihsel kayıtlar ayrı tutulur`,frozen:false};
 }
@@ -3153,7 +3219,7 @@ function tkpMultiGanyanCardsHTML(raceResults,coupons=activeCoupons){
 }
 
 function tkpOpportunityCatalog(raceResults,coupons=activeCoupons){
-  const shortTickets=globalThis.TKP_SHORT_GANYAN?.build(raceResults,coupons?.main)||[];
+  const shortTickets=globalThis.TKP_SHORT_GANYAN?.build(raceResults,coupons)||[];
   const shortTicket=(_key,n)=>shortTickets.find(t=>t.n===n&&t.variant===(n===5?'tek':'teksiz'));
   // These exact new tickets have no measured performance yet. Do not pair old rates with new costs.
   const unmeasured={ok:0,total:0,rate:0,roi:null,payoutKnown:0,evaluationPending:true};
@@ -3199,7 +3265,7 @@ function tkpOpportunityRouterHTML(raceResults,coupons=activeCoupons){
   }else if(altili?.decision?.label==='OYNA'){
     headline='Altılı oynanabilir; yan bahisler isabet ve maliyete göre ayrıca sıralandı.';
   }else if(hitBest){
-    headline=`Altılı temkinli · en yüksek isabet/düşük maliyet ${hitBest.label}.`;
+    headline=`Altılı · en yüksek isabet/düşük maliyet ${hitBest.label}.`;
     if(positiveBest&&positiveBest.key!==hitBest.key)detail=`İsabet önceliği ${hitBest.label}; pozitif ROI dengesi ${positiveBest.label}.`;
   }
   const priority=new Map(ranked.map((item,index)=>[item.key,index+1]));

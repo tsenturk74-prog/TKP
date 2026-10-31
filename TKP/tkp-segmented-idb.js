@@ -534,6 +534,9 @@
     // manifest varsa bütün parçalar güvenle yeniden yazılır.
     const currentIsValid=await validManifestAsync(currentRaw);
     const verifiedGeneration=adapterVerifiedGeneration(adapter);
+    if(currentIsValid && !verifiedGeneration){
+      throw new Error('Aktif arşiv bu oturumda doğrulanmadı; veri kaybını önlemek için kayıt durduruldu. Sayfayı yenileyin.');
+    }
     if(currentIsValid && verifiedGeneration && verifiedGeneration!==String(currentRaw.generation||'')){
       throw new Error('Aktif veri nesli başka sekmede değişti; eski görünümün yeni veriyi ezmesi engellendi. Sayfayı yenile.');
     }
@@ -719,6 +722,7 @@
       manifest.collections[name]={count:offset,bytes:collectionBytes,refs};
     }
     await flush();
+    if(typeof options.beforeCommit==='function')await options.beforeCommit();
     manifest.complete=true;
     manifest.manifestHash=await stableManifestHashAsync(manifest);
     await adapter.commitManifest(manifest,current);
@@ -923,7 +927,14 @@
     const metadataBytes=utf8Bytes(await stringifyAsync(manifest.meta||{}));
     let loadedBytes=metadataBytes+2;
     let lastYield=monotonicNow();
-    for(const [name,info] of Object.entries(manifest.collections||{})){
+    const entries=Object.entries(manifest.collections||{});
+    // Küçük dondurulmuş takip geçmişi, büyük politika raporunun ardından bellek
+    // sınırına takılıp tamamen boş görünmesin. Bütçe değişmez; yalnız bu küçük
+    // koleksiyon politika raporundan önce yüklenir.
+    const deepIndex=entries.findIndex(([name,info])=>name==='deep_surprise_tracking_log'&&Number(info?.bytes)>0&&Number(info.bytes)<=1024*1024);
+    const policyIndex=entries.findIndex(([name])=>name==='current_policy_replay_log');
+    if(deepIndex>policyIndex&&policyIndex>=0)entries.splice(policyIndex,0,entries.splice(deepIndex,1)[0]);
+    for(const [name,info] of entries){
       const total=Math.max(0,Number(info.count)||0);
       const desiredCount=Math.max(0,Math.min(total,Number(caps[name])||0));
       // Read bounded chunks from the tail, select exact rows inside both
@@ -931,19 +942,50 @@
       let selectedCount=0,selectedBytes=0;
       const blocks=[];
       const refs=info.refs||[];
-      for(let i=refs.length-1;i>=0;i--){
+      let expectedStart=0;
+      for(const ref of refs){
+        if(!Number.isSafeInteger(ref.start)||!Number.isSafeInteger(ref.count)||ref.count<=0||ref.start!==expectedStart)throw new Error(`${name} parça sırası/sayımı bozuk.`);
+        expectedStart+=ref.count;
+      }
+      if(expectedStart!==total)throw new Error(`${name} parça toplamı uyuşmuyor.`);
+      readTail: for(const batch of boundedRefBatches(refs.slice().reverse(),options)){
         if(selectedCount>=desiredCount||loadedRecords+selectedCount>=maxRecords)break;
-        const ref=refs[i];
-        const chunk=await loadRangeFromManifest(adapter,manifest,name,ref.start,ref.count,{...options,verifyHashes:options.verifyHashes!==false});
-        const rows=chunk.rows;let start=rows.length;
-        while(start>0&&selectedCount<desiredCount&&loadedRecords+selectedCount<maxRecords){
-          const bytes=utf8Bytes(await stringifyAsync(rows[start-1]))+1;
-          if(loadedBytes+selectedBytes+bytes+1024>maxMaterializedBytes)break;
-          start--;selectedCount++;selectedBytes+=bytes;
-          lastYield=await yieldReadIfDue(lastYield,options);
+        if(options.signal?.aborted)throw new Error('Arşiv okuması iptal edildi.');
+        const chunks=await adapter.getChunks(batch.map(ref=>ref.key));
+        for(let i=0;i<batch.length;i++){
+          if(selectedCount>=desiredCount||loadedRecords+selectedCount>=maxRecords)break readTail;
+          const ref=batch[i],chunk=chunks[i],rows=chunk?.payload;
+          if(!Array.isArray(rows))throw new Error(`${name} koleksiyonunda eksik parça: ${ref.key}`);
+          if(Number(chunk.count)!==Number(ref.count)||rows.length!==Number(ref.count)||String(chunk.hash||'')!==String(ref.hash||''))throw new Error(`${name} koleksiyonunda parça bütünlüğü bozuk: ${ref.key}`);
+          let serialized=null;
+          if(options.verifyHashes!==false){
+            serialized=await stringifyAsync(rows);
+            const actual=await dualHashAsync(serialized);
+            if(actual!==ref.hash)throw new Error(`${name} parça hash doğrulaması başarısız: ${ref.key}`);
+          }
+          // Dizi JSON'u satır başına ölçümlerin toplamından bir bayt uzundur:
+          // köşeli parantezler iki, satır ayırıcıları N-1 bayttır. Tümü sığıyorsa
+          // doğrulamada zaten üretilen gerçek UTF-8 boyunu yeniden kullan.
+          if(serialized!==null && rows.every(row=>row!==null&&typeof row==='object'&&!Array.isArray(row))
+            && selectedCount+rows.length<=desiredCount && loadedRecords+selectedCount+rows.length<=maxRecords){
+            const bytes=Math.max(0,utf8Bytes(serialized)-1);
+            if(loadedBytes+selectedBytes+bytes+1024<=maxMaterializedBytes){
+              blocks.push(rows);selectedCount+=rows.length;selectedBytes+=bytes;
+              lastYield=await yieldReadIfDue(lastYield,options);
+              continue;
+            }
+          }
+          let start=rows.length;
+          while(start>0&&selectedCount<desiredCount&&loadedRecords+selectedCount<maxRecords){
+            const bytes=utf8Bytes(await stringifyAsync(rows[start-1]))+1;
+            if(loadedBytes+selectedBytes+bytes+1024>maxMaterializedBytes)break;
+            start--;selectedCount++;selectedBytes+=bytes;
+            lastYield=await yieldReadIfDue(lastYield,options);
+          }
+          if(start<rows.length)blocks.push(rows.slice(start));
+          if(start>0)break readTail;
         }
-        if(start<rows.length)blocks.push(rows.slice(start));
-        if(start>0)break;
+        lastYield=await yieldReadIfDue(lastYield,options);
       }
       const loadedOffset=total-selectedCount,values=[];
       for(let i=blocks.length-1;i>=0;i--)for(const row of blocks[i])values.push(row);
@@ -1166,7 +1208,9 @@
       const quota=/QuotaExceededError|quota/i.test(String(error?.name||'')+' '+String(error?.message||error||''));
       if(quota&&options.quotaRecovery!==false){
         setStatus({mode:'quota-recovery',verified:false,error:String(error?.message||error)});
-        await withBrowserLock('segmented-gc',()=>gcWithAdapter(adapter,{dropPrevious:true,force:true}));
+        // Kota dolduğunda yalnız hiçbir manifestin kullanmadığı parçaları temizle.
+        // Önceki sağlam nesli silmek, tekrar yazma başarısız olursa kurtarma yolunu yok eder.
+        await withBrowserLock('segmented-gc',()=>gcWithAdapter(adapter,{force:true}));
         try{return await run();}catch(retryError){error=retryError;}
       }
       setStatus({mode:'error',verified:false,error:String(error?.message||error)});

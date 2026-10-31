@@ -1252,9 +1252,10 @@ function portfolioTakeSingles(candidates,count){
 // koşul/puan/risk kanıtı ile yapılır. Sonuç, ikramiye ya da bitiriş alanı bu katmanda
 // okunmaz.
 const TKP_AGF_SINGLE_PORTFOLIO_POLICY=Object.freeze({
-  version:'V1.1.240-AGF-BANDED-SINGLES-RESEARCH-GATED',
+  version:'V1.1.241-AGF-TOP3-ALL-ROLES',
   normal:Object.freeze({agfRanks:Object.freeze([1,2,3]),minSingles:1,maxSingles:2}),
-  surprise:Object.freeze({agfRanks:Object.freeze([3,4,5]),minSingles:1,maxSingles:2}),
+  // Normal, Sürpriz ve Uzman kuponlarda TEK için ortak sınır AGF ilk üçtür.
+  surprise:Object.freeze({agfRanks:Object.freeze([1,2,3]),minSingles:1,maxSingles:2}),
   evidence:Object.freeze({requireDynamicSingle:true,requireScore:true,requireConditionEvidence:true,preRaceOnly:true}),
   research:Object.freeze({historical503:'RESEARCH_CALIBRATION_ONLY',strictTrainingGate:'tkpTrainingRowsBeforeTarget',autoLivePromotion:false})
 });
@@ -1273,6 +1274,10 @@ function tkpAgfRankForSinglePolicy(h,pool=[]){
 function tkpAgfSinglePolicyAllowsRank(mode,rank){
   const value=Number(rank);
   return Number.isFinite(value)&&tkpAgfSinglePolicyForMode(mode).agfRanks.includes(value);
+}
+function tkpAgfTop3SingleEligible(h,pool=[]){
+  return !!h&&!isNonRunner(h)&&canBeCouponSingle(h)&&!tkpLegacyXKulisBreaksSingle(h)
+    &&tkpAgfSinglePolicyAllowsRank('normal',tkpAgfRankForSinglePolicy(h,pool));
 }
 // Saf seçim çekirdeği: test/backtest ve canlı yol aynı 1–2 sınırını kullanır.
 // `viable` üretimi ayrı tutulur ki AGF sırası tek başına hiçbir zaman yeterli olmasın.
@@ -1299,7 +1304,7 @@ function tkpAgfBandSingleCandidates(chosen,mode){
       const agfRank=tkpAgfRankForSinglePolicy(h,pool);
       if(!tkpAgfSinglePolicyAllowsRank(mode,agfRank)||!canBeCouponSingle(h)||tkpLegacyXKulisBreaksSingle(h))continue;
       // Adayın kendi P1 gücünü, en güçlü diğer adaya karşı ölç. Böylece AGF 1–3
-      // ya da 3–5 içinde olmak tek başına bir TEK hakkı vermez.
+      // AGF ilk üçte olmak tek başına bir TEK hakkı vermez.
       const other=pool.filter(z=>String(z?.horse_no)!==String(h?.horse_no)).slice().sort((a,b)=>{
         const as=typeof altiliWinnerScoreForHorse==='function'?Number(altiliWinnerScoreForHorse(x?.r,a))||0:Number(a?.score)||0;
         const bs=typeof altiliWinnerScoreForHorse==='function'?Number(altiliWinnerScoreForHorse(x?.r,b))||0:Number(b?.score)||0;
@@ -1413,12 +1418,10 @@ function tkpAllResultPolicySingleCandidates(chosen,mode,limit=1){
 }
 
 function tkpStrategyFallbackSingleCandidates(chosen,strategy,limit=1){
-  // Kullanıcının portföy sözleşmesi: her kupon 1–2 TEK taşır. Kanıtlı TEK
-  // yoksa boş TEK/maliyet TEK'i yerine o kuponun kendi görünür çekirdeğinden
-  // strateji TEK'i seçilir. Normal 1. sırayı, Sürpriz 3–5 bandını, Uzman ise
-  // kendi kulis/uzman sırasının liderini kullanır.
+  // Zorunlu şekil yedeği de ortak AGF ilk üç kapısını geçmelidir.
   const mult=tkpEvidenceFallbackSingle(chosen,strategy);
-  if(mult)return [{i:mult.i,h:{...mult.h,__tkpStrategyFallbackSingle:true,__tkpStrategyFallbackKind:strategy,__tkpEvidenceFallback:true}}];
+  const multPool=chosen?.[mult?.i]?.scored||chosen?.[mult?.i]?.r?.horses||[];
+  if(mult&&tkpAgfTop3SingleEligible(mult.h,multPool))return [{i:mult.i,h:{...mult.h,__tkpStrategyFallbackSingle:true,__tkpStrategyFallbackKind:strategy,__tkpEvidenceFallback:true}}];
   const rows=[];
   for(let i=0;i<(chosen||[]).length;i++){
     const x=chosen[i];
@@ -1436,12 +1439,13 @@ function tkpStrategyFallbackSingleCandidates(chosen,strategy,limit=1){
       general=general.slice().sort((a,b)=>(Number(b?.agf)||0)-(Number(a?.agf)||0));
     }
     let pool=general;
-    if(strategy==='alt')pool=general.slice(2,5);
+    if(strategy==='alt')pool=general;
     if(strategy==='expert'){
       try{if(typeof tkpV55ExpertOrderForRace==='function')pool=tkpV55ExpertOrderForRace(x?.r,general)||general;}catch(_){pool=general;}
     }
     // Sert uygunluk kapısı fallback tarafından da aşılamaz (ör. >60 kg).
-    const h=pool.find(row=>canBeCouponSingle(row)&&!tkpLegacyXKulisBreaksSingle(row))
+    const h=pool.filter(row=>tkpAgfTop3SingleEligible(row,general))
+      .sort((a,b)=>tkpAgfRankForSinglePolicy(a,general)-tkpAgfRankForSinglePolicy(b,general))[0]
       ||null;
     if(!h)continue;
     let visible=Number(h?.score)||0;
@@ -1484,13 +1488,13 @@ function forcedSinglePickMap(chosen,strategy,overviewArg=null){
   }else if(strategy==='wide'){
     portfolioTakeSingles(firstLook,1).forEach(setPick);
   }else if(strategy==='alt'){
-    // Sürpriz Altılı: 1–2 TEK yalnız AGF 3–5 bandından gelir. Bu, Uzman/Kulis
+    // Sürpriz Altılı: 1–2 TEK yalnız AGF ilk üçten gelir. Bu, Uzman/Kulis
     // ('expert') yolundan tamamen ayrıdır; Kulis seçimlerine dokunmaz.
     tkpAgfBandSingleCandidates(chosen,'surprise').slice(0,2).forEach(setPick);
     if(!map.size)tkpStrategyFallbackSingleCandidates(chosen,'alt',1).forEach(setPick);
   }else if(strategy==='surprise'){
-    // V55.2 GERÇEK SÜRPRİZ: Normal/Uzman'dan bağımsız İlk Bakış 3–5 bandı.
-    // Yalnız canonical isSingle=true adaylar TEK olabilir; sonuç alanı kullanılmaz.
+    // V55.2 GERÇEK SÜRPRİZ: Normal/Uzman'dan bağımsız İlk Bakış sırası.
+    // TEK için ortak AGF ilk üç sınırı korunur; sonuç alanı kullanılmaz.
     const normalLegs=new Set(tkpV52LegacyNormalSingleMap(chosen).keys());
     let band=firstLook.slice(2,5).filter(z=>!normalLegs.has(z.i));
     if(!band.length) band=firstLook.slice(2,5);
@@ -1511,7 +1515,15 @@ function forcedSinglePickMap(chosen,strategy,overviewArg=null){
     if(!map.size)tkpStrategyFallbackSingleCandidates(chosen,'expert',1).forEach(setPick);
   }
   const mode=strategy==='alt'?'alt':(strategy==='expert'?'surprise':'main');
-  const eligible=[...map.entries()].filter(([,h])=>h&&canBeCouponSingle(h));
+  let eligible=[...map.entries()].filter(([i,h])=>tkpAgfTop3SingleEligible(h,chosen[i]?.scored||chosen[i]?.r?.horses||[]));
+  // Expert/Kulis lideri AGF ilk 3 kapısında elenmişse, önceki fallback henüz
+  // map dolu olduğu için çalışmamıştı. Geçersiz tekleri temizleyip mevcut
+  // yönetişim fallback'ini tekrar dene; rank 4+ yine tek olamaz.
+  if(strategy==='expert'&&!eligible.length){
+    map.clear();
+    tkpStrategyFallbackSingleCandidates(chosen,'expert',1).forEach(setPick);
+    eligible=[...map.entries()].filter(([i,h])=>tkpAgfTop3SingleEligible(h,chosen[i]?.scored||chosen[i]?.r?.horses||[]));
+  }
   const reviewed=eligible.map(([i,h])=>({i,h,evidence:tkpBenterSingleEvidence(chosen[i],h,mode)}));
   const qualified=reviewed.filter(row=>!row.evidence.blocked);
   if(qualified.length){
@@ -1550,12 +1562,19 @@ function tkpAuditFinalSingles(coupon,mode){
     if((leg.picks||[]).length!==1)continue;
     const h=leg.picks[0],evidence=tkpBenterSingleEvidence({r:leg.r,scored:leg.allHorses||leg.r?.horses||[]},h,mode);
     const plan=leg.confidencePlan||{},fallback=plan.strategySingleFallback===true||h.__tkpStrategyFallbackSingle===true||h.__tkpNormalFallbackSingle===true;
-    const eligible=canBeCouponSingle(h);
-    const reliable=eligible&&!fallback&&!evidence.blocked&&plan.reliable===true;
+    const pool=leg?.allHorses?.length?leg.allHorses:leg.r?.horses||[];
+    const rank=tkpAgfRankForSinglePolicy(h,pool);
+    const eligible=tkpAgfTop3SingleEligible(h,pool);
+    const second=pool.filter(z=>String(z?.horse_no)!==String(h?.horse_no)).sort((a,b)=>(Number(b?.score)||0)-(Number(a?.score)||0))[0]||null;
+    let dynamic=null;try{dynamic=dynamicSingleDecision({r:leg.r,scored:pool},h,second);}catch(_){ }
+    const conditionEvidence=Boolean(dynamic?.evidenceOk)&&Number(dynamic?.evidence?.count||0)>=2;
+    const dynamicEligible=dynamic?.isSingle===true&&dynamic?.scoreOk===true&&conditionEvidence&&dynamic?.weightOk!==false&&dynamic?.xBreakSingle!==true;
+    const reliable=eligible&&!fallback&&!evidence.blocked&&plan.reliable===true&&dynamicEligible;
     leg.confidencePlan={...plan,reliable,strategySingle:true,strategySingleFallback:!reliable,benterVeto:evidence.blocked,benter:evidence,
-      reason:!eligible?'TEK sert uygunluk kuralını geçemedi':evidence.blocked?'Benter değer vetosu · zorunlu şekil TEK, güvenilir değil':(!reliable?'Zorunlu şekil TEK · güvenilirliği doğrulanmadı':plan.reason)};
-    if(!eligible){coupon.error='TEK seçimi kilo/uygunluk kuralını geçemedi; kupon geçersiz.';coupon.singlePolicyConflict=true;}
-    audits.push({leg:leg.r?.leg,horseNo:String(h.horse_no),reliable,...evidence});
+      agfRank:rank,agfTop3Eligible:eligible,dynamicSingleAudit:{eligible:dynamicEligible,confidence:Number(dynamic?.confidence)||0,threshold:Number(dynamic?.threshold)||null,evidenceCount:Number(dynamic?.evidence?.count)||0},
+      reason:!eligible?'TEK uygun değil: AGF ilk üç/sert uygunluk kapısı':evidence.blocked?'Benter değer vetosu · zorunlu şekil TEK, güvenilir değil':(!reliable?'Zorunlu şekil TEK · güvenilirliği doğrulanmadı':plan.reason)};
+    if(!eligible){coupon.error='TEK seçimi AGF ilk üç/sert uygunluk kuralını geçemedi; kupon geçersiz.';coupon.singlePolicyConflict=true;}
+    audits.push({leg:leg.r?.leg,horseNo:String(h.horse_no),agfRank:rank,agfTop3Eligible:eligible,reliable,...evidence});
   }
   coupon.actualSingles=audits.length;
   coupon.reliableSingles=audits.filter(row=>row.reliable).length;
@@ -1646,7 +1665,7 @@ function minimumCostCoverage(chosen, unit, mode, budgetTL, forcedSingleIdx, forc
       return {r:x.r, baseScore:conditionSingleStrength(x.r,forcedHorse)||1, protectedFlag:true, picks:forcedPicks,
         allHorses:x.scored, strictPool:x.strictPool, ordered, displayOrder,coverageMode:mode,
           confidencePlan:{...plan, reliable:!(fallbackSingle||strategyFallback), strategySingle:true, strategySingleFallback:fallbackSingle||strategyFallback, strength:conditionSingleStrength(x.r,forcedHorse)||1,
-          reason:fallbackSingle?`Zorunlu yarış-öncesi lider TEK · TKP ${tkpRank} · R16 kanıt kapısı geçmedi`:strategyFallback?`${forcedHorse.__tkpStrategyFallbackKind==='alt'?'Sürpriz TKP 3–5':forcedHorse.__tkpStrategyFallbackKind==='normal'?'Normal TKP lider':'Uzman/Kulis'} strateji TEK'i · TKP sıra ${tkpRank}`:`Kupon stratejisi TEK · TKP ${tkpRank}${couponAgfSupported(forcedHorse)?' + AGF destekli':''}`}};
+          reason:fallbackSingle?`Zorunlu yarış-öncesi lider TEK · TKP ${tkpRank} · R16 kanıt kapısı geçmedi`:strategyFallback?`${forcedHorse.__tkpStrategyFallbackKind==='alt'?'Sürpriz AGF ilk üç':forcedHorse.__tkpStrategyFallbackKind==='normal'?'Normal TKP lider':'Uzman/Kulis'} strateji TEK'i · TKP sıra ${tkpRank}`:`Kupon stratejisi TEK · TKP ${tkpRank}${couponAgfSupported(forcedHorse)?' + AGF destekli':''}`}};
     }
 
     const difficultMin=difficultRaceMinimumCount(x);
@@ -2202,6 +2221,21 @@ if(typeof globalThis!=='undefined')globalThis.tkpCaptureCoverageAudit=tkpCapture
 function enforceCouponCostCap(legs, unit, capTL){
   tkpCaptureCoverageAudit("budget-before",legs,{capTL});
   const cap=Math.max(0,Number(capTL)||0);
+  for(const leg of legs||[]) if((leg?.coverageMode||'main')==='main') leg.tkpBudgetOmissionAudit=null;
+  const budgetOmissionAudit=(item,count)=>{
+    const leg=item?.leg;
+    if(!leg||(leg?.coverageMode||'main')!=='main')return;
+    const maxCount=Math.max(0,Number(item.maxCount)||0),selected=Math.max(0,Number(count)||0);
+    if(leg.protectedFlag){leg.tkpBudgetOmissionAudit={version:'ALTILI_BUDGET_OMISSION_V1',status:'PROTECTED_SINGLE',selectedCount:selected,availableCount:maxCount,horses:[]};return;}
+    const omitted=(item.ranked||[]).slice(Math.min(selected,maxCount),maxCount).map((h,i)=>({
+      horse_no:String(h?.horse_no||''),horse_name:String(h?.horse_name||''),mainRank:Math.min(selected,maxCount)+i+1,
+      score:Number.isFinite(Number(h?.score))?Number(h.score):null,
+      agf_rank:Number.isFinite(Number(h?.agf_rank))?Number(h.agf_rank):null,
+      tr_rank:Number.isFinite(Number(h?.tr_rank??h?.tr_sira))?Number(h.tr_rank??h.tr_sira):null,
+      ypuan:Number.isFinite(Number(h?.ypuan))?Number(h.ypuan):null,bmb:Number(h?.bmb)===1?1:0
+    })).filter(h=>h.horse_no);
+    leg.tkpBudgetOmissionAudit={version:'ALTILI_BUDGET_OMISSION_V1',status:omitted.length?'BUDGET_LIMITED':'NO_BUDGET_OMISSION',selectedCount:selected,availableCount:maxCount,capTL:cap,horses:omitted};
+  };
   const comboCount=()=>legs.reduce((n,l)=>n*Math.max(1,(l.picks||[]).length),1);
   const maxCombos=Math.max(0,Math.floor((cap+1e-9)/Math.max(.0001,Number(unit)||1)));
 
@@ -2319,7 +2353,7 @@ function enforceCouponCostCap(legs, unit, capTL){
       const count=Math.max(1,(leg.picks||[]).length);
       return {leg,ranked,options:[{count,utility:0}],preferred:count,minCount:count};
     }
-    return {leg,ranked,options,preferred,minCount};
+    return {leg,ranked,options,preferred,minCount,maxCount};
   });
 
   function runDp(usePreferredFloor){
@@ -2361,6 +2395,7 @@ function enforceCouponCostCap(legs, unit, capTL){
       const count=Math.max(1,item.minCount||1);
       leg.picks=ranked.slice(0,count);
       leg.optimizedCoverageCount=leg.picks.length;
+      budgetOmissionAudit(item,leg.picks.length);
     }
     const combos=comboCount(),cost=unit*combos;
     tkpCaptureCoverageAudit('budget-risk-floor',legs,{capTL:cap,cost});
@@ -2430,6 +2465,7 @@ function enforceCouponCostCap(legs, unit, capTL){
     combos=comboCount();cost=unit*combos;
     floorAdjusted=true;
   }
+  for(const item of prepared) budgetOmissionAudit(item,item.leg?.optimizedCoverageCount??item.leg?.picks?.length);
   tkpCaptureCoverageAudit('budget-after',legs,{capTL:cap,cost});
   return {legs,combos,cost,capTL:cap,capLimited,floorAdjusted,columnOptimization:'JOINT_LOG_COVERAGE_DP'};
 }
@@ -3364,7 +3400,7 @@ function buildSurpriseCoupon(raceResults,budgetTL,preparedRanked=null){
     }catch(_){ }
   }
   const capped=enforceCouponCostCap(built.legs,pick.unit,dynamicTarget);built={...built,...capped,cost:capped.cost,combos:capped.combos};
-  const coupon={typeKey:'alt',label:'💣 Sürpriz Altılı',legs:built.legs,unit:pick.unit,cost:built.cost,legCount:pick.L,budgetTL:dynamicTarget,maxBudgetTL:userCap,userCapTL:userCap,inputCapTL:userCap,leftover:round2ish(dynamicTarget-built.cost),reliableSingles:(built.legs||[]).filter(l=>(l.picks||[]).length===1).length,dynamicBudget:true,algorithmVersion:globalThis.TKP_V55_ALGORITHM_VERSION||'V55.2',trueSurprise:true,note:'Normal ve Uzman/Kulis motorundan bağımsız sürpriz portföyü: BMB/ODB, AGF kuyruk, Y.PUAN/VALUE ayrışması; TEK varsa yalnız AGF 3–5 + koşul/puan kanıtı ile.'};
+  const coupon={typeKey:'alt',label:'💣 Sürpriz Altılı',legs:built.legs,unit:pick.unit,cost:built.cost,legCount:pick.L,budgetTL:dynamicTarget,maxBudgetTL:userCap,userCapTL:userCap,inputCapTL:userCap,leftover:round2ish(dynamicTarget-built.cost),reliableSingles:(built.legs||[]).filter(l=>(l.picks||[]).length===1).length,dynamicBudget:true,algorithmVersion:globalThis.TKP_V55_ALGORITHM_VERSION||'V55.2',trueSurprise:true,note:'Normal ve Uzman/Kulis motorundan bağımsız sürpriz portföyü: BMB/ODB, AGF kuyruğu, Y.PUAN/VALUE ayrışması; TEK varsa yalnız AGF ilk üç + koşul/puan kanıtı ile.'};
   return tkpAttachAgfSinglePolicyMeta(coupon,'surprise');
 }
 
@@ -3550,7 +3586,7 @@ function tkpRoleSingleCandidate(leg,role,excluded=new Set()){
   const r=leg?.r||leg?.x?.r||{},pool=(leg?.allHorses?.length?leg.allHorses:(r.horses||[])).filter(h=>h&&!isNonRunner(h));
   const order=tkpRoleSingleOrder({...leg,allHorses:pool},role),x=leg?.x||{r,scored:pool};
   for(const h of order){
-    const no=String(h?.horse_no??'');if(!no||excluded.has(no)||!canBeCouponSingle(h))continue;
+    const no=String(h?.horse_no??'');if(!no||excluded.has(no)||!tkpAgfTop3SingleEligible(h,pool))continue;
     if(tkpBenterSingleEvidence(x,h,role==='alt'?'alt':(role==='expert'?'surprise':'main')).blocked)continue;
     const second=pool.filter(z=>String(z?.horse_no)!==no).sort((a,b)=>(Number(b?.altili_winner_score)||0)-(Number(a?.altili_winner_score)||0)||(Number(b?.score)||0)-(Number(a?.score)||0))[0]||null;
     let decision=null;try{decision=dynamicSingleDecision(x,h,second);}catch(_){ }
@@ -3561,7 +3597,7 @@ function tkpRoleSingleCandidate(leg,role,excluded=new Set()){
       continue;
     }
     const rank=tkpAgfRankForSinglePolicy(h,pool);
-    const rankOk=role==='alt'?tkpAgfSinglePolicyAllowsRank('surprise',rank):true;
+    const rankOk=tkpAgfSinglePolicyAllowsRank('normal',rank);
     if(rankOk&&decision?.isSingle===true&&decision?.scoreOk!==false&&decision?.weightOk!==false)return {h,governed:false,score:Number(decision.confidence)||0};
   }
   return null;
@@ -3580,6 +3616,19 @@ function tkpEnsureCouponShape(coupon,role){
     return difficulty.get(leg);
   };
   let current=singles();
+  // Sonraki bütçe/öğrenme adımları sıralama dışı bir atı TEK yaptıysa AGF ilk
+  // üçten uygun adayla değiştir; uygun aday yoksa ayağı çoklu bırak.
+  for(const leg of current){
+    const first=leg?.picks?.[0],pool=(leg?.allHorses?.length?leg.allHorses:leg?.r?.horses||[]).filter(h=>h&&!isNonRunner(h));
+    if(tkpAgfTop3SingleEligible(first,pool))continue;
+    const replacement=pool.filter(h=>tkpAgfTop3SingleEligible(h,pool))
+      .sort((a,b)=>tkpAgfRankForSinglePolicy(a,pool)-tkpAgfRankForSinglePolicy(b,pool))[0]||null;
+    if(replacement){leg.picks=[replacement];leg.confidencePlan={...(leg.confidencePlan||{}),reliable:false,strategySingleFallback:true,agfTop3Repair:true,reason:'AGF ilk üç TEK kilidi'};continue;}
+    const second=pool.find(h=>String(h?.horse_no)!==String(first?.horse_no))||null;
+    if(second){leg.picks=[first,second];leg.protectedFlag=false;leg.minCoverage=2;leg.maxCoverage=Math.max(2,Number(leg.maxCoverage)||2);
+      leg.confidencePlan={...(leg.confidencePlan||{}),strategySingle:false,agfTop3Repair:true,reason:'AGF ilk üçte TEK adayı yok; ayak çoklu bırakıldı'};}
+  }
+  current=singles();
   // Son bütçe/portföy adımları üçüncü bir TEK üretirse onu aynı ayağın rol
   // sırasındaki ikinci atıyla genişlet. İlk iki stratejik TEK olduğu gibi kalır.
   if(current.length>2){
@@ -3599,7 +3648,8 @@ function tkpEnsureCouponShape(coupon,role){
     const ranked=coupon.legs.map((leg,index)=>({leg,index,count:(leg?.picks||[]).length,difficulty:difficultyOf(leg)})).filter(z=>z.count>1).sort((a,b)=>a.difficulty-b.difficulty||a.index-b.index);
     for(const row of ranked){
       const candidate=tkpRoleSingleCandidate(row.leg,role,new Set());
-      const fallback=!candidate?(row.leg.picks||[]).find(h=>canBeCouponSingle(h)&&!tkpLegacyXKulisBreaksSingle(h)):null;
+      const pool=row.leg?.allHorses?.length?row.leg.allHorses:row.leg?.r?.horses||[];
+      const fallback=!candidate?(row.leg.picks||[]).find(h=>tkpAgfTop3SingleEligible(h,pool)):null;
       const chosen=candidate?.h||fallback;if(!chosen)continue;
       row.leg.picks=[chosen];row.leg.protectedFlag=true;row.leg.minCoverage=1;row.leg.maxCoverage=1;
       row.leg.confidencePlan={...(row.leg.confidencePlan||{}),strategySingle:true,strategySingleFallback:!candidate,reason:candidate?.governed?'Onaylı Uzman/Kulis TEK':(candidate?'Rol bazlı TEK':'Güvenli TEK fallback')};
@@ -4604,7 +4654,7 @@ function tkpFillCouponAllowedBudget(coupon){
 // kuponun atları 0.5 ile çarpılarak çeşitlendirme). Her kupon 1–2 TEK taşır. Kapatmak için
 // db.settings.prob_realloc=false.
 const TKP_PROB_REALLOC=Object.freeze({
-  version:'PROB-WIDTH-REALLOC-V1',disc:0.5,
+  version:'PROB-WIDTH-REALLOC-V2-AGF-TOP3-SINGLE',disc:0.5,
   model:Object.freeze({"mu": [1.761974, 0.295327, 0.267967, -0.0, 0.243301, 2.345848, 0.100154, 0.467946], "sd": [1.124709, 0.266426, 0.25883, 0.976143, 0.429075, 0.284255, 0.105474, 0.272696], "w": [1.060502, -0.109462, 0.036709, 0.152274, 0.051531, -0.067329, 0.08335, -0.015705], "b": -2.689673})
 });
 function tkpPrEnabled(){try{return !(typeof db!=='undefined'&&db?.settings?.prob_realloc===false);}catch(_){return true;}}
@@ -4677,8 +4727,8 @@ function tkpProbReallocSet(built){
       const u=b.map(o=>({h:o.h,p:o.p*(used[i].has(String(o.h.horse_no))?TKP_PROB_REALLOC.disc:1)}));
       const z=u.reduce((a,x)=>a+x.p,0)||1;u.forEach(x=>{x.p/=z;});
       u.sort((a,b)=>b.p-a.p);
-      u.singleIdx=u.findIndex(x=>canBeCouponSingle(x.h)&&!tkpLegacyXKulisBreaksSingle(x.h));
-      if(u.singleIdx<0)u.singleIdx=0;
+      const fullPool=base[i].map(x=>x.h);
+      u.singleIdx=u.findIndex(x=>tkpAgfTop3SingleEligible(x.h,fullPool));
       // Kullanıcının sert kuralı: 5+ atlı ayakta AGF ilk 5 ve payı >=%8 olan atlar kuponda olmalı.
       const req=u.filter(x=>{const ar=Number(x.h.agf_rank)||0,ag=Number(x.h.agf);return ar>=1&&ar<=5&&Number.isFinite(ag)&&ag>=8;});
       const reqSet=new Set(req.map(x=>String(x.h.horse_no)));
@@ -4808,6 +4858,8 @@ function tkpApplyFinalSurpriseTablePriority(built){
         const candidate=all.find(h=>equivalent(h,wanted))||wanted;
         const options=picks.map((h,index)=>({h,index}))
           .filter(z=>!rows.slice(0,Math.min(3,i+1)).some(row=>equivalent(row?.horse,z.h)))
+          // BH4-6 may use only a weak tail slot; never displace an AGF top-four horse.
+          .filter(z=>i<3||agfRank(z.h)>4)
           .filter(z=>!z.h?.is_single&&!z.h?.protectedFlag)
           .sort((a,b)=>{
             // Önce AGF 5+; ilk dörtten zayıf aday da çıkarılabilir.
@@ -4848,12 +4900,14 @@ function tkpBhWonConditions(){
   if(cache&&cache.sig===sig)return cache.set;
   const set=new Set();
   for(const r of d.races){
+    const conditionKey=tkpBhRuleCondKey(r);
+    if(set.has(conditionKey))continue;
     const horses=(r.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
     if(horses.length<6)continue;
     const w=horses.find(h=>Number(h.winner)===1||Number(h.finish_position)===1); if(!w)continue;
     let sr=[]; try{sr=tkpRankedSurpriseRows(r,horses)||[];}catch(_e){continue;}
     const winNo=tkpBhRuleGrp(w.horse_no);
-    if(sr.slice(0,4).some(x=>x&&x.horse&&tkpBhRuleGrp(x.horse.horse_no)===winNo))set.add(tkpBhRuleCondKey(r));
+    if(sr.slice(0,4).some(x=>x&&x.horse&&tkpBhRuleGrp(x.horse.horse_no)===winNo))set.add(conditionKey);
   }
   globalThis.__tkpBhWonCondCache={sig,set};
   return set;
@@ -5095,7 +5149,7 @@ function tkpFinalLearnedSingleOptimizer(coupon, role){
     if(!Array.isArray(leg.picks)||leg.picks.length!==1)continue;
     const current=leg.picks[0], race=leg.r||leg.x?.r||{};
     const pool=(leg.allHorses?.length?leg.allHorses:race.horses||[])
-      .filter(h=>h&&!isNonRunner(h)&&canBeCouponSingle(h)&&!tkpLegacyXKulisBreaksSingle(h));
+      .filter(h=>tkpAgfTop3SingleEligible(h,leg.allHorses?.length?leg.allHorses:race.horses||[]));
     if(!pool.length)continue;
     const maxTkp=Math.max(0.001,...pool.map(h=>Number(h.score)||0));
     const maxAgf=Math.max(0.001,...pool.map(h=>Number(h.agf)||0));
@@ -5112,17 +5166,38 @@ function tkpFinalLearnedSingleOptimizer(coupon, role){
     const best=scored[0];
     // Sadece anlamlı iyileşmede seçim değişir. Hafif farklarda güçlü mevcut
     // TEK korunur; geçmiş yarış sonucu veya yarış sonrası X kesinlikle okunmaz.
-    const changed=!!original&&best&&best.score>original.score+0.10;
+    const changed=!!best&&(!original||best.score>original.score+0.10);
     if(changed)leg.picks=[best.h];
     const selected=changed?best:(original||{h:current,score:0,track:null});
     leg.confidencePlan={...(leg.confidencePlan||{}),learnedSingleOptimizer:{
-      version:'TKP_3005',preRaceOnly:true,horseNo:String(selected.h.horse_no),
+      version:'TKP_3006_AGF_TOP3',preRaceOnly:true,horseNo:String(selected.h.horse_no),
       changed,previousHorseNo:String(current.horse_no),
       score:Number(selected.score.toFixed(4)),trackingSample:selected.track?.total||0,
       trackingRate:selected.track?.rate??null}};
     audit.push({leg:race.leg||null,horseNo:String(selected.h.horse_no),changed});
   }
-  coupon.learnedSingleOptimizerAudit={version:'TKP_3005',active:true,decisions:audit};
+  coupon.learnedSingleOptimizerAudit={version:'TKP_3006_AGF_TOP3',active:true,decisions:audit};
+  return coupon;
+}
+
+function tkpEnforceAgfTop3Singles(coupon){
+  if(!coupon||!Array.isArray(coupon.legs))return coupon;
+  let changed=false;
+  for(const leg of coupon.legs){
+    if(!Array.isArray(leg.picks)||leg.picks.length!==1)continue;
+    const current=leg.picks[0],race=leg.r||leg.x?.r||{};
+    const pool=(leg.allHorses?.length?leg.allHorses:race.horses||[]).filter(h=>h&&!isNonRunner(h));
+    if(tkpAgfTop3SingleEligible(current,pool))continue;
+    const allowed=pool.filter(h=>tkpAgfTop3SingleEligible(h,pool))
+      .sort((a,b)=>tkpAgfRankForSinglePolicy(a,pool)-tkpAgfRankForSinglePolicy(b,pool)||(Number(b.score)||0)-(Number(a.score)||0));
+    if(allowed.length){leg.picks=[allowed[0]];leg.confidencePlan={...(leg.confidencePlan||{}),reliable:false,strategySingleFallback:true,agfTop3Repair:true,reason:'Nihai AGF ilk üç TEK kilidi'};changed=true;continue;}
+    const second=pool.filter(h=>String(h?.horse_no)!==String(current?.horse_no))
+      .sort((a,b)=>tkpAgfRankForSinglePolicy(a,pool)-tkpAgfRankForSinglePolicy(b,pool)||(Number(b.score)||0)-(Number(a.score)||0))[0]||null;
+    if(second){leg.picks=[current,second];leg.protectedFlag=false;leg.minCoverage=2;leg.maxCoverage=Math.max(2,Number(leg.maxCoverage)||2);
+      leg.confidencePlan={...(leg.confidencePlan||{}),strategySingle:false,agfTop3Repair:true,reason:'AGF ilk üçte TEK adayı yok; ayak çoklu bırakıldı'};changed=true;}
+    else{leg.picks=[];leg.confidencePlan={...(leg.confidencePlan||{}),strategySingle:false,agfTop3Repair:true,reason:'AGF ilk üç dışında tek aday bulundu; TEK kaldırıldı'};coupon.minimumSingleUnmet=true;changed=true;}
+  }
+  if(changed&&typeof recalcCouponCost==='function')recalcCouponCost(coupon);
   return coupon;
 }
 
@@ -5138,9 +5213,11 @@ function tkpFinalLearnedSingleOptimizer(coupon, role){
         // Son guvenli secenek: mevcut altı ayakta en guclu yarisa-oncesi adayi tek yap.
         // Uygun bir aday bulunamiyorsa eksik aday uydurulmaz.
         const candidates=coupon.legs.map(leg=>{
-          const pool=(leg.ordered||leg.displayOrder||leg.allHorses||leg.r?.horses||[])
+          const fullPool=(leg.allHorses?.length?leg.allHorses:leg.r?.horses||[]).filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
+          const pool=(leg.ordered||leg.displayOrder||fullPool)
             .filter(h=>h&&!(typeof isNonRunner==='function'&&isNonRunner(h)));
-          const candidate=pool.find(h=>canBeCouponSingle(h))||pool[0];
+          const candidate=pool.filter(h=>tkpAgfTop3SingleEligible(h,fullPool))
+            .sort((a,b)=>tkpAgfRankForSinglePolicy(a,fullPool)-tkpAgfRankForSinglePolicy(b,fullPool))[0]||null;
           const score=Number(candidate?.score)||0;
           return {leg,candidate,score};
         }).filter(z=>z.candidate).sort((a,b)=>b.score-a.score);
@@ -5151,6 +5228,9 @@ function tkpFinalLearnedSingleOptimizer(coupon, role){
       coupon.minimumSingleEnforced=true;
     }
     tkpFinalLearnedSingleOptimizer(coupon,role);
+    tkpEnforceAgfTop3Singles(coupon);
+    tkpAuditFinalSingles(coupon,role==='expert'?'surprise':(role==='alt'?'alt':'main'));
+    tkpAttachAgfSinglePolicyMeta(coupon,role==='expert'?'surprise':(role==='alt'?'alt':'normal'));
     // TKP_3006: En az bir TEK kilitlendikten sonra maliyeti 2.500-3.000 TL
     // bandina yukselt. Var olan tekler tkpRaiseCouponCostToMinimum tarafindan
     // korunur; bu fonksiyon sadece diger ayaklara aday ekler.
@@ -6042,17 +6122,33 @@ function addHorseToCouponLeg(typeKey, legNo, horseNo){
   return true;
 }
 function addHorseToCouponLegFromBH(typeKey,legNo,horseNo){
-  if(tkpCouponLegIsSingle(typeKey,legNo))return false;
+  const leg=tkpCouponLeg(typeKey,legNo);
+  if(!Array.isArray(leg?.picks)||leg.picks.length<=1)return false;
   return addHorseToCouponLeg(typeKey,legNo,horseNo);
 }
 function addHorseToAllCoupons(legNo,horseNo){
-  let added=0;
+  return addHorseToEligibleCouponsFromBH(legNo,horseNo);
+}
+function addHorseToEligibleCouponsFromBH(legNo,horseNo,button){
+  if(tkpCouponMeetingLocked(lastRaceResults))return 0;
+  let added=0;const addedRoles=[];
+  const roleLabels={main:'Normal',alt:'Sürpriz',surprise:'Uzman + Kulis'};
   for(const typeKey of ['main','alt','surprise']){
-    // V55: Geniş kupon kaldırıldı. Manuel BH override üç canlı kupona uygulanır;
-    // otomatik TEK motorunun yarış-öncesi kuralı değişmez.
-    if(addHorseToCouponLeg(typeKey,legNo,horseNo))added++;
+    const res=activeCoupons?.[typeKey];
+    if(!res||res.error||res.disabled||res.readOnlySnapshot||!Array.isArray(res.legs))continue;
+    const leg=res.legs.find(l=>Number(l?.r?.leg)===Number(legNo));
+    // TEK kilidi kupon başınadır: o kupon korunur, daha geniş kuponlara BH eklenebilir.
+    if(!leg||!Array.isArray(leg.picks)||leg.picks.length<=1)continue;
+    if(addHorseToCouponLegFromBH(typeKey,legNo,horseNo)){added++;addedRoles.push(roleLabels[typeKey]);}
   }
-  if(added)tkpPersistFinalCouponSnapshot();
+  if(added){
+    tkpPersistFinalCouponSnapshot();
+    if(button){
+      button.textContent=`Eklendi · ${added} kupon`;button.disabled=true;
+      const statusCell=button.closest('tr')?.cells?.[6];
+      if(statusCell)statusCell.innerHTML=`<span style="color:#15803d;font-weight:800;">✓ Kupona eklendi: ${addedRoles.join(', ')}</span>`;
+    }
+  }
   return added;
 }
 // KULLANICI TALİMATI: Bir kuponda bir ayak TEK yapıldığında, o ayağın diğer (TEK
@@ -6063,7 +6159,7 @@ function addHorseToOtherCoupons(sourceTypeKey, legNo, horseNo){
   let added=0;
   for(const typeKey of ['main','alt','surprise']){
     if(typeKey===sourceTypeKey)continue;
-    if(addHorseToCouponLeg(typeKey,legNo,horseNo))added++;
+    if(addHorseToCouponLegFromBH(typeKey,legNo,horseNo))added++;
   }
   if(added)tkpPersistFinalCouponSnapshot();
   return added;
@@ -9344,6 +9440,7 @@ function saveAutomaticCouponSnapshot(raceResults,coupons,budgets,source){
           leg:Number(l?.x?.r?.leg??l?.r?.leg??l?.race?.leg)||0,
           picks:(l?.picks||[]).map(h=>String(h?.horse_no??h)).filter(Boolean),
           deepSurpriseProtection:{flag:l?.protectedFlag===true,nos:[...new Set([...(l?.protectedValueNos||[]),...(l?.protectedSignalNos||[]),...(l?.protectedBombNos||[]),...(l?.kulisPriorityNos||[])].map(String))]},
+          tkpBudgetOmissionAudit:l?.tkpBudgetOmissionAudit?JSON.parse(JSON.stringify(l.tkpBudgetOmissionAudit)):null,
           selectionOrderNos:l.selectionOrderNos||(l.ordered||l.allHorses||l.picks||[]).map(h=>String(h?.horse_no??h)).filter(Boolean)
         }))}
     ]))
@@ -9665,7 +9762,7 @@ async function tkpAutoSelfTest({force=false}={}){
     _tkpSelfTestRunning=true;
     const prev=db.settings?.auto_selftest||{};
     const sig=[(db.auto_coupon_log||[]).length,(db.races||[]).length].join('|');
-    if(!force&&prev.sig===sig)return {skipped:'same'};
+    if(!force&&prev.sig===sig&&prev.result)return {skipped:'same'};
     if(!db.settings||typeof db.settings!=='object')db.settings={};
     const since=prev.since||new Date().toISOString().slice(0,10); // karar penceresi: ilk çalıştırma günü ve sonrası
     const res=tkpRunSelfTest(since);
@@ -9683,7 +9780,14 @@ async function tkpAutoSelfTest({force=false}={}){
 }
 function tkpScheduleAutoSelfTest(delay=12000){
   clearTimeout(_tkpSelfTestTimer);
-  _tkpSelfTestTimer=setTimeout(()=>{(globalThis.requestIdleCallback||(f=>setTimeout(f,0)))(()=>{tkpAutoSelfTest();});},delay);
+  _tkpSelfTestTimer=setTimeout(()=>{
+    const run=async()=>{
+      const result=await tkpAutoSelfTest();
+      if(result?.skipped==='same')try{tkpRenderSelfTestPanel();}catch(_){ }
+    };
+    if(typeof window!=='undefined'&&typeof window.requestIdleCallback==='function')window.requestIdleCallback(run,{timeout:2500});
+    else setTimeout(run,0);
+  },delay);
 }
 function tkpSelfTestHtml(){
   const st=db?.settings?.auto_selftest;
@@ -9720,6 +9824,7 @@ if(typeof globalThis!=='undefined'){
   globalThis.tkpAutoSelfTest=tkpAutoSelfTest;globalThis.tkpRunSelfTest=tkpRunSelfTest;globalThis.tkpRenderSelfTestPanel=tkpRenderSelfTestPanel;globalThis.tkpSignTestLE=tkpSignTestLE;globalThis.tkpSetAgfScope=tkpSetAgfScope;
   if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
     window.addEventListener('tkp:db-changed',ev=>{const d=ev?.detail||{};if(d.resultsChanged||d.learningChanged||d.backtestChanged)tkpScheduleAutoSelfTest(20000);});
+    window.addEventListener('tkp:db-ready',()=>tkpScheduleAutoSelfTest(8000));
     window.addEventListener('load',()=>{tkpScheduleAutoSelfTest(20000);setTimeout(()=>{try{tkpRenderSelfTestPanel();}catch(_){ }},4000);});
   }
 }

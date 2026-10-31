@@ -20,6 +20,7 @@
   const MIN_CALIBRATION_EVENTS=20;
   const MAX_EXPERT_WEIGHT=.18;
   const MAX_EXPERT_RANK_BOOST=8;
+  const isLiveEvidenceClass=value=>value==='LIVE_PRE_RACE_LOCKED'||value==='LIVE_LATE_CAPTURE_ACCEPTED';
   let indexedLog=null;
   let indexedLength=-1;
   let raceIndex=new Map();
@@ -38,7 +39,7 @@
     couponReadCache=null;
     for(let i=0;i<rows.length;i++){
       const row=rows[i];
-      if(row?.evidence_class==='LIVE_PRE_RACE_LOCKED'){
+      if(isLiveEvidenceClass(row?.evidence_class)){
         if(isIntegrityValid(row)){
           cache.valid.push(row);
           const authorKey=JSON.stringify([row.source_type,row.author_id]);
@@ -63,7 +64,7 @@
       settings:settings(),valid:[],byAuthor:new Map(),byRace:new Map(),reports:new Map(),groups:new Map()};
     for(let i=0;i<rows.length;i++){
       const row=rows[i];
-      if(row?.evidence_class!=='LIVE_PRE_RACE_LOCKED')continue;
+      if(!isLiveEvidenceClass(row?.evidence_class))continue;
       if(isIntegrityValid(row)){
         cache.valid.push(row);
         const authorKey=JSON.stringify([row.source_type,row.author_id]);
@@ -210,7 +211,8 @@
       &&String(proof?.sha256||'').toLowerCase()===hash&&Number.isFinite(capturedMs)&&capturedMs===proofCaptured;
   }
   function timingClass({race,context,author,source,sourceRef,sourceSha,publishedAt,capturedAt}){
-    if(historicalRace(race,context)||resultKnown(race))return 'HISTORICAL_RESEARCH';
+    const lateCollectionAccepted=context?.normal_time_collection===true||context?.late_collection_accepted===true;
+    if(historicalRace(race,context)||resultKnown(race)&&!lateCollectionAccepted)return 'HISTORICAL_RESEARCH';
     const start=safeDate(raceStartAt(race,context));
     const captured=safeDate(capturedAt);
     const published=safeDate(publishedAt);
@@ -218,7 +220,7 @@
     if(!canonicalAuthor(author,source)||!sourceId(sourceRef)||!collectorProofValid(context,source,sourceRef,sourceSha,capturedAt)||!Number.isFinite(startMs)||!Number.isFinite(capturedMs)||!Number.isFinite(publishedMs))return 'UNVERIFIED_SHADOW';
     // A source captured after the start, or a post published after the start, has no
     // predictive standing.  Very old payloads are also rejected as stale evidence.
-    if(capturedMs>=startMs||publishedMs>=startMs||capturedMs<startMs-48*60*60*1000||publishedMs<startMs-72*60*60*1000)return 'UNVERIFIED_SHADOW';
+    if(capturedMs>=startMs&&!lateCollectionAccepted||publishedMs>=startMs&&!lateCollectionAccepted||capturedMs<startMs-48*60*60*1000||publishedMs<startMs-72*60*60*1000)return 'UNVERIFIED_SHADOW';
     return 'LIVE_PRE_RACE_LOCKED';
   }
   function appendEvidence(input={}){
@@ -268,7 +270,7 @@
       return cached.valid.filter(row=>(src===null||row.source_type===src)&&(who===null||row.author_id===who));
     }
     return log().filter(row=>{
-      if(row?.evidence_class!=='LIVE_PRE_RACE_LOCKED')return false;
+      if(!isLiveEvidenceClass(row?.evidence_class))return false;
       if(!isIntegrityValid(row)){try{row.integrity='HASH_MISMATCH';}catch(_){ }return false;}
       if(src&&row.source_type!==src)return false;
       if(who&&row.author_id!==who)return false;
@@ -371,7 +373,7 @@
     const rows=log(),groups=new Map();
     const candidates=cached?(cached.byRace.get(key)||[]):(eventRaceIndex().get(key)||[]).map(index=>rows[index]);
     for(const row of candidates){
-      if(!cached&&(row?.evidence_class!=='LIVE_PRE_RACE_LOCKED'||!isIntegrityValid(row)))continue;
+      if(!cached&&(!isLiveEvidenceClass(row?.evidence_class)||!isIntegrityValid(row)))continue;
       const w=weight(row.source_type,row.author_id);if(w<=0)continue;
       const groupKey=`${row.source_type}|${row.author_id}`;
       const group=groups.get(groupKey)||{source_type:row.source_type,author_id:row.author_id,weight:w,performance:performance(row.source_type,row.author_id),rows:[]};group.rows.push(row);groups.set(groupKey,group);
@@ -465,7 +467,7 @@
     for(const group of byAuthorRace.values()){
       const refs=[...group.refs];
       const out=appendEvidence({race:group.race,source_type:'x',source_id:refs.join('|'),author_id:group.author,captured_at:payload?.capturedAt,published_at:group.published.filter(Boolean).sort()[0]||'',race_start_at:(payload?.raceStartMap||{})[String(group.race?.leg)]||payload?.raceStartAt,
-        selections:[...group.selections],selection_refs:refs,runner_count:group.runner_count,direction:group.direction,mode:context?.mode,historicalMode:payload?.historicalMode===true});
+        selections:[...group.selections],selection_refs:refs,runner_count:group.runner_count,direction:group.direction,mode:context?.mode,historicalMode:payload?.historicalMode===true,normal_time_collection:true});
       appended+=out.appended;
     }
     return {appended,groups:byAuthorRace.size};
@@ -582,8 +584,7 @@
       // veya seçimi boş kayıtlar dışlanır. Sıkı "yarış öncesi kilitli" kuralı kupon kararlarında aynen geçerlidir;
       // burada yarış öncesi kanıtı olmayanlar ayrıca late_records olarak sayılır.
       if(!isIntegrityValid(row)||number(row.direction)!==1||!(row.selections||[]).length){stats.excluded_records++;continue;}
-      if(row.evidence_class!=='LIVE_PRE_RACE_LOCKED'||!Number.isFinite(start)||!Number.isFinite(captured)||!Number.isFinite(published)
-        ||captured>=start||published>=start)stats.late_records++;
+      if(!isLiveEvidenceClass(row.evidence_class)||!Number.isFinite(start)||!Number.isFinite(captured)||!Number.isFinite(published))stats.late_records++;
       const identity=text(row.race_key),context=contextKey(row);
       const candidates=byId.get(identity)||byContext.get(context);
       const race=candidates?.size===1?[...candidates][0]:null;

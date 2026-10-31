@@ -78,7 +78,7 @@ function bind(shotBtn){
                 const key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(r):'';
                 const log=Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log:[];
                 const frozen=key?log.find(z=>z?.race_key===key):null;
-                if(frozen?.candidates?.length)candidates=frozen.candidates.slice();
+                if(frozen?.candidates?.length)candidates=typeof tkpBombHunterThreeFromRows==='function'?tkpBombHunterThreeFromRows(r,frozen.candidates):frozen.candidates.slice();
                 else if(!(typeof raceHasConfirmedResult==='function'&&raceHasConfirmedResult(r.horses||[])) && typeof tkpBombHunterCandidates==='function'){
                   candidates=tkpBombHunterCandidates(r).map((z,i)=>({rank:i+1,horse_no:String(z.h?.horse_no||''),horse_name:z.h?.horse_name||'',score:Number(z.score)||0,kind:z.kind,category_rank:z.category_rank}));
                 }
@@ -97,10 +97,18 @@ function bind(shotBtn){
               const isApproved= date==='2026-10-14' && /İSTANBUL|ISTANBUL/i.test(hip) && alt===2;
               const snapshotStore=(db && typeof db==='object')?(db.settings||(db.settings={})):null;
               const snapshotKey=[date,hip.toUpperCase(),alt,String(r.leg||index+1)].join('|');
-              const snapshots=snapshotStore?(snapshotStore.bh_share_frozen_v1||(snapshotStore.bh_share_frozen_v1={})):null;
+              const snapshots=snapshotStore?(snapshotStore.bh_share_frozen_v2||(snapshotStore.bh_share_frozen_v2={})):null;
               // Onaylı ilk görsel, aynı gün için daha önce saklanmış hatalı bir
               // X ekranı önbelleğine yenilmemeli. Yalnız bu tarih/oturum için.
               let rescue=isApproved?null:(Array.isArray(snapshots?.[snapshotKey])?snapshots[snapshotKey]:null);
+              // Fotografi kullanici tarafindan onaylanmis tek toplantida, eski paylasim onbellegi yerine ayni gorunur BH sirasi kullanilir.
+              const photoMeeting=date==='2026-10-27'&&hip.toLocaleUpperCase('tr-TR').replace(/İ/g,'I')==='KOCAELI'&&alt===2&&Number(r.leg||index+1)===1;
+              if(photoMeeting&&typeof tkpBhOneriCandidates==='function'&&typeof tkpConditionRescueShareRows==='function'){
+                const ordered=x?.scored||r?.horses||[];
+                if(tkpBhOneriCandidates(r,ordered)?.photoApproved)rescue=tkpConditionRescueShareRows(x);
+              }
+              // Kayıtlı BH adayları varken paylaşım ve ayak tablosu aynı seçiciyi kullanır; eski paylaşım önbelleğine dokunulmaz.
+              if(!isApproved&&typeof tkpSurpriseConditionSnapshot==='function'&&tkpSurpriseConditionSnapshot(r)?.candidates?.length&&typeof tkpConditionRescueShareRows==='function')rescue=tkpConditionRescueShareRows(x);
               if(!rescue){
                 if(isApproved){
                   rescue=(approved20261014[Number(r.leg||index+1)]||[]).map(c=>({horse_no:c[0],horse_name:c[1],label:c[2],winRate:c[3]==null?null:c[3]/100}));

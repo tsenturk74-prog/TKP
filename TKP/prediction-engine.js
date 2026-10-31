@@ -711,7 +711,7 @@ function couponCandidateStrength(r, h, mode='main'){
   v += Math.min(0.25, historyStrengthForCandidate(h)*0.50);
   v += Math.min(0.20, Math.max(0,h.score||0)*0.08);
   // YPUAN (8 yorumcunun konsensüs puanı, 0-112 arası teorik üst sınır) -- BMB'ye benzer
-  // ama daha temkinli bir ağırlıkla katkı sağlar; 14 puan (tek bir TEK) ile 0,08,
+  // ama daha sınırlı bir ağırlıkla katkı sağlar; 14 puan (tek bir TEK) ile 0,08,
   // ~50 puan (birkaç yorumcu hemfikir) ile üst sınıra (0,30) yaklaşır.
   v += Math.min(0.30, Math.max(0, Number(h.ypuan)||0) / 50 * 0.30);
   // KG ve DERECE artık kupon adayı sıralamasında küçük ama gerçek bir ayraçtır.
@@ -872,7 +872,7 @@ function trGanyanRankContext(r, ordered=null){
 // Ganyan Canavarı TR puanı artık yalnız görüntüleme değildir. Ham puanı doğrudan
 // TKP skoruna eklemek yerine yarış içi sıra + AGF + ana sıra ayrışması kullanılır.
 // Böylece farklı gün/hipodromlardaki TR ölçekleri birbirine karıştırılmaz.
-function trGanyanProfileForHorse(r,h,ordered=null){
+function trGanyanProfileForHorse(r,h,ordered=null,options={}){
   if(!r||!h||isNonRunner(h)) return {key:'',score:0,hardCoupon:false,isBmb:false,labels:[]};
   const ctx=trGanyanRankContext(r,ordered);
   const no=String(h.horse_no||'');
@@ -925,7 +925,7 @@ function trGanyanProfileForHorse(r,h,ordered=null){
   // genel performans imzası üzerinden 33K+ prediction_log yan-bahis hash'ini ilk kez
   // senkron hesaplatabiliyor ve TR profil çağrısına 0.5-0.8 sn alakasız GC sıçraması
   // bindiriyordu. Tarihsel +0.10 kalibrasyon yalnız kritik yol DIŞINDA/arka planda gelir.
-  const allowHistorical=globalThis.__tkpCouponCriticalPath!==true;
+  const allowHistorical=options.historical!==false&&globalThis.__tkpCouponCriticalPath!==true;
   if(key && allowHistorical && typeof trGanyanBehaviorStatsForKey==='function'){
     try{ hist=trGanyanBehaviorStatsForKey(r,key); }catch(_){ hist=null; }
     if(hist&&hist.starts>=5){

@@ -99,19 +99,30 @@ function expandedPoolHash(rec){
  const s=JSON.stringify(p);let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return 'fnv1a32:'+h.toString(16).padStart(8,'0');
 }
 function validExpandedPool(rec){return rec?.bh_pool_version==='AGF6_EXPANDED_V1'&&rec.bh_pool_hash===expandedPoolHash(rec);}
-function get(log,r){const index=snapshotIndexes.get(log);if(index?.length===log.length)return index.byKey.get(raceKey(r))||null;return log.length<=500?log.find(x=>x.race_key===raceKey(r))||null:null;}
+function keepFirstCaptured(byKey,row){
+ const key=String(row?.race_key||'');if(!key)return;
+ const previous=byKey.get(key);if(!previous){byKey.set(key,row);return;}
+ const nextAt=Date.parse(row?.captured_at||''),previousAt=Date.parse(previous?.captured_at||'');
+ if(Number.isFinite(nextAt)&&Number.isFinite(previousAt)&&nextAt<previousAt)byKey.set(key,row);
+}
+function get(log,r){
+ const index=snapshotIndexes.get(log),key=raceKey(r);if(index?.length===log.length)return index.byKey.get(key)||null;
+ // While the async index is building, read the earliest captured snapshot directly.
+ // This avoids showing a freshly re-ranked live list for an archived race.
+ const byKey=new Map();for(const row of log||[])if(row?.race_key===key)keepFirstCaptured(byKey,row);return byKey.get(key)||null;
+}
 async function prepare(log){
  if(snapshotIndexes.get(log)?.length===log.length)return;
  if(preparing.has(log))return preparing.get(log);
  const task=(async()=>{const byKey=new Map();let length=log.length;
-  for(let at=0;at<length;at+=500){for(const row of log.slice(at,at+500))byKey.set(row.race_key,row);await new Promise(resolve=>setTimeout(resolve,0));length=log.length;}
+  for(let at=0;at<length;at+=500){for(const row of log.slice(at,at+500))keepFirstCaptured(byKey,row);await new Promise(resolve=>setTimeout(resolve,0));length=log.length;}
   snapshotIndexes.set(log,{length:log.length,byKey});})();
  preparing.set(log,task);try{await task;}finally{preparing.delete(log);}
 }
 function sync(log,r,rows,now=new Date().toISOString()){
  const key=raceKey(r),date=String(r.race_date||r.date||'').slice(0,10);
  let index=snapshotIndexes.get(log);
- if(!index||index.length!==log.length){index={length:log.length,byKey:new Map(log.map(x=>[x.race_key,x]))};snapshotIndexes.set(log,index);}
+  if(!index||index.length!==log.length){const byKey=new Map();for(const row of log)keepFirstCaptured(byKey,row);index={length:log.length,byKey};snapshotIndexes.set(log,index);}
  let rec=index.byKey.get(key);let changed=false;
  const resolved=(r.horses||[]).some(h=>Number(h.winner)===1||Number(h.finish_position)>0);
  if(!rec){

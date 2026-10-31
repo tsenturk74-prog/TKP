@@ -12,7 +12,7 @@
 (function(global){
   'use strict';
 
-  const VERSION='V1.1.333-WEEKLY-PAIRED-PORTFOLIO-GATE';
+  const VERSION='V1.1.334-WEEKLY-PAIRED-PORTFOLIO-BEST10';
   const TIME_ZONE='Europe/Istanbul';
   const DEFAULT_START='2026-08-23';
   const BASELINE_MODEL='PRODUCTION_CHAMPION_W1';
@@ -34,10 +34,11 @@
     consecutiveFourWeekWins:2,
     minSixfoldGain:0.03,
     minPortfolioGain:0.03,
+    minPortfolioRelativeGain:0.10,
     maxPairedSignP:0.05,
-    maxP1Loss:0.02,
-    maxAverageCostRatio:1.15,
-    maxPortfolioCostRatio:1.05,
+    maxP1Loss:0,
+    maxAverageCostRatio:1,
+    maxPortfolioCostRatio:1,
     minSideBetRoi:0.05,
     maxSinglePayoutShare:0.50,
     maxTop3PayoutShare:0.75,
@@ -69,12 +70,10 @@
   const EXACT_SIDE_BET_LIVE_SOURCES=new Set(['SON_AGF_OTOMATIK','YARISTAN_40_DK_ONCE','SISTEM_GUNCEL_VERI','X_GUNCEL_OTOMATIK']);
   const EXACT_SIDE_BET_MIN_EVENTS=PROMOTION_POLICY.minSideBetEvents;
   let _exactSideBetCache={rows:null,length:-1,locks:null,metrics:null,dirty:true};
+  let _weeklyModelTrackerMaintenancePending=false;
   const MODEL_CATALOG=Object.freeze([
     {id:BASELINE_MODEL,label:'Champion · Canlı Üretim',kind:'production',active:true},
     {id:'AGF_MARKET_W1',label:'AGF · Temiz Piyasa Referansı',kind:'agf'},
-    {id:'TOMMY_VISIBLE_W1',label:'Tommy · İlk Bakış',kind:'tommy'},
-    {id:'VALIDATED30_W1',label:'Challenger · Validated %30',kind:'validated30'},
-    {id:'TOMMY_CHALLENGER_W1',label:'Tommy + Challenger',kind:'tommy_challenger'},
     {id:'CHAMPION_AGF69_BH_W1',label:'Champion + AGF 6–9/BH',kind:'agf69'},
     {id:'V53_FUSION_W1',label:'V53 · Çoklu Model Füzyonu',kind:'v53'},
     {id:'SURPRISE_CORE_ONLINE_V53_ODS_W1',label:'Sürpriz · Core+Online+V53+ODS',kind:'surprise'},
@@ -82,7 +81,6 @@
     {id:'WINNER_RECOVERY_W1',label:'Challenger · Winner Recovery + Belirsizlik',kind:'winner_recovery'},
     {id:'EXPERT_OPTIMIZER_W1',label:'Challenger · Expert Ayrı Optimizer',kind:'expert_optimizer'},
     {id:'CATBOOST_RESCUE_W1',label:'Champion + CatBoost Rescue',kind:'catboost_rescue'},
-    {id:'CATBOOST_TOP1_SHADOW_W1',label:'CatBoost Top-1 Override · Shadow',kind:'catboost_top1_shadow',autoPromote:false},
     {id:'TABLE_LEARNED_ENSEMBLE_W1',label:'Tablo Öğrenimli Ensemble',kind:'table'}
   ]);
   // V55'in ilk ve karşılaştırılabilir dört çekirdek sırası. Bu liste yeni bir
@@ -528,8 +526,10 @@
       const product=exactSideBetProduct(spec.product);if(!['cifte','sirali_ikili','sirali_uclu','tabela','sirali_5li'].includes(product))continue;
       const refs=(Array.isArray(spec.races)?spec.races:(Array.isArray(spec.race_refs)?spec.race_refs:[])).map(r=>({...exactRaceReference(r,snapshot),captured_at:capturedAt}));if(!refs.length)continue;
       const starts=refs.map(ref=>String(ref.race_start_at||'')),resultKnown=(Array.isArray(spec.races)?spec.races:[]).some(r=>r?.result_known===true||hasResult(r));
+      const lateAccepted=sourceIsLive&&global.tkpLateResultFreeSnapshot?.(snapshot)===true;
       const liveLocked=sourceIsLive&&!resultKnown&&starts.length===refs.length&&starts.every(value=>Number.isFinite(Date.parse(value))&&Date.parse(capturedAt)<Date.parse(value));
-      const evidence_class=liveLocked?'LIVE_PRE_RACE_LOCKED':(resultKnown||!sourceIsLive?'HISTORICAL_RECONSTRUCTED':'UNVERIFIED_SHADOW');
+      const userAccepted=global.TKP_RECORD_ACCEPTANCE?.snapshot(snapshot)===true;
+      const evidence_class=liveLocked||lateAccepted?'LIVE_PRE_RACE_LOCKED':userAccepted?'USER_ACCEPTED':(resultKnown||!sourceIsLive?'HISTORICAL_RECONSTRUCTED':'UNVERIFIED_SHADOW');
       const lock_key=[String(snapshot?.meeting_uid||refs[0]?.meeting_uid||''),product,'primary',...refs.map(ref=>ref.race_ref_key)].join('|');
       if(cache.locks.has(lock_key))continue; // İlk zaman-kilitli üretim kazanır; güncelleme yok.
       const pools=(spec.pools||[]).map(pool=>(pool||[]).map(no=>String(no)).filter(Boolean)).filter(pool=>pool.length);
@@ -539,7 +539,7 @@
         pools,combinations:Number(spec.combinations)||exactPoolCount(pools),unit:Number(spec.unit)||sideUnit(product),cost:Number(spec.cost)||Math.round(exactPoolCount(pools)*sideUnit(product)*100)/100,
         payout_keys:(spec.payout_keys||[]).map(String),unordered:spec.unordered===true,use_ekuri:spec.use_ekuri===true,
         source_type:String(spec.source_type||snapshot?.source_type||(source==='X_GUNCEL_OTOMATIK'?'x':'system')),source_id:String(spec.source_id||snapshot?.source_id||''),author_id:String(spec.author_id||snapshot?.author_id||''),
-        evidence_class,pre_race_only:liveLocked?1:0,
+        evidence_class,pre_race_only:liveLocked||lateAccepted?1:0,normal_time_collection:lateAccepted?1:0,
         integrity:'LOCKED',evaluation:null,evaluated_at:null};
       row.immutable_snapshot_hash=exactTicketHash(row);row.hash_algorithm='FNV-1A-32';row.ticket_id=`SBT-${row.immutable_snapshot_hash.slice(-8)}-${log.length+added.length+1}`;
       log.push(row);added.push(row);cache.locks.add(lock_key);
@@ -630,7 +630,7 @@
   function exactSideBetMetrics(log){
     const cache=exactSideBetCache(log);if(cache.metrics&&!cache.dirty)return cache.metrics;
     const stats=new Map();for(const row of log){
-      if(Number(row?.primary)!==1||String(row?.evidence_class||'')!=='LIVE_PRE_RACE_LOCKED'||row?.integrity!=='RESOLVED'||Number(row?.evaluation?.known)!==1||String(row?.immutable_snapshot_hash||'')!==exactTicketHash(row))continue;
+      if(Number(row?.primary)!==1||!(['LIVE_PRE_RACE_LOCKED','USER_ACCEPTED'].includes(String(row?.evidence_class||'')))||row?.integrity!=='RESOLVED'||Number(row?.evaluation?.known)!==1||String(row?.immutable_snapshot_hash||'')!==exactTicketHash(row))continue;
       const product=exactSideBetProduct(row?.product),item=stats.get(product)||{events:0,financialEvents:0,hits:0,cost:0,return:0,returns:[],keys:new Set()};if(!row?.lock_key||item.keys.has(row.lock_key))continue;
       item.keys.add(row.lock_key);item.events++;item.hits+=Number(row?.evaluation?.hit)||0;
       // Finansal ROI yalnız sonuç biletle eşlenmiş ve ilgili ödeme kaydı gerçekten
@@ -675,7 +675,17 @@
     };
     return old!==JSON.stringify(rec.evaluation);
   }
-  function sync(raceResults){
+  function runWeeklyModelTrackerMaintenance(){
+    try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }
+    try{const agg=aggregate(),rows=promotionRows(agg);applyAutomaticPromotion(agg,rows);}catch(_){ }
+  }
+  function flushBulkMaintenance(){
+    if(!_weeklyModelTrackerMaintenancePending)return false;
+    _weeklyModelTrackerMaintenancePending=false;
+    runWeeklyModelTrackerMaintenance();
+    return true;
+  }
+  function sync(raceResults,options={}){
     const log=ensure();if(!log||!Array.isArray(raceResults))return false;
     const index=new Map(log.map(rec=>[String(rec?.event_model_key||''),rec])),start=trackerStart();let changed=false;
     // Exact yan bahis biletleri model-sırası proxy'sinden bağımsız çözülür. Bu çağrı
@@ -707,11 +717,11 @@
     // Haftalık model istatistikleri bütün yarış-öncesi kilitleri kullanır. Görsel tablo
     // yalnız son haftaları gösterebilir; kaynak kayıtlar sessizce son-N diye silinmez.
     if(changed){
-      try{if(typeof global.tkpInvalidateBackupCache==='function')global.tkpInvalidateBackupCache();}catch(_){ }
       // Sonuç geldikçe Champion/Challenger kapısını otomatik değerlendir. Yalnız
       // saat-kilitli ileri kayıtlar promotionRows() içine girebildiği için geçmiş
       // sonuçtan geriye dönük terfi üretilemez.
-      try{const agg=aggregate(),rows=promotionRows(agg);applyAutomaticPromotion(agg,rows);}catch(_){ }
+      if(options?.deferMaintenance===true)_weeklyModelTrackerMaintenancePending=true;
+      else runWeeklyModelTrackerMaintenance();
       // A central pre-race/result pipeline may synchronize many legs at once. In
       // that mode the caller owns one targeted persist; do not start a whole-DB
       // save for every leg/model update.
@@ -792,12 +802,15 @@
     return Math.max(0,Math.min(1,tail));
   }
   function pairedPortfolioEvidence(meetings,candidateId,championId=activeModelId()){
-    const eligible=(meetings||[]).filter(row=>row?.portfolio?.complete===1&&row?.week_end&&String(row.week_end)<todayIstanbul()&&String(row.week_start)>=String(trackerStart()));
+    const today=todayIstanbul(),start=new Date(today+'T12:00:00Z');start.setUTCMonth(start.getUTCMonth()-3);const from=start.toISOString().slice(0,10);
+    const eligible=(meetings||[]).filter(row=>row?.portfolio?.complete===1&&row.race_date>=from&&row.race_date<=today&&row?.week_end&&String(row.week_end)<today&&String(row.week_start)>=String(trackerStart()));
     const base=new Map(eligible.filter(row=>row.model_id===championId).map(row=>[row.meeting_key,row])),candidate=new Map(eligible.filter(row=>row.model_id===candidateId).map(row=>[row.meeting_key,row]));
     let both=0,challengerOnly=0,championOnly=0,neither=0,challengerHits=0,championHits=0,challengerCost=0,championCost=0;
-    for(const [key,b] of base){const c=candidate.get(key);if(!c)continue;const bh=Number(b?.portfolio?.hit)===1,ch=Number(c?.portfolio?.hit)===1;championHits+=bh?1:0;challengerHits+=ch?1:0;championCost+=Math.max(0,Number(b?.portfolio?.cost)||0);challengerCost+=Math.max(0,Number(c?.portfolio?.cost)||0);if(bh&&ch)both++;else if(ch)challengerOnly++;else if(bh)championOnly++;else neither++;}
+    for(const [key,b] of base){const c=candidate.get(key);if(!c||!(Number(b.portfolio.cost)>0)||!(Number(c.portfolio.cost)>0)||Number(c.portfolio.cost)>Number(b.portfolio.cost)+1e-8)continue;const bh=Number(b?.portfolio?.hit)===1,ch=Number(c?.portfolio?.hit)===1;championHits+=bh?1:0;challengerHits+=ch?1:0;championCost+=Number(b.portfolio.cost);challengerCost+=Number(c.portfolio.cost);if(bh&&ch)both++;else if(ch)challengerOnly++;else if(bh)championOnly++;else neither++;}
     const paired=both+challengerOnly+championOnly+neither,baseAvg=paired?championCost/paired:null,candidateAvg=paired?challengerCost/paired:null;
-    return {meetings:paired,both,challengerOnly,championOnly,neither,challengerHits,championHits,gain:paired?(challengerHits-championHits)/paired:0,signP:binomialTailHalf(challengerOnly,championOnly),
+    const challengerRate=paired?challengerHits/paired:0,championRate=paired?championHits/paired:0;
+    const relativeGain=championRate>0?(challengerRate/championRate)-1:null;
+    return {meetings:paired,both,challengerOnly,championOnly,neither,challengerHits,championHits,gain:paired?(challengerHits-championHits)/paired:0,relativeGain,signP:binomialTailHalf(challengerOnly,championOnly),
       championAvgCost:baseAvg,challengerAvgCost:candidateAvg,costRatio:baseAvg>0?candidateAvg/baseAvg:null,exactPaired:true};
   }
   function promotionRows(agg){
@@ -808,7 +821,7 @@
       const common=weekly.filter(w=>baseWeeks.has(w.week_key)).sort((a,b)=>String(a.week_start).localeCompare(String(b.week_start))).slice(-8);
       const blockWins=common.length===8?[common.slice(0,4),common.slice(4,8)].filter(block=>{let ch=0,cm=0,bh=0,bm=0;for(const w of block){const b=baseWeeks.get(w.week_key);ch+=w.portfolio.hits;cm+=w.portfolio.meetings;bh+=b.portfolio.hits;bm+=b.portfolio.meetings;}return cm>0&&bm>0&&ch/cm>bh/bm;}).length:0;
       const enough=z.completedWeekCount>=PROMOTION_POLICY.minCompletedWeeks&&z.races>=PROMOTION_POLICY.minResolvedRaces&&z.formats.normal.meetings>=PROMOTION_POLICY.minCompleteMeetings&&z.formats.normal.hits>=PROMOTION_POLICY.minSixfoldHits&&paired.meetings>=PROMOTION_POLICY.minPairedPortfolioMeetings&&paired.challengerHits>=PROMOTION_POLICY.minPortfolioHits;
-      const superior=enough&&model.autoPromote!==false&&model.id!==championId&&paired.gain>=PROMOTION_POLICY.minPortfolioGain&&paired.challengerOnly>paired.championOnly&&paired.signP<=PROMOTION_POLICY.maxPairedSignP&&cp1>=bp1-PROMOTION_POLICY.maxP1Loss&&(paired.costRatio==null||paired.costRatio<=PROMOTION_POLICY.maxPortfolioCostRatio)&&blockWins>=PROMOTION_POLICY.consecutiveFourWeekWins;
+      const superior=enough&&model.autoPromote!==false&&model.id!==championId&&paired.gain>=PROMOTION_POLICY.minPortfolioGain&&paired.relativeGain!==null&&paired.relativeGain>=PROMOTION_POLICY.minPortfolioRelativeGain&&paired.challengerOnly>paired.championOnly&&paired.signP<=PROMOTION_POLICY.maxPairedSignP&&cp1>=bp1-PROMOTION_POLICY.maxP1Loss&&(paired.costRatio==null||paired.costRatio<=PROMOTION_POLICY.maxPortfolioCostRatio)&&blockWins>=PROMOTION_POLICY.consecutiveFourWeekWins;
       z.status=model.id===championId?'AKTİF CHAMPION':superior?'TERFİ ADAYI':enough?'İZLE':'İZLE';z.sixfoldRate=c6;z.portfolioRate=z.portfolio.meetings?z.portfolio.hits/z.portfolio.meetings:0;z.p1Rate=cp1;z.avgCost=Number.isFinite(cCost)?cCost:null;z.pairedPortfolio=paired;z.autoPromoted=false;
       z.consecutiveBlockWins=blockWins;
     }
@@ -967,8 +980,8 @@
         ||((num(pb.challengerOnly,0)-num(pb.championOnly,0))-(num(pa.challengerOnly,0)-num(pa.championOnly,0)))
         ||(a.active===b.active?0:(a.active?-1:1));
     });
-    const promoRows=promoView.map(z=>{const ref=z.active&&reference?`<small>V46 arşiv: ${historicalRaces}/${PROMOTION_POLICY.minResolvedRaces} koşu · ${historicalMeetings}/${PROMOTION_POLICY.minCompleteMeetings} Altılı · Normal ${historicalNormal.hits||0}/${historicalNormal.meetings||0}</small>`:'',paired=z.pairedPortfolio||{};const histHit=z.active?(historicalNormal.hits||0):null,histMeet=z.active?(historicalNormal.meetings||0):null;const archRace=z.active?historicalRaces:'—',archMeet=z.active?historicalMeetings:'—',archNormal=z.active?`${histHit}/${histMeet}`:'—';return `<tr><td style="text-align:left!important"><b>${escHtml(z.model_label)}</b>${ref}</td><td>${escHtml(z.status)}</td><td class="num">${z.completedWeekCount||0}/${PROMOTION_POLICY.minCompletedWeeks}</td><td class="num">${z.races} canlı / ${archRace} arşiv</td><td class="num">${paired.meetings?paired.meetings:'—'} canlı / ${archMeet} arşiv</td><td class="num">${analysisDashIfNoSample(paired.challengerHits,paired.meetings)}/${paired.meetings||'—'}<small>arşiv Normal ${archNormal}</small></td><td class="num">${paired.meetings?`+${paired.challengerOnly||0} / −${paired.championOnly||0}`:'—'}<small>${paired.meetings?'p='+Number(paired.signP??1).toFixed(3):'eş örnek yok'}</small></td><td class="num">${pct(z.p1,z.races)}</td><td>${z.status==='AKTİF CHAMPION'?'Canlı':(z.status==='TERFİ ADAYI'?'Otomatik kapı':'İzleme')}</td></tr>`;}).join('');
-    return `<div class="card tkpWeeklyModelTracker" style="border-left:5px solid #7c3aed;margin:10px 0;"><h2 style="margin:0 0 5px;">🗓️ Haftalık Algoritma Takibi</h2>${freshnessLine}${agfNote}<p class="muted" style="margin:0 0 8px;">Eski arşiv yalnız araştırma referansıdır. Canlı Champion/challenger karşılaştırması aynı yarışlarda, TJK program saatinden önce kilitlenen değişmez snapshotlarla yapılır; kalite kapılarının tamamı geçilirse otomatik terfi vardır; geçilmezse mevcut Champion korunur.</p><div class="row" style="gap:8px;margin-bottom:8px;"><span class="badge">Arşiv ${Number(reference?.dataset?.archive_meetings)||0} dosya/toplantı</span><span class="badge">Arşiv koşu ${Number(reference?.dataset?.archive_races)||0}</span><span class="badge">Güvenli tam Altılı ${historicalMeetings}</span><span class="badge">Canlı sonuçlanan ${agg.resolved}</span><span class="badge">Saat kilitli ${agg.eligibleResolved}</span><span class="badge">Otomatik terfi AÇIK · korumalı</span></div><h3 style="margin:8px 0 5px;">Doğrulanmış tarihsel arşiv · V46 gölge referansı</h3>${historicalReferenceHTML(reference)}${challengerAuditHTML()}<h3 style="margin:10px 0 5px;">Canlı haftalık karşılaştırma</h3><div class="tableWrap compactBacktest"><table style="min-width:1180px"><thead><tr><th>Hafta</th><th>Algoritma</th><th>Durum</th><th>Koşu</th><th>P1</th><th>İlk3</th><th>İlk5</th><th>Normal 6/6</th><th>Sürpriz 6/6</th><th>Uzman 6/6</th><th>3 kupon 6/6</th><th>Ort. Normal maliyet</th></tr></thead><tbody>${weekRows||'<tr><td colspan="12" class="empty">Canlı saat kilitli örnek henüz yok; yukarıdaki tarihsel arşiv hazırdır.</td></tr>'}</tbody></table></div><h3 style="margin:10px 0 5px;">Sonuç sonrası öğrenme trendi</h3><p class="muted" style="margin:0 0 6px;">Yarış bittikten sonra yüklenen doğrulanmış sonuçlar burada tarih sırasıyla görünür. Bu satırlar algoritmanın yeni veriyi öğrenme kapsamını gösterir; canlı/saat-kilitli başarı oranına karıştırılmaz.</p>${postRaceLearningTrendHTML()}<h3 style="margin:10px 0 5px;">Champion terfi kapısı · canlı kanıt · eş yarış</h3><div class="tableWrap compactBacktest"><table style="min-width:1040px"><thead><tr><th>Algoritma</th><th>Karar</th><th>Tam hafta</th><th>Koşu (canlı / arşiv)</th><th>Eş Altılı (canlı / arşiv)</th><th>3 kupon 6/6 / arşiv ref.</th><th>Aday+/Champion−</th><th>P1</th><th>Uygulama</th></tr></thead><tbody>${promoRows}</tbody></table></div><p class="muted" style="margin:7px 0 0;font-size:10.5px;">Terfi incelemesi için en az ${PROMOTION_POLICY.minCompletedWeeks} tam hafta, ${PROMOTION_POLICY.minResolvedRaces} koşu, aynı ${PROMOTION_POLICY.minPairedPortfolioMeetings} Altılı üzerinde ≥%${Math.round(PROMOTION_POLICY.minPortfolioGain*100)} net portföy farkı, eşlenik p≤${PROMOTION_POLICY.maxPairedSignP} ve maliyet/P1 koruması birlikte gerekir. Terfi kararı canlı kanıtla verilir; kullanılabilir geçmiş snapshot/arşiv kanıtı aynı tabloda ayrıca referans olarak gösterilir ve sıfır veri gibi saklanmaz.</p></div>`;
+    const promoRows=promoView.map(z=>{const ref=z.active&&reference?`<small>V46 arşiv: ${historicalRaces}/${PROMOTION_POLICY.minResolvedRaces} koşu · ${historicalMeetings}/${PROMOTION_POLICY.minCompleteMeetings} Altılı · Normal ${historicalNormal.hits||0}/${historicalNormal.meetings||0}</small>`:'',paired=z.pairedPortfolio||{};const histHit=z.active?(historicalNormal.hits||0):null,histMeet=z.active?(historicalNormal.meetings||0):null;const archRace=z.active?historicalRaces:'—',archMeet=z.active?historicalMeetings:'—',archNormal=z.active?`${histHit}/${histMeet}`:'—';const relative=paired.relativeGain==null?'—':`${paired.relativeGain>=0?'+':''}${(paired.relativeGain*100).toFixed(1)}%`;return `<tr><td style="text-align:left!important"><b>${escHtml(z.model_label)}</b>${ref}</td><td>${escHtml(z.status)}</td><td class="num">${z.completedWeekCount||0}/${PROMOTION_POLICY.minCompletedWeeks}</td><td class="num">${z.races} canlı / ${archRace} arşiv</td><td class="num">${paired.meetings?paired.meetings:'—'} canlı / ${archMeet} arşiv</td><td class="num">${analysisDashIfNoSample(paired.challengerHits,paired.meetings)}/${paired.meetings||'—'}<small>arşiv Normal ${archNormal}</small></td><td class="num">${paired.meetings?`+${paired.challengerOnly||0} / −${paired.championOnly||0}`:'—'}<small>${paired.meetings?`göreli ${relative} · p=${Number(paired.signP??1).toFixed(3)}`:'eş örnek yok'}</small></td><td class="num">${pct(z.p1,z.races)}</td><td>${z.status==='AKTİF CHAMPION'?'Canlı':(z.status==='TERFİ ADAYI'?'Otomatik kapı':'İzleme')}</td></tr>`;}).join('');
+    return `<div class="card tkpWeeklyModelTracker" style="border-left:5px solid #7c3aed;margin:10px 0;"><h2 style="margin:0 0 5px;">🗓️ Haftalık Algoritma Takibi</h2>${freshnessLine}${agfNote}<p class="muted" style="margin:0 0 8px;">Eski arşiv yalnız araştırma referansıdır. Canlı Champion/challenger karşılaştırması aynı yarışlarda, TJK program saatinden önce kilitlenen değişmez snapshotlarla yapılır; kalite kapılarının tamamı geçilirse otomatik terfi vardır; geçilmezse mevcut Champion korunur.</p><div class="row" style="gap:8px;margin-bottom:8px;"><span class="badge">Arşiv ${Number(reference?.dataset?.archive_meetings)||0} dosya/toplantı</span><span class="badge">Arşiv koşu ${Number(reference?.dataset?.archive_races)||0}</span><span class="badge">Güvenli tam Altılı ${historicalMeetings}</span><span class="badge">Canlı sonuçlanan ${agg.resolved}</span><span class="badge">Saat kilitli ${agg.eligibleResolved}</span><span class="badge">Otomatik terfi AÇIK · korumalı</span></div><h3 style="margin:8px 0 5px;">Doğrulanmış tarihsel arşiv · V46 gölge referansı</h3>${historicalReferenceHTML(reference)}${challengerAuditHTML()}<h3 style="margin:10px 0 5px;">Canlı haftalık karşılaştırma</h3><div class="tableWrap compactBacktest"><table style="min-width:1180px"><thead><tr><th>Hafta</th><th>Algoritma</th><th>Durum</th><th>Koşu</th><th>P1</th><th>İlk3</th><th>İlk5</th><th>Normal 6/6</th><th>Sürpriz 6/6</th><th>Uzman 6/6</th><th>3 kupon 6/6</th><th>Ort. Normal maliyet</th></tr></thead><tbody>${weekRows||'<tr><td colspan="12" class="empty">Canlı saat kilitli örnek henüz yok; yukarıdaki tarihsel arşiv hazırdır.</td></tr>'}</tbody></table></div><h3 style="margin:10px 0 5px;">Sonuç sonrası öğrenme trendi</h3><p class="muted" style="margin:0 0 6px;">Yarış bittikten sonra yüklenen doğrulanmış sonuçlar burada tarih sırasıyla görünür. Bu satırlar algoritmanın yeni veriyi öğrenme kapsamını gösterir; canlı/saat-kilitli başarı oranına karıştırılmaz.</p>${postRaceLearningTrendHTML()}<h3 style="margin:10px 0 5px;">Champion terfi kapısı · canlı kanıt · eş yarış</h3><div class="tableWrap compactBacktest"><table style="min-width:1040px"><thead><tr><th>Algoritma</th><th>Karar</th><th>Tam hafta</th><th>Koşu (canlı / arşiv)</th><th>Eş Altılı (canlı / arşiv)</th><th>3 kupon 6/6 / arşiv ref.</th><th>Aday+/Champion−</th><th>P1</th><th>Uygulama</th></tr></thead><tbody>${promoRows}</tbody></table></div><p class="muted" style="margin:7px 0 0;font-size:10.5px;">Terfi incelemesi için en az ${PROMOTION_POLICY.minCompletedWeeks} tam hafta, ${PROMOTION_POLICY.minResolvedRaces} koşu, aynı ${PROMOTION_POLICY.minPairedPortfolioMeetings} Altılı üzerinde ≥%${Math.round(PROMOTION_POLICY.minPortfolioGain*100)} mutlak ve ≥%${Math.round(PROMOTION_POLICY.minPortfolioRelativeGain*100)} göreli fark, eşlenik p≤${PROMOTION_POLICY.maxPairedSignP} ve maliyet/P1 koruması birlikte gerekir. Terfi kararı canlı kanıtla verilir; kullanılabilir geçmiş snapshot/arşiv kanıtı aynı tabloda ayrıca referans olarak gösterilir ve sıfır veri gibi saklanmaz.</p></div>`;
   }
 
   global.TKP_WEEKLY_MODEL_TRACKER_VERSION=VERSION;
@@ -981,6 +994,7 @@
   global.tkpWeeklyModelTrackerEnsure=ensure;
   try{if(typeof global.addEventListener==='function')global.addEventListener('load',()=>setTimeout(()=>{try{ensure();}catch(_){ }},8000));}catch(_){ }
   global.tkpWeeklyModelTrackerSync=sync;
+  global.tkpWeeklyModelTrackerFlushBulkMaintenance=flushBulkMaintenance;
   global.tkpWeeklyModelTrackerAttachCouponSnapshot=attachCouponSnapshot;
   global.tkpWeeklyModelTrackerAppendExactSideBetTickets=appendExactSideBetTickets;
   global.tkpWeeklyModelTrackerResolveExactSideBetTickets=resolveExactSideBetTickets;

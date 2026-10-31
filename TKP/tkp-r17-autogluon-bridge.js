@@ -1,7 +1,35 @@
 'use strict';
 /* TKP R17 AutoGluon bridge. Prediction payload is shadow-only unless promotion_gate.pass=true. */
 (function(global){
-  const state={schema:null,modelId:null,promotionGate:null,rows:new Map(),loadedAt:null};
+  const SIDE_CAR_RETRY_MS=60_000;
+  const state={schema:null,modelId:null,promotionGate:null,rows:new Map(),loadedAt:null,sidecarConfigured:null,sidecarReadinessChecked:false,sidecarAvailable:null,sidecarRetryAt:0,sidecarUnavailableWarned:false};
+  function tkpR17LoadSidecarReadiness(){
+    const origin=String(global.location?.origin||'');
+    if(!origin||origin==='null'||typeof global.fetch!=='function'){
+      state.sidecarConfigured=false;state.sidecarReadinessChecked=true;state.sidecarAvailable=false;
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(global.fetch(`${origin}/tkp/r17-sidecar-status.json`,{cache:'no-store'}))
+      .then(response=>response?.ok?response.json():null)
+      .then(payload=>{
+        state.sidecarConfigured=payload?.schema==='TKP_R17_SIDECAR_STATUS_V1'&&payload?.configured===true;
+        state.sidecarReadinessChecked=true;
+        if(!state.sidecarConfigured)state.sidecarAvailable=false;
+        return state.sidecarConfigured;
+      })
+      .catch(()=>{state.sidecarConfigured=false;state.sidecarReadinessChecked=true;state.sidecarAvailable=false;return false;});
+  }
+  state.sidecarReadinessPromise=tkpR17LoadSidecarReadiness();
+  function tkpR17SidecarUnavailable(error){
+    const message=String(error?.message||error||'');
+    return /failed to fetch|networkerror|load failed|econnrefused|connection refused|net::err_/i.test(message);
+  }
+  function tkpR17NoteSidecarUnavailable(error){
+    if(!tkpR17SidecarUnavailable(error))return false;
+    state.sidecarAvailable=false;
+    state.sidecarRetryAt=Date.now()+SIDE_CAR_RETRY_MS;
+    return true;
+  }
   const no=h=>String(h?.horse_no??h?.horseNo??'').trim();
   const raceKey=r=>String(r?.race_uid||(r?.meeting_uid?`${r.meeting_uid}|${r?.leg??''}|${r?.id??''}`:null)||`${r?.race_date||''}|${r?.hippodrome||''}|${r?.file_id||''}|${r?.leg||''}|${r?.id||''}`);
   const key=(r,h)=>`${raceKey(r)}|${no(h)}`;
@@ -74,12 +102,19 @@
   async function tkpR17ScoreLiveRaces(races,options={}){
     const list=Array.isArray(races)?races:[];
     if(!list.length) return {loaded:0,skipped:true,reason:'Koşu yok'};
+    if(state.sidecarConfigured!==true)return {loaded:0,skipped:true,reason:'R17 model/runtime hazır değil'};
+    const retryInMs=state.sidecarRetryAt-Date.now();
+    if(retryInMs>0)return {loaded:0,skipped:true,reason:'R17 sidecar çevrimdışı',retryInMs};
     const endpoint=String(options.endpoint||'http://127.0.0.1:3763/predict');
     const requestBody=JSON.stringify({schema:'TKP_R17_LIVE_RACES_V1',races:list});
-    const response=await global.fetch(endpoint,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:requestBody
-    });
+    let response;
+    try{
+      response=await global.fetch(endpoint,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:requestBody
+      });
+    }catch(error){tkpR17NoteSidecarUnavailable(error);throw error;}
+    state.sidecarAvailable=true;state.sidecarRetryAt=0;state.sidecarUnavailableWarned=false;
     if(!response||!response.ok) throw new Error(`R17 sidecar HTTP ${response?.status||'ERR'}`);
     const payload=await response.json();
     // Do not associate an older DS response with inputs edited while scoring.
@@ -94,15 +129,22 @@
   function tkpR17ScheduleLiveScore(races,options={}){
     const list=Array.isArray(races)?races:[];
     if(!list.length) return {scheduled:false,reason:'Koşu yok'};
+    if(state.sidecarConfigured!==true)return {scheduled:false,skipped:true,reason:state.sidecarReadinessChecked?'R17 model/runtime hazır değil':'R17 hazırlık durumu bekleniyor'};
+    const retryInMs=state.sidecarRetryAt-Date.now();
+    if(retryInMs>0)return {scheduled:false,skipped:true,reason:'R17 sidecar çevrimdışı',retryInMs};
     const delay=Math.max(0,Number(options.delayMs)||0);
     global.setTimeout(()=>{
       Promise.resolve(tkpR17ScoreLiveRaces(list,options)).catch(error=>{
+        if(tkpR17NoteSidecarUnavailable(error)){
+          if(!state.sidecarUnavailableWarned){state.sidecarUnavailableWarned=true;try{global.console?.warn?.('[TKP R17] Hazır bildirilen sidecar erişilemiyor; 60 sn sonra tekrar denenecek. R16.94 devam ediyor.',error?.message||error);}catch(_){}}
+          return;
+        }
         try{global.console?.warn?.('[TKP R17] Canlı sidecar kullanılamadı; R16.94 devam ediyor.',error?.message||error);}catch(_){}
       });
     },delay);
     return {scheduled:true,rows:list.reduce((n,r)=>n+(Array.isArray(r?.horses)?r.horses.length:0),0)};
   }
-  function tkpR17Status(){return {schema:state.schema,model_id:state.modelId,loaded:state.rows.size,loadedAt:state.loadedAt,active:tkpR17IsActive(),promotion_gate:state.promotionGate};}
+  function tkpR17Status(){return {schema:state.schema,model_id:state.modelId,loaded:state.rows.size,loadedAt:state.loadedAt,active:tkpR17IsActive(),promotion_gate:state.promotionGate,sidecar_configured:state.sidecarConfigured,sidecar_readiness_checked:state.sidecarReadinessChecked,sidecar_available:state.sidecarAvailable};}
   global.tkpR17LoadPredictionPayload=tkpR17LoadPredictionPayload;
   global.tkpR17IsActive=tkpR17IsActive;
   global.tkpR17PWinForHorse=tkpR17PWinForHorse;

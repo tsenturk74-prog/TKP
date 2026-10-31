@@ -33,10 +33,7 @@
  // Yalnız bugünkü tarih + hipodrom + koşu + aktif at eşleşmesi puana girer.
  // Tekil at adıyla boşa dönen X araması kullanılmaz; takip/sayfa postları yerelde eşleşir.
  function postAllowed(post,payload,races,mode){
-  const strict=Number(payload?.schemaVersion)>=3,cutoff=Date.parse(String(payload?.raceStartAt||'')),postMs=Date.parse(String(post?.datetime||'')),historical=mode==='historical'||payload?.historicalMode===true,windowHours=Math.max(6,Math.min(72,Number(payload?.historicalWindowHours)||36));
-  if(strict&&(!Number.isFinite(cutoff)||!Number.isFinite(postMs)||(!historical&&(postMs>=cutoff||postMs<cutoff-windowHours*60*60_000))))return false;
-  const captured=Date.parse(String(payload?.capturedAt||''));
-  if(strict&&Number.isFinite(captured)&&postMs>captured)return false;
+  const strict=Number(payload?.schemaVersion)>=3,postMs=Date.parse(String(post?.datetime||''));
   if(strict){
    const raceDate=String(races?.[0]?.race_date||''),explicit=mentionedDate(post?.text),local=istanbulDate(post?.datetime);
    if(explicit&&raceDate&&explicit!==raceDate)return false;
@@ -58,7 +55,7 @@
   const rows=typeof lastRaceResults!=='undefined'&&Array.isArray(lastRaceResults)?lastRaceResults:[];
   return rows.map(x=>x?.r).filter(r=>Array.isArray(r?.horses)&&r.horses.length);
  }
- const X_PERSIST_FIELDS=['x_base_ypuan','x_base_score','x_base_rank','x_ypuan_delta','x_tkp_score_delta','x_final_ypuan','x_final_tkp_score','x_final_rank','x_kulis_score','x_kulis_direction','x_kulis_comments','x_kulis_single_candidate','x_kulis_applied','x_force_coupon','x_break_single','x_kulis_schema_version','x_kulis_captured_at','x_kulis_race_start_at','x_kulis_training_eligible','x_kulis_provenance'];
+ const X_PERSIST_FIELDS=['x_recorded_comments','x_base_ypuan','x_base_score','x_base_rank','x_ypuan_delta','x_tkp_score_delta','x_final_ypuan','x_final_tkp_score','x_final_rank','x_kulis_score','x_kulis_direction','x_kulis_comments','x_kulis_single_candidate','x_kulis_applied','x_force_coupon','x_break_single','x_kulis_schema_version','x_kulis_captured_at','x_kulis_race_start_at','x_kulis_training_eligible','x_kulis_provenance'];
  function persistXOverlayToStoredRaces(races){
   if(typeof db==='undefined'||!Array.isArray(db?.races))return 0;
   let changed=0;
@@ -99,18 +96,9 @@
   if(exact)return exact;
   return rows.find((x,i)=>Number(x?.r?.leg)===raceLeg(r,index)&&trFold(x?.r?.hippodrome)===trFold(r?.hippodrome))||null;
  }
- // V1.1.336 (kullanıcı talebi · DİKKAT: VERİ SIZINTISI): Yarış başladıktan SONRA
- // toplanan X yorumları da tahmine/puana/öğrenmeye uygulanır. true iken yarış-başlangıç
- // kesme (cutoff) korumaları devre dışı kalır; backtest ve öğrenme geçerliliği bundan
- // etkilenir (model yarış-sonrası bilgiyi görür). Eski güvenli davranış için false yap.
- const TKP_X_APPLY_LATE_POSTS=false;
  function raceIsEligible(payload,race,index,mode){
   const set=targetLegSet(payload);if(set&&!set.has(raceLeg(race,index)))return false;
-  if(TKP_X_APPLY_LATE_POSTS)return true;
-  const map=payload?.raceStartMap&&typeof payload.raceStartMap==='object'?payload.raceStartMap:{};
-  const cutoff=Date.parse(String(map[String(raceLeg(race,index))]||payload?.raceStartAt||''));
-  const captured=Date.parse(String(payload?.capturedAt||''));
-  return (mode==='historical'||payload?.historicalMode===true)|| (Number.isFinite(cutoff)&&Number.isFinite(captured)&&captured<cutoff);
+  return true;
  }
  function legSegments(text){
   const lines=String(text||'').split(/\r?\n+/).map(x=>x.trim()).filter(Boolean),out=[];
@@ -128,13 +116,11 @@
  }
  function sentiment(text){const f=trFold(text),positive=posRx.test(f),negative=negRx.test(f);if(positive===negative)return null;return {direction:positive?1:-1,strong:strongRx.test(f),folded:f};}
  function exactMentions(post,races,payload=null,mode='live'){
-  const f=trFold(post.text),segments=legSegments(post.text),singleLeg=segments.length===1?segments[0].leg:contextLeg(post.text),out=[];
+   const f=trFold(post.text),segments=legSegments(post.text),singleLeg=segments.length===1?segments[0].leg:contextLeg(post.text),out=[];
   const namePatterns=(races||[]).flatMap(r=>(r.horses||[]).map(h=>trFold(nameOf(h))).filter(name=>name.length>=3).map(name=>new RegExp(`(?:^| )${name.replace(/ /g,' +')}(?: |$)`))),namedLocalCache=new Map();
   const containsNamedHorse=local=>{if(!namedLocalCache.has(local))namedLocalCache.set(local,namePatterns.some(rx=>rx.test(local)));return namedLocalCache.get(local);};
   const couponNumbers=[...f.matchAll(/(?:^| )([12]) ALTILI(?: |$)/g)].map(m=>Number(m[1]));
-  races.forEach((race,ri)=>{if(!raceIsEligible(payload,race,ri,mode))return;
-   const cutoff=Date.parse(String(payload?.raceStartMap?.[String(raceLeg(race,ri))]||payload?.raceStartAt||'')),postMs=Date.parse(String(post.datetime||''));
-   if(!TKP_X_APPLY_LATE_POSTS && Number.isFinite(cutoff)&&(!Number.isFinite(postMs)||postMs>=cutoff))return;
+   races.forEach((race,ri)=>{if(!raceIsEligible(payload,race,ri,mode))return;
    (race.horses||[]).forEach(h=>{
    const postHip=mentionedHip(post.text),raceHip=trFold(race.hippodrome),postDate=mentionedDate(post.text),raceDate=String(race.race_date||'');
    if(postHip&&raceHip&&postHip!==raceHip)return;
@@ -253,13 +239,11 @@
   return Number(h?.non_runner)===1 || Number(h?.is_non_runner)===1 || /KOŞMAZ|KOSMAZ|NON.?RUNNER|SCRATCH/.test(raw);
  }
  function* applyPayloadSteps(payload,{mode='live',racesOverride=null}={}){
-  const rows=typeof lastRaceResults!=='undefined'&&Array.isArray(lastRaceResults)?lastRaceResults:[];
   const races=Array.isArray(racesOverride)&&racesOverride.length?racesOverride:predictionRaces();
-  const payloadSchema=Number(payload?.schemaVersion)||0,payloadCutoff=Date.parse(String(payload?.raceStartAt||'')),payloadCaptured=Date.parse(String(payload?.capturedAt||''));
-  // V1.1.336 (kullanıcı talebi): TKP_X_APPLY_LATE_POSTS açıkken yarış-başlangıç zaman
-  // koşulları (captured>=cutoff ve 36 saatten eski) payload'ı reddetmez; yalnız şema ve
-  // geçerli tarih kontrolleri korunur. Kapalıyken eski güvenli davranış aynen geçerli.
-  const strictBlocked=(mode==='live'||mode==='shadow')&&(payloadSchema<3||!Number.isFinite(payloadCutoff)||!Number.isFinite(payloadCaptured)||(!TKP_X_APPLY_LATE_POSTS&&(payloadCaptured>=payloadCutoff||payloadCaptured<payloadCutoff-36*60*60_000)));
+   const payloadSchema=Number(payload?.schemaVersion)||0;
+  // X paylaşımının koşu saatine göre erken/geç olması kabulü engellemez. Toplantı
+  // kapsamı ve payload şeması korunur; zamanlar görüntü/provenans için saklanır.
+  const strictBlocked=(mode==='live'||mode==='shadow')&&payloadSchema<3;
   const rawPosts=(Array.isArray(payload?.posts)?payload.posts:[]).flatMap(post=>[
    ...(post?.text?[post]:[]),
    ...(payloadSchema>=6&&Array.isArray(post?.imageEvidence)?post.imageEvidence:[])
@@ -268,7 +252,7 @@
   ]);
   // Kanıtı geçersiz canlı paket, mevcut güvenli X katmanını dahi sıfırlamadan
   // tamamen reddedilir. Böylece eski şema çağrısı aynı oturumda yan etki bırakamaz.
-  if(strictBlocked)return {mode,posts:0,matched:0,blockedReason:'invalid_or_late_time_proof',results:[]};
+  if(strictBlocked)return {mode,posts:0,matched:0,blockedReason:'invalid_payload_proof',results:[]};
   const quality={received:rawPosts.length,accepted:0,duplicates:0,rejected:0},seenPosts=new Set();
   const posts=rawPosts.filter(post=>{
    const author=String(post?.author||'').replace(/^@/,'').toLowerCase();
@@ -348,12 +332,12 @@
    // Sessiz yutma yerine son X yakalama sonucu kalıcı tanıya yazılır; Yorumcu Takibi panelinde görünür.
    getSettings().x_capture_diag={at:new Date().toISOString(),mode,posts_received:quality.received,posts_accepted:quality.accepted,posts_rejected:quality.rejected,matched_horses:results.length,
     groups:cap?.groups??0,appended:cap?.appended??0,error:err,
-    reason:err||(strictBlocked?'zaman_kanıtı_geçersiz_veya_yarış_başlamış':(!quality.received?'tarama_post_getirmedi (X girişi/ön-yarış tahmini?)':(!quality.accepted?'tüm_postlar_reddedildi (tarih/hipodrom/ayak eşleşmedi)':(!results.length?'post_kabul_edildi_ama_at_eşleşmedi':(cap&&!cap.appended?'kanıt_zaten_kayıtlı_veya_yazar_anonim':'ok')))))};
+    reason:err||(strictBlocked?'X veri paketi doğrulanamadı':(!quality.received?'tarama_post_getirmedi (X girişi?)':(!quality.accepted?'tüm_postlar reddedildi (tarih/hipodrom/ayak eşleşmedi)':(!results.length?'post_kabul_edildi_ama_at_eşleşmedi':(cap&&!cap.appended?'kanıt_zaten_kayıtlı_veya_yazar_anonim':'ok')))))};
   }catch(e){
    try{getSettings().x_capture_diag={at:new Date().toISOString(),mode,error:String(e&&e.message||e),reason:'yakalama_hatası'};console.warn('[TKP] X yorumcu yakalama hatası',e);}catch(_){ }
   }
   const contextSignature=races.map((r,i)=>[r?.id||r?.file_id||'',r?.race_date||'',String(r?.hippodrome||'').toLocaleUpperCase('tr-TR'),Number(r?.altili_no)||2,Number(r?.leg)||i+1].join('|')).sort().join(';');
-  const settings=getSettings();settings.x_kulis_last={schemaVersion:payloadSchema,contextSignature,capturedAt:payload?.capturedAt||'',raceStartAt:payload?.raceStartAt||'',targetLegs:Array.isArray(payload?.targetLegs)?payload.targetLegs.slice():[],raceStartMap:payload?.raceStartMap||{},date:races[0]?.race_date||'',hippodrome:races[0]?.hippodrome||'',mode,handles,posts:posts.slice(0,180),results:results.map(x=>({...x,horse:undefined}))};
+   const settings=getSettings();settings.x_kulis_last={schemaVersion:payloadSchema,contextSignature,capturedAt:payload?.capturedAt||'',raceStartAt:payload?.raceStartAt||'',historicalMode:payload?.historicalMode===true,targetLegs:Array.isArray(payload?.targetLegs)?payload.targetLegs.slice():[],raceStartMap:payload?.raceStartMap||{},date:races[0]?.race_date||'',hippodrome:races[0]?.hippodrome||'',mode,handles,posts:posts.slice(0,180),results:results.map(x=>({...x,horse:undefined}))};
   // Kayıtlı gün açılırken tahmin yarışları clone olabilir. X yalnız clone üzerinde kalırsa
   // ekranı kapatıp yeniden açınca /+puan kaybolur. X alanlarını gerçek db.races kaydına
   // birebir geri yaz ve sonra saveDB ile kalıcılaştır. Shadow olduğunda tahmine etkisi yoktur.
@@ -425,20 +409,20 @@
     if(!x){const pending=report?.coveragePending===true;return `<tr class="xNoData"><td>${item.leg}. Ayak</td><td><b>${item.no} ${String(item.name||'')}</b></td><td>—</td><td><b>—</b></td><td>0</td><td>0</td><td>${pending?'Tarama sürüyor':'X eşleşmesi yok'}</td><td class="muted">${pending?'Kalan yorumcu profilleri sonraki turda kontrol edilir.':'Taranan doğrulanmış X kaynaklarında bu at için güvenli yarış-öncesi eşleşme bulunmadı.'}</td></tr>`;}
     found++;
     const comments=Array.isArray(x.comments)?x.comments:[];postCount+=comments.length;comments.forEach(c=>accounts.add(String(c.author||'').toLowerCase()));
-    const useTkp=x.baseYpuan==null,realYpuan=useTkp?'-':Number(x.baseYpuan).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2}),final=useTkp?`TKP ${Number(x.finalTkpScore??x.baseScore??0).toFixed(2)}`:x.finalYpuan,diff=useTkp?Number(x.tkpScoreDelta||0):Number(x.delta||0),effectText=`${diff>0?'+':''}${useTkp?diff.toFixed(2):diff}`;
+    const finite=v=>v!==null&&v!==''&&Number.isFinite(Number(v))?Number(v):null,baseYpuan=[x.baseYpuan,item.horse?.x_base_ypuan,item.horse?.ypuan].map(finite).find(v=>v!==null)??null,baseScore=[x.baseScore,item.horse?.x_base_score,item.horse?.score].map(finite).find(v=>v!==null)??null,useTkp=baseYpuan===null,realYpuan=useTkp?'-':baseYpuan.toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2}),final=useTkp?(finite(x.finalTkpScore)??baseScore)!==null?`TKP ${(finite(x.finalTkpScore)??baseScore).toFixed(2)}`:'-':x.finalYpuan,diff=useTkp?Number(x.tkpScoreDelta||0):Number(x.delta||0),effectText=`${diff>0?'+':''}${useTkp?diff.toFixed(2):diff}`,rank=([x.baseRank,x.finalRank,item.horse?.x_base_rank,item.horse?.x_final_rank].map(Number).find(v=>Number.isInteger(v)&&v>0)||null),displayEffect=useTkp&&final!=='-'?`${final} · ${effectText}`:effectText,scoreText=Number.isFinite(Number(x.score))?`%${Math.round(Number(x.score))}`:'—',horseLabel=String(x.name||item.name||'').trim();
     const authors=new Set(comments.map(c=>String(c.author||'').toLowerCase()).filter(Boolean));
     const lastTime=comments.map(c=>Date.parse(String(c.datetime||''))).filter(Number.isFinite).sort((a,b)=>b-a)[0];
     const lastText=lastTime?new Date(lastTime).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}):'—';
     const matchLabel=comments.some(c=>c?.matchType==='name')?'Ad + ayak':'Numara + ayak';
     const verdict=x.forceCoupon?'Kupona al':x.breakSingle?'TEK boz':diff>0?`${comments.length} post kanıtı · olumlu`:diff<0?`${comments.length} post kanıtı · olumsuz`:`${comments.length} post · nötr`;
-    return `<tr><td>${x.leg}. Ayak</td><td><b>${x.no} ${String(x.name||'')}</b></td><td>${x.baseRank||'-'}. / ${realYpuan}</td><td title="Eşleşme güveni; kazanma olasılığı değildir">${matchLabel} · <b>%${x.score}</b></td><td>${comments.length} post</td><td>${authors.size} hesap</td><td style="color:${diff>0?'#15803d':diff<0?'#b91c1c':'#64748b'};font-weight:800">${effectText} · ${lastText}</td><td>${verdict}</td></tr>`;
+    return `<tr><td>${x.leg}. Ayak</td><td><b>${x.no} ${horseLabel}</b></td><td>${rank||'-'}. / ${realYpuan}</td><td title="Eşleşme güveni; kazanma olasılığı değildir">${matchLabel} · <b>${scoreText}</b></td><td>${comments.length} post</td><td>${authors.size} hesap</td><td style="color:${diff>0?'#15803d':diff<0?'#b91c1c':'#64748b'};font-weight:800">${displayEffect} · ${lastText}</td><td>${verdict}</td></tr>`;
   }).join('');
   const total=source.length,missing=Math.max(0,total-found),scan=report?.scanStats||{};
   const requested=Number(scan.requestedHandles),attempted=Number(scan.attemptedHandles),matchedAuthors=Number(scan.matchedAuthors);
   const scanInfo=Number.isFinite(requested)&&requested>0
     ? ` · ${requested} tanımlı / ${Number.isFinite(attempted)?attempted:0} profil açıldı / ${Number.isFinite(matchedAuthors)?matchedAuthors:accounts.size} eşleşen yazar`
     : '';
-  return `<div class="xKulisCoverage" style="border:1px solid #94a3b8;border-radius:9px;background:#fff;padding:8px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>𝕏 Günlük Kapsama · ${archived?'ESKİ X VERİSİ · TAHMİNE ETKİ ETMEZ':report?.mode==='live'?(Number(report?.applied)>0?'Tahmine uygulandı':'Veri bulundu · etki yok'):'Gölge test'}</b><span style="font-size:10.5px;color:#475569"><b>${total}/${total}</b> aktif at kontrol edildi · <b>${found}</b> atta X verisi · <b>${missing}</b> veri yok · ${postCount} eşleşen post · ${accounts.size} hesap${scanInfo}</span></div><div style="font-size:10px;color:#64748b;margin-top:3px">Eşleşme yüzdesi kazanma olasılığı değildir. İki doğrulanmış post gölge görünümde en az +2 kanıt verir; gölge X tahmini veya kuponu değiştirmez.</div><div style="overflow:auto;margin-top:6px"><table class="xKulisCompactTable" style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr><th>Ayak</th><th>At</th><th>İlk sıra / Y.PUAN</th><th>X güveni</th><th>Kanıt</th><th>Kaynak</th><th>Y.PUAN+X Etki / Son</th><th>Yorum</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Aktif yarış listesi bulunamadı.</td></tr>'}</tbody></table></div></div>`;
+   return `<div class="xKulisCoverage" style="border:1px solid #94a3b8;border-radius:9px;background:#fff;padding:8px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>𝕏 Günlük Kapsama · ${report?.mode==='live'?(Number(report?.applied)>0?'Tahmine uygulandı':'Canlı akış · veri kaydedildi'):'Canlı görünüm'}</b><span style="font-size:10.5px;color:#475569"><b>${total}/${total}</b> aktif at kontrol edildi · <b>${found}</b> atta X verisi · <b>${missing}</b> veri yok · ${postCount} eşleşen post · ${accounts.size} hesap${scanInfo}</span></div><div style="font-size:10px;color:#64748b;margin-top:3px">X paylaşımları koşu saatine bakılmadan eşleşen toplantı/ayak kayıtlarına işlenir. Puan ve kupon etkisi aynı canlı kurallarla hesaplanır.</div><div style="overflow:auto;margin-top:6px"><table class="xKulisCompactTable" style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr><th>Ayak</th><th>At</th><th>İlk sıra / Y.PUAN</th><th>X güveni</th><th>Kanıt</th><th>Kaynak</th><th>Y.PUAN+X Etki / Son</th><th>Yorum</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Aktif yarış listesi bulunamadı.</td></tr>'}</tbody></table></div></div>`;
  }
  function learnFromResults(){
   // Legacy mutable source statistics are intentionally retired.  Official results

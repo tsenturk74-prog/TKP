@@ -47,8 +47,30 @@ async function tkpBuildFullArchiveAdaptive(database,summary,options={}){
   }).catch(e=>{if(api().signature()===wanted)el.innerHTML=`<p role="alert">Tam arşiv analizi tamamlanamadı: ${escape(e.message)}</p><button type="button" data-tkp-archive-retry>Yeniden hesapla</button>`;const b=el.querySelector('[data-tkp-archive-retry]');if(b)b.onclick=()=>after(hostId,callback,adaptive);return false;}).finally(()=>pending.delete(key));
   pending.set(key,task);return task;
  }
+ const tableMemory=new Map(),tableFlights=new Map();
+ const tableSignature=id=>JSON.stringify(['FULL_TABLE_V1',api().signature(),typeof root.tkpAnalyticsTableSignature==='function'?root.tkpAnalyticsTableSignature(id):'']);
+ const readyHtml=html=>typeof html==='string'&&html.length>0&&!/data-analytics-pending|tkpArchiveProgress|role=["']alert["']/.test(html);
  function renderInto(id,builder){
-  return after(id,()=>{const wanted=api().signature(),el=document.getElementById(id);return Promise.resolve(builder()).then(html=>{if(api().signature()!==wanted)return false;el.innerHTML=String(html||'');for(const t of el.querySelectorAll('table'))t.dataset.tkpScope='full';root.TKPTablePresentation?.refresh(el);return true;});},id==='adaptiveLearningTable');
+  const el=document.getElementById(id);if(!el)return Promise.resolve(false);
+  const wanted=tableSignature(id),key=id+'|'+wanted,diskKey='tkp_full_table_v1:'+id;
+  const current=()=>tableSignature(id)===wanted;
+  const show=html=>{if(!current())return false;if(el.innerHTML!==html)el.innerHTML=html;for(const t of el.querySelectorAll('table'))t.dataset.tkpScope='full';root.TKPTablePresentation?.refresh(el);return true;};
+  if(tableMemory.has(key))return Promise.resolve(show(tableMemory.get(key)));
+  if(tableFlights.has(key))return tableFlights.get(key);
+  const task=Promise.resolve().then(async()=>{
+   let row=null;try{row=await root.tkpUiCacheGet?.(diskKey);}catch(_){}
+   if(!current())return false;
+   if(row?.signature===wanted&&readyHtml(row.html)){tableMemory.set(key,row.html);return show(row.html);}
+   return after(id,async()=>{
+    if(!current())return false;const html=String(await builder()||'');if(!current())return false;
+    if(readyHtml(html)){
+     tableMemory.set(key,html);while(tableMemory.size>40)tableMemory.delete(tableMemory.keys().next().value);
+     try{await root.tkpUiCacheSet?.(diskKey,{signature:wanted,html,savedAt:Date.now()});}catch(_){}
+    }
+    return show(html);
+   },id==='adaptiveLearningTable');
+  }).finally(()=>tableFlights.delete(key));
+  tableFlights.set(key,task);return task;
  }
  function xHTML(full){
   const rows=full.x.groups.filter(g=>g.count).map(g=>{const rate=(a,b)=>b?'%'+(a/b*100).toLocaleString('tr-TR',{maximumFractionDigits:2}):'—';return `<tr><td>${g.direction>0?'Olumlu kulis':g.direction<0?'Olumsuz kulis':'Yönü nötr / eski kayıt'}</td><td class="num">${g.count}</td><td class="num">${g.scoreCount?'%'+(g.scoreSum/g.scoreCount).toLocaleString('tr-TR',{maximumFractionDigits:2}):'—'}</td><td class="num">${g.deltaCount?(g.deltaSum/g.deltaCount).toLocaleString('tr-TR',{maximumFractionDigits:2}):'—'}</td><td>${g.known?g.wins+'/'+g.known:'—'}</td><td class="num">${rate(g.wins,g.known)}</td></tr>`;}).join('');

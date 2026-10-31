@@ -5022,7 +5022,7 @@ function tkpBombHunterRankScore(rank,count){
 // Ana TKP'nin ortak veri omurgası. Tabloya yazılan AGF / PROF / Y.PUAN /
 // G.PR / DRC değerleri burada aynı ayak içinde 0-1 bandına alınır. Ganyan
 // Canavarı programındaki forma yanı p değeri ham puan olarak ayrıca eklenmez;
-// yalnız ayak içindeki p sırası, AGF sinyaline temkinli katkı verir.
+// yalnız ayak içindeki p sırası, AGF sinyaline sınırlı katkı verir.
 // Eksik bir kaynak sıfır sayılmaz; yalnız mevcut kaynakların ağırlığıyla hesaplanır.
 // Dış yorumcu/Kulis kanıtı bu ortak havuza girmez. Yalnız Uzman+Kulis katmanı,
 // canlı öncesi kilitli ve yönetişimden geçmiş kanıtı bağımsız değerlendirir.
@@ -5227,6 +5227,12 @@ function tkpBombHunterStoredRecord(r){
   for(let i=extra.length-1;i>=0;i--)if(extra[i]?.race_key===key&&extra[i]?.candidates?.length)return extra[i];
   return (Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log:[]).find(z=>z?.race_key===key)||null;
 }
+function tkpBombHunterInitialRecord(r){
+  const key=tkpBombHunterRaceKey(r),initial=(Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log:[]).find(z=>z?.race_key===key&&z?.candidates?.length);
+  if(initial)return initial;
+  const extras=(Array.isArray(db?.settings?.bh_agf_requalifications)?db.settings.bh_agf_requalifications:[]).filter(z=>z?.race_key===key&&z?.candidates?.length);
+  return extras.slice().sort((a,b)=>(Date.parse(a.created_at)||0)-(Date.parse(b.created_at)||0))[0]||null;
+}
 function tkpBombHunterFrozenAgfReady(r,record){
   return !!record?.candidates?.length&&record.candidates.every(c=>c.agf_rank!==null&&c.agf_rank!==undefined&&String(c.agf_rank).trim()!==''&&Number.isInteger(Number(c.agf_rank))&&Number(c.agf_rank)>=6&&Number(c.agf_rank)<99&&tkpBombHunterAgfEligible(r,c));
 }
@@ -5353,7 +5359,7 @@ function tkpBombHunterEnsureFrozen(r){
 }
 function tkpBombHunterCandidates(r){
   let rec=null;
-  try{ rec=tkpBombHunterEnsureFrozen(r); }catch(_e){ rec=null; }
+  try{ const latest=tkpBombHunterEnsureFrozen(r);rec=(typeof tkpBombHunterInitialRecord==='function'?tkpBombHunterInitialRecord(r):null)||latest||null; }catch(_e){ rec=typeof tkpBombHunterInitialRecord==='function'?tkpBombHunterInitialRecord(r):null; }
   if(!rec||!Array.isArray(rec.candidates)||!rec.candidates.length){
     if(!tkpBombHunterCanQualify(r))return [];
     return tkpBombHunterCandidatesLive(r);
@@ -5362,7 +5368,7 @@ function tkpBombHunterCandidates(r){
   for(const c of rec.candidates){
     const h=hs.find(x=>String(x.horse_no)===String(c.horse_no))||hs.find(x=>baseHorseName(x.horse_name)===baseHorseName(c.horse_name));
     if(!h||!tkpBombHunterAgfEligible(r,{...c,h})) continue;
-    out.push({h,kind:c.kind,category_rank:c.category_rank,score:Number(c.score)||0,near_win_score:Number(c.near_win_score)||0,reasons:Array.isArray(c.reasons)?c.reasons.slice():[],frozen:true});
+    out.push({h,rank:Number(c.rank)||out.length+1,kind:c.kind,category_rank:c.category_rank,score:Number(c.score)||0,near_win_score:Number(c.near_win_score)||0,reasons:Array.isArray(c.reasons)?c.reasons.slice():[],frozen:true});
   }
   return out;
 }
@@ -5587,7 +5593,7 @@ function tkpBombHunterPanelHTML(raceResults){
         const noEsc=no.replace(/'/g,"\\'");
         const kind=c.kind==='ODB'?'ODB1':`BH${Number(c.category_rank)||1}`;
         const winnerKind=tkpBombHunterCandidateIsWinner(r,c);
-        return `<div class="bombHunterPick ${c.kind==='ODB'?'bombHunterOdbPick':'bombHunterBombPick'}${winnerKind?' bhWinnerPick':''}"><div><span class="bombHunterKind${winnerKind?' bhWinnerKind':''}">${kind}</span><span class="bombHunterNo">${esc(no)}</span><b>${esc(name)}</b>${tkpBhTrPuanHTML((r?.horses||[]).find(h=>String(h?.horse_no)===no)||c?.h||{})}<span class="bombHunterScore">BH ${fmt2(Number.isFinite(score)?score*100:0)}</span>${result}<div class="muted">${esc((c?.reasons||[]).join(' · ')||'Kayıtlı snapshot sinyali')}</div></div><div class="bombHunterActions"><button type="button" class="bombHunterAdd bombHunterAddAll" title="Bu BH adayını Normal + Sürpriz + Uzman/Kulis kuponlarının üçüne de ekle" onclick="addHorseToAllCoupons(${Number(r?.leg)||0},'${noEsc}')">+ 3 Kupona Ekle</button></div></div>`;
+        return `<div class="bombHunterPick ${c.kind==='ODB'?'bombHunterOdbPick':'bombHunterBombPick'}${winnerKind?' bhWinnerPick':''}"><div><span class="bombHunterKind${winnerKind?' bhWinnerKind':''}">${kind}</span><span class="bombHunterNo">${esc(no)}</span><b>${esc(name)}</b>${tkpBhTrPuanHTML((r?.horses||[]).find(h=>String(h?.horse_no)===no)||c?.h||{})}<span class="bombHunterScore">BH ${fmt2(Number.isFinite(score)?score*100:0)}</span>${result}<div class="muted">${esc((c?.reasons||[]).join(' · ')||'Kayıtlı snapshot sinyali')}</div></div><div class="bombHunterActions">${tkpBhAddControlHTML(r,{horse:(r?.horses||[]).find(h=>String(h?.horse_no)===no)||c?.h||{horse_no:no,horse_name:name}},(r?.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)>0))}</div></div>`;
       }).join('');
       const portfolioLabel=tkpBombHunterPortfolioLabel(cands);
       const status=portfolioLabel==='3 Bomba + 1 ODB'?'Tam 3 Bomba + 1 ODB kaydı':'Kayıtlı yarış öncesi veride kategori adayı eksik';
@@ -5629,7 +5635,7 @@ function tkpBombHunterPanelHTML(raceResults){
       const noEsc=String(c.horse_no).replace(/'/g,"\\'");
       const kind=c.kind==='ODB'?'ODB1':`BH${Number(c.category_rank)||1}`;
       const winnerKind=tkpBombHunterCandidateIsWinner(r,c);
-      return `<div class="bombHunterPick ${c.kind==='ODB'?'bombHunterOdbPick':'bombHunterBombPick'}${pastWinningScore?' bhPastWinnerScore':''}${nearWinnerProfile?' bhWinnerProfileNear':''}${winnerKind?' bhWinnerPick':''}"><div><span class="bombHunterKind${winnerKind?' bhWinnerKind':''}">${kind}</span><span class="bombHunterNo">${esc(c.horse_no)}</span><b>${esc(c.horse_name)}</b>${tkpBhTrPuanHTML((r?.horses||[]).find(h=>String(h?.horse_no)===String(c.horse_no))||c?.h||{})}<span class="bombHunterScore">BH ${fmt2(Number(c.score)*100)}</span>${pastWinningScore?`<span class="bhPastWinnerBadge">🏆 Geçmiş kazanan</span>`:''}${nearWinnerProfile?`<span class="bhWinnerProfileBadge">◎ En yakın kazanan BH</span>`:''}${result}<div class="muted">${esc((c.reasons||[]).join(' · ')||'Bağımsız sürpriz sinyali')}</div></div><div class="bombHunterActions"><button type="button" class="bombHunterAdd bombHunterAddAll" title="Bu BH adayını Normal + Sürpriz + Uzman/Kulis kuponlarının üçüne de ekle" onclick="addHorseToAllCoupons(${Number(r.leg)||0},'${noEsc}')">+ 3 Kupona Ekle</button></div></div>`;
+      return `<div class="bombHunterPick ${c.kind==='ODB'?'bombHunterOdbPick':'bombHunterBombPick'}${pastWinningScore?' bhPastWinnerScore':''}${nearWinnerProfile?' bhWinnerProfileNear':''}${winnerKind?' bhWinnerPick':''}"><div><span class="bombHunterKind${winnerKind?' bhWinnerKind':''}">${kind}</span><span class="bombHunterNo">${esc(c.horse_no)}</span><b>${esc(c.horse_name)}</b>${tkpBhTrPuanHTML((r?.horses||[]).find(h=>String(h?.horse_no)===String(c.horse_no))||c?.h||{})}<span class="bombHunterScore">BH ${fmt2(Number(c.score)*100)}</span>${pastWinningScore?`<span class="bhPastWinnerBadge">🏆 Geçmiş kazanan</span>`:''}${nearWinnerProfile?`<span class="bhWinnerProfileBadge">◎ En yakın kazanan BH</span>`:''}${result}<div class="muted">${esc((c.reasons||[]).join(' · ')||'Bağımsız sürpriz sinyali')}</div></div><div class="bombHunterActions">${tkpBhAddControlHTML(r,{horse:(r?.horses||[]).find(h=>String(h?.horse_no)===String(c?.horse_no))||c?.h||{horse_no:String(c?.horse_no),horse_name:c?.horse_name}},(r?.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)>0))}</div></div>`;
     }).join('');
     const portfolioLabel=tkpBombHunterPortfolioLabel(cands);
     const status=portfolioLabel==='3 Bomba + 1 ODB'?'Kazanma yakınlığına göre seçildi':'Yarışta dört ayrı uygun sürpriz adayı yok';
@@ -6221,7 +6227,7 @@ async function renderPredictionScreen(displayRaces2, logPayload, renderOptions={
       if(firstLookRows.length){
         firstLookHtml = `<div class="card firstLookOverviewCard" style="border-left:5px solid #0f4c81;">
           <h2 style="margin:0 0 4px;">👁 İlk Bakış · Her Ayak Lideri</h2>
-          <p class="muted" style="margin:0 0 10px;">Her ayağın mevcut TKP liderini gösterir. TKP = ((Ortak Puan × 0,10) + eski TKP) / 3; üst sınır 10,00. Ortak Puan AGF, profil, Y.PUAN, G.PR, DRC ve doğrulanmış tablo sinyallerinin temkinli birleşimidir; Ganyan Canavarı forma yanı p değeri yalnız ayak içi sırasıyla AGF sinyaline katkı verir. Güven ayrı Altılı 1.lik modelidir.</p>
+          <p class="muted" style="margin:0 0 10px;">Her ayağın mevcut TKP liderini gösterir. TKP = ((Ortak Puan × 0,10) + eski TKP) / 3; üst sınır 10,00. Ortak Puan AGF, profil, Y.PUAN, G.PR, DRC ve doğrulanmış tablo sinyallerinin ağırlıkları sınırlandırılmış birleşimidir; Ganyan Canavarı forma yanı p değeri yalnız ayak içi sırasıyla AGF sinyaline katkı verir. Güven ayrı Altılı 1.lik modelidir.</p>
           <div class="tableWrap firstLookOverviewTable"><table>
             <thead><tr><th>Ayak</th><th>At</th><th class="num">TKP</th><th>Güven</th></tr></thead>
             <tbody>${firstLookRows.map(x=>{
@@ -9242,11 +9248,15 @@ async function init(){
   tkpRepairUploadButtons();
   tkpStartBlankPredictionView();
   renderAll();
+  try{if(typeof tkpRenderSelfTestPanel==='function')tkpRenderSelfTestPanel();}catch(_e){}
   try{
     const savedPane='prediction';
     const paneButton=$$('.tab').find(button=>button.dataset.pane===savedPane);
     if(paneButton)paneButton.click();
   }catch(_e){}
+  // The load-event timer may finish before loadDB(). Signal readiness after
+  // renderAll so the self-test module can schedule against the loaded database.
+  try{window.dispatchEvent(new CustomEvent('tkp:db-ready',{detail:{source:'startup'}}));}catch(_e){}
   bundledSeedPromise.then(bundledSeed=>{
     if(!bundledSeed?.restored)return;
     tkpBundledSeedStatus(`✅ Güncel kayıtlar aktarıldı · ${bundledSeed.result?.counts?.files||0} dosya / ${bundledSeed.result?.counts?.races||0} koşu. Yeniden açılıyor…`);

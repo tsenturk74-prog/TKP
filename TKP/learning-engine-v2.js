@@ -5,7 +5,7 @@
  * Mevcut veri şeması ve eski fonksiyon imzaları korunur.
  */
 
-const TKP_LEARNING_MODEL_VERSION = 'R16.57_17_SIGNAL_DECISION_POLICY_R16.55_ALL_OFFICIAL_RESULTS_LEARNING_20260904';
+const TKP_LEARNING_MODEL_VERSION = 'R16.58_ALL_QUALIFIED_RULES_SIGNAL_20261028';
 // KÖK FIX (2026-08-12): degree (DRC) sinyaline özel 3x adaptif öğrenme çarpanı
 // kaldırıldı (bkz. stats-engine.js:adaptiveWeightsForRace). Gerçek prediction_log
 // verisinde V37 -> V40/V41 döneminde bu çarpanla birlikte top-1 isabetinin
@@ -746,7 +746,7 @@ function tkpLearningStatus(){
   if(!db) return {status:'VERİ AZ',resultCount:0,updatedAt:''};
   const state=db.learning_state||{};
   return {
-    status:state.status||'GÜNCEL',
+    status:state.rules_rebuild_required?'KURAL YENİLEME BEKLİYOR':(state.status||'GÜNCEL'),
     resultCount:Number(state.result_count)||tkpLearningResultCount(db),
     updatedAt:state.updated_at||state.migrated_at||'',
     signature:state.dataset_signature||''
@@ -781,6 +781,7 @@ function tkpFailureSameHorse(a,b){
 function tkpFailureFlagsFromSnapshot(s){
   if(!s) return {};
   const rank=Number(s.rank)||0,agf=Number(s.agf_rank)||0,hnd=Number(s.hndkp_rank)||0,jb=Number(s.jbyg_rank)||0,g8=Number(s.g800)||0,tr=Number(s.tr_ganyan_rank??s.tr_rank)||0;
+  const bh=Number(s.bh_rank)||0;
   return {
     agf69:agf>=6&&agf<=9,
     hndkp3:hnd>0&&hnd<=3,
@@ -791,7 +792,12 @@ function tkpFailureFlagsFromSnapshot(s){
     bmb:Number(s.bmb)===1,
     odb:Number(s.odb)===1,
     prof60:Number(s.prof)>=60,
-    tail58:rank>=5&&rank<=8
+    tail58:rank>=5&&rank<=8,
+    bh1:bh===1,
+    bh2:bh===2,
+    bh3:bh===3,
+    bh4:bh===4,
+    bh_odb:Number(s.bh_odb)===1
   };
 }
 function tkpFailureFlagsFromHorse(race,h){
@@ -799,6 +805,13 @@ function tkpFailureFlagsFromHorse(race,h){
   let prof=0;try{prof=typeof profileStrengthPct==='function'?Number(profileStrengthPct(race,h))||0:0;}catch(_){ }
   const agf=Number(h.agf_rank)||0,hnd=Number(h.hndkp_rank)||0,jb=Number(h.jbyg_rank??h.j_beygir_rank??h.jbyg)||0,g8=Number(h.g800_rank??h.g800)||0,tr=Number(h.tr_ganyan_rank)||0;
   let odb=false;try{odb=typeof isOdbCandidate==='function'&&isOdbCandidate(h,race);}catch(_){ }
+  let bhRank=0,bhOdb=false;
+  try{
+    const key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(race):'';
+    const frozen=key&&Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log.find(x=>x?.race_key===key&&Array.isArray(x.candidates)):null;
+    const candidate=frozen?.candidates?.find(x=>tkpFailureSameHorse(x?.horse_no,h?.horse_no)&&!(typeof tkpBombHunterWasPortfolioBackfill==='function'&&tkpBombHunterWasPortfolioBackfill(x)));
+    bhRank=Number(candidate?.rank)||0;bhOdb=String(candidate?.kind||'').toUpperCase()==='ODB';
+  }catch(_){ }
   return {
     agf69:agf>=6&&agf<=9,
     hndkp3:hnd>0&&hnd<=3,
@@ -809,7 +822,12 @@ function tkpFailureFlagsFromHorse(race,h){
     bmb:Number(h.bmb)===1,
     odb:!!odb,
     prof60:prof>=60,
-    tail58:false
+    tail58:false,
+    bh1:bhRank===1,
+    bh2:bhRank===2,
+    bh3:bhRank===3,
+    bh4:bhRank===4,
+    bh_odb:bhOdb
   };
 }
 function tkpFailurePreRaceRows(rec){
@@ -845,6 +863,9 @@ function tkpFailureTrackingRows(targetRace){
   const target=tkpFailureIsoDate(targetRace?.race_date||targetRace?.date||'');
   return rows.filter(rec=>{
     if(!rec?.evaluated_at||!String(rec?.winner_no||'').trim()) return false;
+    // Match the forward table's frozen candidate + coupon evidence contract.
+    if(!Array.isArray(rec.pre_race_candidates)||!rec.pre_race_candidates.length
+      ||!['main','alt','surprise'].some(k=>Array.isArray(rec.coupons?.[k])&&rec.coupons[k].length))return false;
     const d=tkpFailureIsoDate(rec.race_date||'');
     if(target&&(!d||d>=target)) return false;
     return tkpFailurePreRaceRows(rec).length>0;
@@ -862,15 +883,28 @@ function tkpFailureLearningModel(targetRace=null){
   const last=rows.length?String(rows[rows.length-1]?.evaluated_at||''):'';
   const key=[target,rows.length,last].join('|');
 
-  const signals=['agf69','hndkp3','jbyg3','g8003','tr3','value','bmb','odb','prof60','tail58'];
+  const signals=['agf69','hndkp3','jbyg3','g8003','tr3','value','bmb','odb','prof60','tail58','bh1','bh2','bh3','bh4','bh_odb'];
   const agg={};for(const k of signals)agg[k]={missWith:0,hitWith:0};
   let mainMiss=0,mainHit=0,singleLoss=0,singleHit=0;
   const singleAgg={};for(const k of signals)singleAgg[k]={lossWith:0,hitWith:0};
   for(const rec of rows){
     const pre=tkpFailurePreRaceRows(rec);
-    const winner=pre.find(z=>tkpFailureSameHorse(z?.horse_no,rec.winner_no));
+    let winner=pre.find(z=>tkpFailureSameHorse(z?.horse_no,rec.winner_no));
+    if(!winner&&typeof tkpBombHunterRaceKey==='function'){
+      try{
+        const key=tkpBombHunterRaceKey(rec),frozen=Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log.find(x=>x?.race_key===key&&x?.evaluated_at&&Array.isArray(x.candidates)):null;
+        const c=frozen?.candidates?.find(x=>tkpFailureSameHorse(x?.horse_no,rec.winner_no)&&!(typeof tkpBombHunterWasPortfolioBackfill==='function'&&tkpBombHunterWasPortfolioBackfill(x)));
+        if(c)winner={horse_no:String(c.horse_no),rank:null,bh_rank:Number(c.rank)||0,bh_odb:String(c.kind||'').toUpperCase()==='ODB'?1:0};
+      }catch(_){ }
+    }
     if(!winner) continue;
-    const wf=tkpFailureFlagsFromSnapshot(winner);
+    let bhCandidate=null;
+    try{
+      const key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(rec):'';
+      const frozen=key&&Array.isArray(db?.bomb_hunter_shadow_log)?db.bomb_hunter_shadow_log.find(x=>x?.race_key===key&&Array.isArray(x.candidates)):null;
+      bhCandidate=frozen?.candidates?.find(x=>tkpFailureSameHorse(x?.horse_no,rec.winner_no)&&!(typeof tkpBombHunterWasPortfolioBackfill==='function'&&tkpBombHunterWasPortfolioBackfill(x)))||null;
+    }catch(_){ }
+    const wf=tkpFailureFlagsFromSnapshot({...winner,bh_rank:Number(bhCandidate?.rank)||Number(winner.bh_rank)||0,bh_odb:String(bhCandidate?.kind||'').toUpperCase()==='ODB'||Number(winner.bh_odb)===1?1:0});
     // Missing/blank is NOT a loss: Number(null) and Number('') both equal zero.
     const outcome01=value=>value!==null&&value!==undefined&&String(value).trim()!==''&&[0,1].includes(Number(value))?Number(value):null;
     let mainOutcome=outcome01(rec.main_hit);
@@ -880,8 +914,10 @@ function tkpFailureLearningModel(targetRace=null){
     }
     if(mainOutcome===0){mainMiss++;for(const k of signals)if(wf[k])agg[k].missWith++;}
     else if(mainOutcome===1){mainHit++;for(const k of signals)if(wf[k])agg[k].hitWith++;}
-    if(Number(rec.single_reliable)===1){
-      const singleOutcome=outcome01(rec.single_hit);
+    const couponSingles=[...new Set(['main','alt','surprise'].map(k=>Array.isArray(rec.coupons?.[k])&&rec.coupons[k].length===1?String(rec.coupons[k][0]??'').trim():'').filter(Boolean))];
+    const singleOutcomes=couponSingles.length?couponSingles.map(no=>tkpFailureSameHorse(no,rec.winner_no)?1:0)
+      :(Number(rec.single_reliable)===1?[outcome01(rec.single_hit)]:[]);
+    for(const singleOutcome of singleOutcomes){
       if(singleOutcome===0){singleLoss++;for(const k of signals)if(wf[k])singleAgg[k].lossWith++;}
       else if(singleOutcome===1){singleHit++;for(const k of signals)if(wf[k])singleAgg[k].hitWith++;}
     }
@@ -908,7 +944,7 @@ function tkpFailureLearningModel(targetRace=null){
     const delta=singleReady&&a.lossWith>=3?Math.max(0,lossRate-hitRate)*trust:0;
     singleWeights[k]={...a,lossRate,hitRate,support,penalty:Math.min(2.3,delta*18)};
   }
-  const model={version:'V51_FAILURE_FEEDBACK',rows:rows.length,mainMiss,mainHit,singleLoss,singleHit,ready,singleReady,weights,singleWeights};
+  const model={version:'V53_FAILURE_FROZEN_EVIDENCE_BH',rows:rows.length,mainMiss,mainHit,singleLoss,singleHit,ready,singleReady,weights,singleWeights};
   _tkpFailureLearningCache.set('READY:'+signature,{log,model});
   while(_tkpFailureLearningCache.size>32)_tkpFailureLearningCache.delete(_tkpFailureLearningCache.keys().next().value);
   return model;
@@ -1064,7 +1100,7 @@ function tkpPurposeWeightsForRace(targetRace,purpose='prediction',position=4,opt
   const noScan=options?.noScan===true;
   const signature=tkpLearningRuntimeCacheSignature();
   const profile=typeof adaptiveCacheKey==='function'?adaptiveCacheKey(targetRace):'ALL';
-  const cacheKey=[signature,profile,purpose,safePosition,noScan?'NOSCAN':'FULL',globalThis.TKPArchiveAnalytics?.peek()?.source?.at||''].join('|');
+  const cacheKey=[signature,profile,purpose,safePosition,noScan?'NOSCAN':'FULL',ADAPTIVE_MIN_RACES,TKP_LEARNED_RULE_MIN_RACES,globalThis.TKPArchiveAnalytics?.peek()?.source?.at||''].join('|');
   if(_tkpPurposeWeightCache.has(cacheKey)) return _tkpPurposeWeightCache.get(cacheKey);
 
   // Salt-okunur/arşiv UI yolu hiçbir zaman eksik cache yüzünden tam tarihsel tarama
@@ -1098,13 +1134,13 @@ function tkpPurposeWeightsForRace(targetRace,purpose='prediction',position=4,opt
       // Hedef konumda doğrulanmış örnek yoksa Beta varsayımını gerçek veri gibi
       // ağırlık öğrenmesine katma. Örn. p2 verisi olmayan gösterge Tahmin 2'den
       // güven kazanamaz.
-      if(!group || !(Number(group.total)>0)) continue;
+      if(!group || Number(group.total)<ADAPTIVE_MIN_RACES) continue;
       rate+=(Number(group.rate)||0)*weight;
       mixTotal+=weight;
     }
     rates[key]=mixTotal?rate/mixTotal:0.5;
   }
-  const availableKeys=keys.filter(key=>targetBuckets.some(bucket=>(Number(featureStats[key]?.[bucket]?.total)||0)>0));
+  const availableKeys=keys.filter(key=>targetBuckets.some(bucket=>(Number(featureStats[key]?.[bucket]?.total)||0)>=ADAPTIVE_MIN_RACES));
   const mean=availableKeys.length
     ? availableKeys.reduce((total,key)=>total+rates[key],0)/availableKeys.length
     : 0.5;
@@ -1121,7 +1157,7 @@ function tkpPurposeWeightsForRace(targetRace,purpose='prediction',position=4,opt
       return total;
     });
     const keySample=keySamples.length?Math.max(...keySamples):0;
-    const keyTrust=Math.max(0,Math.min(1,keySample/(typeof ADAPTIVE_WEIGHT_FULL_TRUST_RACES==='number'?ADAPTIVE_WEIGHT_FULL_TRUST_RACES:60)));
+    const keyTrust=keySample<ADAPTIVE_MIN_RACES?0:Math.max(0,Math.min(1,keySample/(typeof ADAPTIVE_WEIGHT_FULL_TRUST_RACES==='number'?ADAPTIVE_WEIGHT_FULL_TRUST_RACES:60)));
     raw[key]=baseWeight*(1+(learned-1)*keyTrust);
   }
 
@@ -1163,6 +1199,8 @@ function altiliWinnerScoreForHorse(race,horse,models=null){
   }
   const modelSignature=[
     TKP_LEARNING_MODEL_VERSION,
+    ADAPTIVE_MIN_RACES,
+    TKP_LEARNED_RULE_MIN_RACES,
     db?.learning_state?.dataset_signature||String((db?.races||[]).length),
     typeof adaptiveCacheKey==='function'?adaptiveCacheKey(race):'ALL'
   ].join('|');
@@ -1411,7 +1449,7 @@ function tkpSideBetProductPositionRankingsForRace(race,horses=null,product='trip
   const formulas=TKP_SIDE_BET_PRODUCT_FORMULAS[product]||TKP_SIDE_BET_PRODUCT_FORMULAS.triple;
   const calibrationVersion=globalThis.TKP_R156_CLEAN509_CALIBRATION?.VERSION||'NO_CLEAN509';
   const panelNoScan=globalThis.__tkpSideBetPanelNoScan===true;
-  const signature=(typeof adaptiveOrderSignature==='function'?adaptiveOrderSignature(race,live):String(live.length))+'|'+TKP_SIDE_BET_STRATEGY_VERSION+'|'+product+'|'+calibrationVersion+'|'+(panelNoScan?'NOSCAN':'FULL');
+  const signature=(typeof adaptiveOrderSignature==='function'?adaptiveOrderSignature(race,live):String(live.length))+'|'+TKP_SIDE_BET_STRATEGY_VERSION+'|'+ADAPTIVE_MIN_RACES+'|'+TKP_LEARNED_RULE_MIN_RACES+'|'+product+'|'+calibrationVersion+'|'+(panelNoScan?'NOSCAN':'FULL');
   const target=(race&&typeof race==='object')?race:null;let productCache=target?_tkpProductSideBetRankingsCache.get(target):null;
   if(productCache?.[product]?.signature===signature){const copy={};for(const key of Object.keys(productCache[product].rankings))copy[key]=productCache[product].rankings[key].slice();return copy;}
   const altiliScore=new Map();const altiliOrder=typeof altiliWinnerOrderForRace==='function'?altiliWinnerOrderForRace(race,live):live;
@@ -1462,8 +1500,8 @@ function sideBetPositionRankingsForRace(race,horses=null){
   const cleanCalibrationVersion=globalThis.TKP_R156_CLEAN509_CALIBRATION?.VERSION||'NO_CLEAN509';
   const panelNoScan=globalThis.__tkpSideBetPanelNoScan===true;
   const signature=typeof adaptiveOrderSignature==='function'
-    ? 'SIDE_P1_P5|'+adaptiveOrderSignature(race,source)+'|'+cleanCalibrationVersion+'|'+(panelNoScan?'NOSCAN':'FULL')
-    : 'SIDE_P1_P5|'+String(db?.learning_state?.dataset_signature||'')+'|'+source.length+'|'+cleanCalibrationVersion+'|'+(panelNoScan?'NOSCAN':'FULL');
+    ? 'SIDE_P1_P5|'+adaptiveOrderSignature(race,source)+'|'+ADAPTIVE_MIN_RACES+'|'+TKP_LEARNED_RULE_MIN_RACES+'|'+cleanCalibrationVersion+'|'+(panelNoScan?'NOSCAN':'FULL')
+    : 'SIDE_P1_P5|'+String(db?.learning_state?.dataset_signature||'')+'|'+source.length+'|'+ADAPTIVE_MIN_RACES+'|'+TKP_LEARNED_RULE_MIN_RACES+'|'+cleanCalibrationVersion+'|'+(panelNoScan?'NOSCAN':'FULL');
   // Yan bahis paneli aynı yarış için çoğu yerde race.horses.slice() gönderiyor.
   // Diziye göre WeakMap cache bu yüzden her çağrıda boşa düşüyordu; yarış nesnesi
   // ve imza birlikte kullanıldığında aynı hesap sekme boyunca gerçekten paylaşılır.

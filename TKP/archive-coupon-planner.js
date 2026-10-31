@@ -1,6 +1,6 @@
 (function(g){
 'use strict';
-const VERSION='R16.80-ARCHIVE-3000-BH-COVERAGE-MIX50';
+const VERSION='R16.86-ARCHIVE-BENTER-BH-TABLO-EK2';
 const modes=['main','alt','surprise'];
   function finishSteps(steps){let next;do{next=steps.next();}while(!next.done);return next.value;}
   async function finishStepsAsync(steps,pause){
@@ -25,12 +25,16 @@ function* fieldSteps(x,role){
   const mixCfg=g.TKP_PLANNER_P_MIX;const mixW=(mixCfg&&Number.isFinite(Number(mixCfg.w)))?Number(mixCfg.w):0.5;
   const agfRaw=rows.map(h=>Math.max(0,Number(h.agf)||0));const agfUsable=agfRaw.filter(v=>v>0).length>=Math.max(3,Math.ceil(rows.length/2));
   const agfSum=rows.reduce((s,x)=>s+Math.max(.005,(Number(x.agf)||0)/100),0)||1;
+  // BENTER-BH: BH Oneri ilk 3 icin arsiv kazanma orani tabani (x1.5); canli kuponla ayni kural.
+  const bhFloor=new Map();
+  try{if(typeof g.tkpBhCommonRows==='function'&&typeof g.tkpBhPositionRate==='function'){const K=Number(g.TKP_BH_BOOST_K)||1.5;g.tkpBhCommonRows(x.r,rows).slice(0,3).forEach((row,i)=>{const r0=Number(g.tkpBhPositionRate(x.r,i))||0;if(r0>0)bhFloor.set(no(row.horse),K*r0);});}}catch(_e){}
   const groups=new Map();
   for(let i=0;i<rows.length;i++){
     yield;const h=rows[i];
     let p=values[i]/total;const agf=Math.max(.005,(Number(h.agf)||0)/100);
     // 3020: skor payı ile AGF payı karışımı (219 toplantı geriye dönük test: 6/6 84->100, >=5 ayak 278->333, w=0.5).
     if(agfUsable&&mixW<1){p=mixW*p+(1-mixW)*(agf/agfSum);}
+    if(bhFloor.has(no(h)))p=Math.max(p,bhFloor.get(no(h)));
     const commentator=(Math.max(0,Number(h.ypuan)||0)+Math.max(0,Number(h.kulis_score)||0))/maxComment;
     const priority=g.TKP_COUPON_POLICY?.commentPriority(x.r,h)?.score||0;
     // BH sinyali yalnız yarış öncesi kayıtta mevcutsa değerlenir. Sonuç bilgisi kullanılmaz.
@@ -128,6 +132,29 @@ function* buildSteps(raceResults,budget=3000,options={}){
       for(const a of alternatives){const old=legs[a.i].picks[a.count-1];legs[a.i].picks[a.count-1]=fields[a.i].pool[a.count].h;
         if(!previous.some(p=>signature(p)===signature(c)))break;legs[a.i].picks[a.count-1]=old;}
     }
+    // BH-GARANTI-V1 (arsiv): BH Oneri tablosunun ilk 3 ati 3+ atli ayakta kuponda olur; genislik/maliyet sabit.
+    try{
+      if(typeof g.tkpBhCommonRows==='function')legs.forEach((leg,i)=>{
+        if(leg.picks.length<3)return;
+        const f=fields[i];
+        const bh=g.tkpBhCommonRows(f.x.r,f.pool.map(r=>r.h)).slice(0,typeof g.tkpBhGuaranteeCount==='function'?g.tkpBhGuaranteeCount(f.x.r):3).map(r=>r.horse).filter(Boolean);
+        const bhKeys=new Set(bh.map(key));const pref=new Map(f.pool.map(r=>[r.k,r.preference]));
+        const req=h=>{const ar=Number(h.agf_rank)||0,ag=Number(h.agf);return ar>=1&&ar<=3&&Number.isFinite(ag)&&ag>=8;};
+        for(const h of bh){
+          if(leg.picks.some(p=>key(p)===key(h)))continue;
+          const vic=leg.picks.filter(p=>!bhKeys.has(key(p))&&!req(p)).sort((x,y)=>(pref.get(key(x))||0)-(pref.get(key(y))||0))[0];
+          if(!vic)continue;
+          leg.picks=leg.picks.filter(p=>p!==vic).concat([f.pool.find(r=>r.k===key(h))?.h||h]);
+        }
+        // TABLO SIRASI: ust siradaki BH kuponda yokken alt sira ati kuponda kalmaz.
+        if(typeof g.tkpBhTableOrderSwaps==='function'){
+          for(const [outNo,inH] of g.tkpBhTableOrderSwaps(f.x.r,f.pool.map(r=>r.h),leg.picks.map(p=>p.horse_no),req)){
+            const j=leg.picks.findIndex(p=>String(p.horse_no)===String(outNo));if(j<0)continue;
+            leg.picks[j]=f.pool.find(r=>r.k===key(inH))?.h||inH;
+          }
+        }
+      });
+    }catch(_e){}
     best.singleIndices.forEach(i=>usedSingles.add(i+'|'+fields[i].pool[0].k));
     out[role]=c;previous.push(c);
   }

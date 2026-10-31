@@ -5,7 +5,9 @@ const LEARNING_MODULE_VERSION='V1.1.333-HISTORICAL-ALL509-SNAPSHOT-R16.49';
 const CUTOFF_ISO='2026-08-26T15:00:00+03:00';
 const MIN_SEED_FILES=503;
 const SOURCE='HISTORICAL_CALIBRATION_FULL';
-const ARCHIVE_LAYOUT_VERSION='R16.79-ARCHIVE-REPLAN-1';
+const ARCHIVE_LAYOUT_BASE='R16.81-ARCHIVE-BH-GARANTI3';
+// Kural surumu degisince (planlayici / BH kurallari) TUM gecmis kuponlar otomatik yeniden kurulur.
+function archiveLayoutVersion(){return [ARCHIVE_LAYOUT_BASE,String(global.TKP_ARCHIVE_COUPON_PLANNER?.version||''),String(global.TKP_BH_RULES_VERSION||'')].join('|');}
 const SIDEBET_SNAPSHOT_VERSION=VERSION+'-SIDEBET-ALL-AVAILABLE-V3';
 const fnv=(text)=>{let h=2166136261>>>0;for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h.toString(16).padStart(8,'0');};
 const arr=v=>Array.isArray(v)?v:[];
@@ -90,7 +92,7 @@ function historicalSixLegFiles(source,files){
   });
 }
 function historicalSnapshotHasAllCoupons(snapshot){
-  if(!snapshot?.coupons||String(snapshot?.source)!==SOURCE||Number(snapshot?.historical_calibration)!==1||snapshot.archive_coupon_layout_version!==ARCHIVE_LAYOUT_VERSION)return false;
+  if(!snapshot?.coupons||String(snapshot?.source)!==SOURCE||Number(snapshot?.historical_calibration)!==1||snapshot.archive_coupon_layout_version!==archiveLayoutVersion())return false;
   return ['main','alt','surprise'].every(kind=>{
     const coupon=snapshot.coupons?.[kind];
     return coupon&&!coupon.error&&arr(coupon.legs).length===6&&arr(coupon.legs).every(leg=>num(leg?.leg)>=1&&arr(leg?.picks).length>0);
@@ -285,9 +287,9 @@ async function persistHistoricalCoupon(source,file,raceResults,built,options={})
     alt:evaluateHistoricalCouponRows(coupons.alt,raceResults),
     surprise:evaluateHistoricalCouponRows(coupons.surprise,raceResults)
   };
-  const snap={schema_version:6,algorithm_version:ARCHIVE_LAYOUT_VERSION,id,key:[file.race_date,fold(file.hippodrome),num(file.altili_no)||1].join('|'),created_at:createdAt,source:SOURCE,source_label:'Geçmiş yeniden hesaplama',backtest_eligible:1,manual_adjustment:0,historical_calibration:1,archive_snapshot:1,pre_race_only:0,snapshot_time_verified:0,snapshot_locked_at:createdAt,resolution_state:fullyResolved?'RESOLVED_ARCHIVE':'PENDING',race_date:file.race_date||'',hippodrome:fold(file.hippodrome||''),altili_no:num(file.altili_no)||1,meeting_uid:file.meeting_uid||file.id,budgets:{main:built?.main?.budgetTL||2000,surprise:built?.alt?.budgetTL||2000,expert:built?.surprise?.budgetTL||2000},coupons,evaluations};
+  const snap={schema_version:6,algorithm_version:archiveLayoutVersion(),id,key:[file.race_date,fold(file.hippodrome),num(file.altili_no)||1].join('|'),created_at:createdAt,source:SOURCE,source_label:'Geçmiş yeniden hesaplama',backtest_eligible:1,manual_adjustment:0,historical_calibration:1,archive_snapshot:1,pre_race_only:0,snapshot_time_verified:0,snapshot_locked_at:createdAt,resolution_state:fullyResolved?'RESOLVED_ARCHIVE':'PENDING',race_date:file.race_date||'',hippodrome:fold(file.hippodrome||''),altili_no:num(file.altili_no)||1,meeting_uid:file.meeting_uid||file.id,budgets:{main:built?.main?.budgetTL||2000,surprise:built?.alt?.budgetTL||2000,expert:built?.surprise?.budgetTL||2000},coupons,evaluations};
   const previous=source.auto_coupon_log.find(x=>String(x?.id)===id&&String(x?.source)===SOURCE);
-  snap.archive_coupon_layout_version=ARCHIVE_LAYOUT_VERSION;
+  snap.archive_coupon_layout_version=archiveLayoutVersion();
   snap.reconstructed_at=new Date().toISOString();
   snap.snapshot_time_verified=0;snap.pre_race_only=0;
   if(previous){snap.previous_archive_coupon=previous.previous_archive_coupon||{coupons:previous.coupons,evaluations:previous.evaluations,algorithm_version:previous.algorithm_version,created_at:previous.created_at};}
@@ -621,6 +623,7 @@ global.tkpBuildHistoricalArchiveCouponSet=buildHistoricalArchiveCouponSet;
 global.tkpHistoricalArchiveResultsForFile=meetingRaceResultsFromLockedSnapshots;
 global.tkpPersistHistoricalArchiveCoupon=persistHistoricalCoupon;
 global.TKP_HISTORICAL_CALIBRATION_VERSION=VERSION;
+global.tkpArchiveLayoutVersion=archiveLayoutVersion;
 global.TKP_HISTORICAL_CALIBRATION_CUTOFF=CUTOFF_ISO;
 global.tkpMarkHistoricalCalibrationSet=markHistoricalSet;
 global.tkpHistoricalCalibrationNeedsRebuild=needsRebuild;
@@ -700,13 +703,14 @@ function summary(records){const out={processed:records.length,pending:0,errors:0
  for(const r of records){if(r.status==='ERROR'){out.errors++;continue;}let pending=false;
  for(const [key,c] of Object.entries(r.coupons||{})){if(c.hit==null){pending=true;continue;}add(key,c,r);}
  for(const c of r.sidebets||[]){if(c.resolved)add(c.product,c,r);}out.pending+=Number(pending);}return out;}
-function html(){const state=g.db?.settings?.current_archive_policy_replay;if(!state)return '';const s=state.summary||{},labels={main:'Normal',alt:'Sürpriz',surprise:'Uzman + Kulis',sirali_ikili:'Sıralı İkili',sirali_uclu:'Üçlü',tabela:'Dörtlü / Tabela',sirali_5li:'Beşli'};
+function incompleteArchiveCount(d){const c=d?.__segmented_storage?.collections||{};return ['files','races','auto_coupon_log','current_policy_replay_log'].reduce((n,k)=>n+Math.max(0,Number(c[k]?.coldCount)||0),0);}
+function html(){const state=g.db?.settings?.current_archive_policy_replay;if(!state)return '';const missing=incompleteArchiveCount(g.db);if(missing)return `<div class="card tkpCurrentArchivePolicy"><h3>Güncel seçim kuralları · kısmi arşiv</h3><p>⚠️ ${missing} ilgili kayıt bu oturumda yüklenmedi. Eksik veriyi tam sonuç gibi göstermemek için araştırma tablosu geçici olarak gösterilmiyor.</p></div>`;const s=state.summary||{},labels={main:'Normal',alt:'Sürpriz',surprise:'Uzman + Kulis',sirali_ikili:'Sıralı İkili',sirali_uclu:'Üçlü',tabela:'Dörtlü / Tabela',sirali_5li:'Beşli'};
  const stale=state.version!==VERSION;
  const records=(g.db?.current_policy_replay_log||[]).filter(r=>r.version===state.version),financial=summary(records),money=n=>Number(n||0).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2})+' TL';
  const rows=Object.entries(labels).map(([key,label])=>{const m=s[key]||{},f=financial[key]||{},known=Number(f.financialKnown)||0,missing=Math.max(0,Number(m.total||0)-known),partial=missing?'<small style="display:block">Bilinen kayıtlar</small>':'';return `<tr><td>${label}</td><td>${m.total||0}</td><td>${m.hit||0}</td><td>${m.total?(100*m.hit/m.total).toFixed(2):'—'}</td><td>${money(m.cost)}</td><td style="white-space:nowrap">${known?money(f.payout):'—'}${known?partial:''}</td><td style="white-space:nowrap;font-weight:700;color:${Number(f.net)<0?'#b91c1c':'#166534'}">${known?money(f.net):'—'}${known?partial:''}</td><td>${known}/${m.total||0}${missing?`<small style="display:block">${missing} ikramiye doğrulanmadı</small>`:''}</td></tr>`;}).join('');
  return `<div class="card tkpCurrentArchivePolicy"><h3>${stale?'Son kaydedilen arşiv araştırması':'Güncel seçim kuralları · bütün arşiv'}</h3><p>${state.cursor||0}/${state.total||0} toplantı · ${state.races||0} koşu · ${state.completed?'Tamamlandı':'İşleniyor'} · ${s.pending||0} sonuç bekleyen · ${s.errors||0} hata${state.duplicate_files?` · ${state.duplicate_files} tekrar dosya ayrı sayılmadı`:""}</p>${stale?'<p>Bu araştırma yeni sürpriz aday kuralıyla yeniden hesaplanmadı. Yeni arşiv araştırmasında altılı üst sınırı 3.000 TL; tarihsel orijinal kayıtlar korunur.</p>':''}<p class="muted">Kayıtlı yarış puanlarıyla güncel seçim ve güncel birim maliyeti. Araştırma hesaplarıdır; eski gerçek kuponların başarı ve kâr/zararını değiştirmez.</p><p class="muted">İkramiye: geçmiş resmî 1 misli ödeme. Net sonuç: ikramiyesi doğrulanabilen kayıtların ikramiyesi − aynı kayıtların güncel maliyeti. Eksik ödemeler sıfır sayılmaz.</p><div class="tableWrap"><table><thead><tr><th>Ürün</th><th>Sonuçlu test</th><th>Tuttu</th><th>%</th><th>Güncel toplam maliyet</th><th>Toplam ikramiye</th><th>Net sonuç</th><th>Hesaplanan kayıt</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;}
 async function run(options={}){
- if(g.__tkpCurrentArchivePolicyRunning)throw new Error('Arşiv güncellemesi zaten çalışıyor.');const d=g.db;if(!d?.files||!d?.races)throw new Error('Arşiv yüklenmedi.');g.__tkpCurrentArchivePolicyRunning=true;
+ if(g.__tkpCurrentArchivePolicyRunning)throw new Error('Arşiv güncellemesi zaten çalışıyor.');const d=g.db;if(!d?.files||!d?.races)throw new Error('Arşiv yüklenmedi.');if(incompleteArchiveCount(d))throw new Error('Araştırma için gerekli eski kayıtlar eksik yüklendi; tam arşiv açılmadan işlem başlatılmadı.');g.__tkpCurrentArchivePolicyRunning=true;
  const files=[...new Map(d.files.map(f=>[String(f.id),f])).values()].sort((a,b)=>String(a.race_date).localeCompare(String(b.race_date))||Number(a.id)-Number(b.id)),byFile=new Map();for(const r of d.races){const k=String(r.file_id);if(!byFile.has(k))byFile.set(k,[]);byFile.get(k).push(r);}
  const records=Array.isArray(d.current_policy_replay_log)?d.current_policy_replay_log:(d.current_policy_replay_log=[]),previous=new Map(records.filter(r=>r.version===VERSION).map(r=>[String(r.file_id),r]));
  const state=d.settings.current_archive_policy_replay={version:VERSION,total:files.length,duplicate_files:d.files.length-files.length,cursor:0,races:0,completed:false,started_at:new Date().toISOString(),errors:[]};

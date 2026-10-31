@@ -572,7 +572,8 @@ function tkpCouponStateSignature(){
 }
 
 function tkpPanelCacheKey(kind,extra=''){
-  return [TKP_PERFORMANCE_VERSION,kind,tkpPerformanceSignature(),extra].join('|');
+  // Ekran kodu (ui-components) degisince kayitli panel HTML'i (RAM + IndexedDB) gecersiz olur; eski gorunum geri gelmez.
+  return [TKP_PERFORMANCE_VERSION,String(globalThis.TKP_UI_RENDER_VERSION||''),kind,tkpPerformanceSignature(),extra].join('|');
 }
 
 function tkpRecordPerformance(name,start,error=null){
@@ -800,7 +801,11 @@ function tkpBacktestCacheKey(budgets,limit){
     alt:Number(budgets?.alt)||0,
     surprise:Number(budgets?.surprise)||0
   };
-  return [TKP_PERFORMANCE_VERSION,'backtest','SCOPE:FULL_ARCHIVE_V1','TARGETS:140-220,90-150,80-140','HARD_LIMIT:120000',tkpBacktestDataSignature(),limit,safe.main,safe.main2,safe.alt,safe.surprise].join('|');
+  const shortGanyan=globalThis.TKP_SHORT_GANYAN||{},shortHistory=globalThis.TKP_SHORT_GANYAN_HISTORY||{};
+  const shortRevision=[shortGanyan.VERSION||'',shortHistory.engineVersion||'',shortHistory.sourceHash||'',shortHistory.logicHash||''].join(':');
+  // Decision badges are presentation output. Bump only the saved HTML key so
+  // legacy decision markup is rendered again without changing Back Test data.
+  return [TKP_PERFORMANCE_VERSION,globalThis.TKP_RECORD_ACCEPTANCE?.VERSION||'','backtest','HTML_SCHEMA:6',`SHORT_GANYAN:${shortRevision}`,'SCOPE:FULL_ARCHIVE_V1','TARGETS:140-220,90-150,80-140','HARD_LIMIT:120000',tkpBacktestDataSignature(),limit,safe.main,safe.main2,safe.alt,safe.surprise].join('|');
 }
 
 function tkpGetBacktestHTMLCached(budgets,limit){
@@ -817,6 +822,19 @@ async function tkpGetBacktestHTMLAsync(budgets,limit){
   const persisted=await tkpReadPersistentBacktest(key);
   if(persisted){_tkpPanelHtmlCache.set(key,persisted);return persisted;}
   return tkpCachedImmediateHtml(key,async()=>{const html=typeof couponArchiveBacktestHTMLAsync==='function'?await couponArchiveBacktestHTMLAsync(budgets,limit):await couponArchiveBacktestHTML(budgets,limit);tkpWritePersistentBacktest(key,html);return html;});
+}
+
+// Opening a menu may restore a report, but must never start a new backtest.
+const _tkpBacktestRestoreFlights=new Map();
+function tkpRestoreBacktestHTML(budgets,limit){
+  const key=tkpBacktestCacheKey(budgets,limit),memory=_tkpPanelHtmlCache.get(key);
+  if(memory)return Promise.resolve({key,html:memory});
+  if(_tkpBacktestRestoreFlights.has(key))return _tkpBacktestRestoreFlights.get(key);
+  const task=Promise.resolve(tkpReadPersistentBacktest(key)).then(html=>{
+    if(html)_tkpPanelHtmlCache.set(key,html);
+    return {key,html:html||''};
+  }).finally(()=>_tkpBacktestRestoreFlights.delete(key));
+  _tkpBacktestRestoreFlights.set(key,task);return task;
 }
 
 function tkpPrewarmPredictionPanels(raceResults){

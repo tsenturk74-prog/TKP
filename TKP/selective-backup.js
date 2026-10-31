@@ -58,17 +58,53 @@
     }
     return out;
   }
+  async function tkpSelectBackupRangeSafe(db,start,end,loadPage){
+    const cold=db?.__segmented_storage?.collections||{};
+    const names=['files','races',...RANGE_COLLECTIONS];
+    const coldTotal=names.reduce((sum,name)=>sum+Math.max(0,Number(cold[name]?.coldCount)||0),0);
+    if(!coldTotal)return tkpSelectBackupRange(db,start,end);
+    const generation=String(db?.__segmented_storage?.baseGeneration||'');
+    if(!generation||typeof loadPage!=='function')throw new Error('Arşivin eski bölümü doğrulanamadı; tam yedek kullanın.');
+    if(coldTotal>20000)throw new Error('Seçmeli yedek için çok fazla eski kayıt var; eksik yedek oluşturmamak için tam yedek kullanın.');
+    const full={...db};
+    for(const name of names){
+      const count=Math.max(0,Number(cold[name]?.coldCount)||0);
+      if(!count)continue;
+      const prefix=[];
+      for(let offset=0;offset<count;){
+        const page=await loadPage(name,{offset,limit:Math.min(500,count-offset)});
+        if(String(page?.manifest?.generation||'')!==generation)throw new Error('Arşiv nesli değişti; sayfayı yenileyin.');
+        if(Number(page?.offset)!==offset||!Array.isArray(page?.rows)||!page.rows.length||page.rows.length>count-offset)throw new Error('Arşivin eski kayıtları eksik okundu; seçmeli yedek oluşturulmadı.');
+        prefix.push(...page.rows);offset+=page.rows.length;
+      }
+      full[name]=prefix.concat(Array.isArray(db?.[name])?db[name]:[]);
+    }
+    return tkpSelectBackupRange(full,start,end);
+  }
+  function mergePresent(existing,incoming){
+    const out={...existing};
+    for(const [key,value] of Object.entries(incoming||{})){
+      if((value==null || (typeof value==='string'&&!value.trim()) || (Array.isArray(value)&&!value.length)) && out[key]!=null)continue;
+      out[key]=value;
+    }
+    return out;
+  }
   function mergeHorseArrays(existing,incoming){
     const out=(Array.isArray(existing)?existing:[]).map(h=>({...h}));
     const by=new Map(out.map((h,i)=>[String(h?.horse_no??h?.no??h?.horse_name??i),i]));
     for(const h of (Array.isArray(incoming)?incoming:[])){
       const k=String(h?.horse_no??h?.no??h?.horse_name??'');
-      if(k&&by.has(k)){const i=by.get(k);out[i]={...out[i],...h};}
+      if(k&&by.has(k)){const i=by.get(k),old=out[i],merged=mergePresent(old,h);
+        for(const key of Object.keys(old))if(/^prediction_.*snapshot/.test(key)&&old[key]!=null&&old[key]!=='')merged[key]=old[key];
+        if(old.prediction_score_snapshot!=null&&old.prediction_score_snapshot!==''){
+          for(const key of ['ypuan','x_base_rank','x_final_rank','x_ypuan_delta'])if(old[key]!=null&&old[key]!=='')merged[key]=old[key];
+        }
+        out[i]=merged;}
       else{by.set(k,out.length);out.push({...h});}
     }
     return out;
   }
-  function mergeGenericArray(existing,incoming,idMap){
+  function mergeGenericArray(existing,incoming,idMap,collection){
     const out=(Array.isArray(existing)?existing:[]).map(x=>x&&typeof x==='object'?{...x}:x);
     const by=new Map(out.map((x,i)=>[rowIdentity(x,i),i]));
     let added=0,updated=0;
@@ -76,7 +112,18 @@
       let row=incoming[n]&&typeof incoming[n]==='object'?{...incoming[n]}:incoming[n];
       if(row&&typeof row==='object'&&row.file_id!=null&&idMap.has(String(row.file_id)))row.file_id=idMap.get(String(row.file_id));
       const k=rowIdentity(row,n);
-      if(by.has(k)){const i=by.get(k);if(row&&typeof row==='object'&&out[i]&&typeof out[i]==='object')out[i]={...out[i],...row};else out[i]=row;updated++;}
+      if(by.has(k)){const i=by.get(k);if(row&&typeof row==='object'&&out[i]&&typeof out[i]==='object'){
+        const old=out[i],merged=mergePresent(old,row);
+        if(collection==='auto_coupon_log'&&old.coupons&&typeof old.coupons==='object'&&Object.keys(old.coupons).length){
+          merged.coupons=old.coupons;
+          for(const key of ['display_snapshot_locked','snapshot_locked_at','created_at','snapshot_time_verified','pre_race_only','coupon_timing_class','data_signature'])if(old[key]!=null)merged[key]=old[key];
+        }
+        if(collection==='bomb_hunter_shadow_log'&&Array.isArray(old.candidates)&&old.candidates.length){
+          merged.candidates=old.candidates;
+          for(const key of ['model','created_at','race_key'])if(old[key]!=null)merged[key]=old[key];
+        }
+        out[i]=merged;
+      }else out[i]=row;updated++;}
       else{by.set(k,out.length);out.push(row);added++;}
     }
     return {rows:out,added,updated};
@@ -93,7 +140,7 @@
       const f={...f0},k=meetingNaturalKey(f);
       if(fileByKey.has(k)){
         const i=fileByKey.get(k),existing=currentFiles[i],keepId=existing?.id;
-        currentFiles[i]={...existing,...f,id:keepId,sequence_no:existing.sequence_no,filename:existing.filename,raw_sequence_no:existing.raw_sequence_no};
+        currentFiles[i]={...mergePresent(existing,f),id:keepId,sequence_no:existing.sequence_no,filename:existing.filename,raw_sequence_no:existing.raw_sequence_no};
         if(f?.id!=null&&keepId!=null)idMap.set(String(f.id),keepId);updatedFiles++;
       }else{
         const oldId=f.id;while(usedIds.has(String(++nextId))){}
@@ -117,7 +164,7 @@
       const k=raceNaturalKey(r);
       if(raceByKey.has(k)){
         const i=raceByKey.get(k),existing=currentRaces[i],keepId=existing?.id,keepFile=existing?.file_id;
-        currentRaces[i]={...existing,...r,horses:mergeHorseArrays(existing?.horses,r?.horses)};
+        currentRaces[i]={...mergePresent(existing,r),horses:mergeHorseArrays(existing?.horses,r?.horses)};
         if(keepId!=null)currentRaces[i].id=keepId;
         if(keepFile!=null&&!r.file_id)currentRaces[i].file_id=keepFile;
         updatedRaces++;
@@ -130,9 +177,9 @@
 
     const summary={addedFiles,updatedFiles,addedRaces,updatedRaces,collections:{}};
     for(const key of RANGE_COLLECTIONS){
-      const merged=mergeGenericArray(target?.[key],incoming?.[key],idMap);db[key]=merged.rows;summary.collections[key]={added:merged.added,updated:merged.updated};
+      const merged=mergeGenericArray(target?.[key],incoming?.[key],idMap,key);db[key]=merged.rows;summary.collections[key]={added:merged.added,updated:merged.updated};
     }
     return {db,summary};
   }
-  return {tkpSelectBackupRange,tkpMergeSelectiveBackup,tkpSelectiveIsoDate:isoDate,tkpSelectiveRowDate:rowDate};
+  return {tkpSelectBackupRange,tkpSelectBackupRangeSafe,tkpMergeSelectiveBackup,tkpSelectiveIsoDate:isoDate,tkpSelectiveRowDate:rowDate};
 });

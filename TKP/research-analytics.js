@@ -5,9 +5,11 @@
  */
 (function(global){
   'use strict';
-  const VERSION='V1.1.335-RESEARCH-ANALYTICS-SIGNAL-COVERAGE';
+  const VERSION='V1.1.335-RESEARCH-ANALYTICS-VALID-OUTCOMES-2';
   const EPS=1e-9;
   function n(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d;}
+  function knownNumber(v){return v!=null&&typeof v!=='boolean'&&String(v).trim()!==''&&Number.isFinite(Number(v))?Number(v):null;}
+  function finishPosition(h){const p=knownNumber(h?.finish_position);return Number.isSafeInteger(p)&&p>0?p:(Number(h?.winner)===1?1:999);}
   function researchGcTrValue(horse){
     const sources=[horse?.tr_ganyan_source,horse?.tr_source].map(v=>String(v??'').trim().toUpperCase());
     if(!sources.includes('GANYAN_CANAVARI_TR'))return NaN;
@@ -38,11 +40,11 @@
       // Research hesapları kaynak prediction_log nesnelerini ASLA değiştirmez.
       // Türetilmiş olasılıklar yalnız bu yerel kopyalarda tutulur.
       const rs=[...uniq.values()].map(r=>({...r}));
-      const scoreSum=rs.reduce((s,r)=>s+Math.max(EPS,n(r.score)),0);
+      const scoreSum=rs.reduce((s,r)=>s+(knownNumber(r.score)==null?0:Math.max(EPS,n(r.score))),0);
       const agfSum=rs.reduce((s,r)=>s+Math.max(0,n(r.agf)),0);
       for(const r of rs){
-        r.__modelProb=Number.isFinite(Number(r.model_prob_proxy))?clamp(r.model_prob_proxy):Math.max(EPS,n(r.score))/scoreSum;
-        r.__marketProb=Number.isFinite(Number(r.market_prob))?clamp(r.market_prob):(agfSum>0?Math.max(0,n(r.agf))/agfSum:null);
+        r.__modelProb=knownNumber(r.model_prob_proxy)!=null?clamp(r.model_prob_proxy):(knownNumber(r.score)!=null&&scoreSum>0?Math.max(EPS,n(r.score))/scoreSum:null);
+        r.__marketProb=knownNumber(r.market_prob)!=null?clamp(r.market_prob):(knownNumber(r.agf)!=null&&agfSum>0?Math.max(0,n(r.agf))/agfSum:null);
       }
       return {...g,rows:rs};
     }).filter(g=>g.rows.length>=2);
@@ -61,7 +63,7 @@
     for(const g of resolvedGroups){
       let best=null,bestEdge=-Infinity;
       for(const r of g.rows){
-        if(n(r.resolved)!==1||r.__marketProb==null) continue;
+        if(n(r.resolved)!==1||r.__marketProb==null||r.__modelProb==null) continue;
         const e=r.__modelProb-r.__marketProb;
         if(e>bestEdge){bestEdge=e;best=r;}
       }
@@ -74,7 +76,7 @@
     const groups=ctx.resolvedGroups;
     const rows=[];
     for(const g of groups) for(const r of g.rows){
-      if(n(r.resolved)!==1) continue;
+      if(n(r.resolved)!==1||r.__modelProb==null) continue;
       rows.push({p:clamp(r.__modelProb),m:r.__marketProb==null?null:clamp(r.__marketProb),y:n(r.winner)===1?1:0,rank:n(r.predicted_rank,999)});
     }
     if(!rows.length) return {races:0,horse_rows:0,brier:null,logloss:null,ece:null,bins:[],market_brier:null,market_logloss:null,top_edge:{starts:0,wins:0,rate:0,avg_edge:0},proxy_note:'PRE-RACE-FROZEN veri bekleniyor'};
@@ -84,8 +86,8 @@
     const marketBrier=mr.length?mean(mr.map(r=>(r.m-r.y)**2)):null;
     const marketLog=mr.length?mean(mr.map(r=>-(r.y*Math.log(Math.max(EPS,r.m))+(1-r.y)*Math.log(Math.max(EPS,1-r.m))))):null;
     const bins=[];let ece=0;
-    for(let lo=0;lo<1;lo+=0.1){
-      const hi=lo+0.1, z=rows.filter(r=>r.p>=lo&&(hi>=1?r.p<=hi:r.p<hi));
+    for(let bin=0;bin<10;bin++){
+      const lo=bin/10,hi=(bin+1)/10, z=rows.filter(r=>r.p>=lo&&(bin===9?r.p<=hi:r.p<hi));
       if(!z.length) continue;
       const pred=mean(z.map(r=>r.p)),actual=mean(z.map(r=>r.y)); ece+=z.length/rows.length*Math.abs(pred-actual);
       bins.push({lo:pct(lo),hi:pct(hi),n:z.length,pred:pct(pred),actual:pct(actual),gap:pct(actual-pred)});
@@ -183,7 +185,7 @@
           const z=hist.get(hk)||[], acc=z.filter(x=>x.speed!=null||x.finish!=null);
           const speed=acc.filter(x=>x.speed!=null).map(x=>x.speed), finish=acc.filter(x=>x.finish!=null).map(x=>x.finish);
           const priorStarts=z.length, priorWins=z.reduce((s,x)=>s+(x.win?1:0),0); if(priorStarts) formRows++; if(acc.length) paceRows++;
-          const fp=n(h.finish_position,999), win=n(h.winner)===1||fp===1; if(fp<999||win) resolvedRows++;
+          const fp=finishPosition(h), win=n(h.winner)===1||fp===1; if(fp<999||win) resolvedRows++;
           rows.push({pace:speed.length?mean(speed):null,finish:finish.length?mean(finish):null,starts:priorStarts,wins:priorWins,win:win?1:0,fp});
         }
         const paceCandidates=rows.filter(x=>x.pace!=null).sort((a,b)=>b.pace-a.pace);
@@ -191,7 +193,7 @@
       }
       for(const r of day) for(const h of (r.horses||[])){
         const hk=fold(h.horse_name); if(!hk) continue;
-        const speed=Number(h.accurate_avg_speed_mps), finish=Number(h.accurate_finish_signal), fp=n(h.finish_position,999);
+        const speed=knownNumber(h.accurate_avg_speed_mps), finish=knownNumber(h.accurate_finish_signal), fp=finishPosition(h);
         const rec={speed:Number.isFinite(speed)&&speed>0?speed:null,finish:Number.isFinite(finish)?finish:null,win:(n(h.winner)===1||fp===1)?1:0};
         if(!hist.has(hk)) hist.set(hk,[]); hist.get(hk).push(rec);
       }
@@ -210,7 +212,7 @@
       const k=[String(r.file_id??''),n(r.leg)].join('|');raceKeys.set(k,(raceKeys.get(k)||0)+1);
       const mk=[r.race_date||'',fold(r.hippodrome||''),n(r.leg)].join('|');meetingRaceKeys.set(mk,(meetingRaceKeys.get(mk)||0)+1);
       if(r.file_id!=null&&!fileIds.has(String(r.file_id))) orphanRaces++;
-      const winners=(r.horses||[]).filter(h=>n(h.winner)===1||n(h.finish_position,999)===1), w=winners.length;
+      const winners=(r.horses||[]).filter(h=>n(h.winner)===1||finishPosition(h)===1), w=winners.length;
       if(w===1)winnerOk++;else if(w===0)winnerMissing++;else{
         winnerMulti++;
         const nums=new Set(winners.map(h=>String(h.horse_no||''))), payouts=Array.isArray(r.payouts)?r.payouts:[];
@@ -228,7 +230,7 @@
   function safeReuseCoverage(ctx){
     const resolved=ctx.resolvedGroups;
     let rows=0,score=0,frozenAgf=0,ypuan=0,bmb=0,odb=0;
-    for(const g of resolved)for(const r of g.rows){if(n(r.resolved)!==1)continue;rows++;if(Number.isFinite(Number(r.score)))score++;if(n(r.agf)>0)frozenAgf++;if(Number.isFinite(Number(r.ypuan)))ypuan++;if(r.bmb!=null)bmb++;if(r.odb!=null)odb++;}
+    for(const g of resolved)for(const r of g.rows){if(n(r.resolved)!==1)continue;rows++;if(knownNumber(r.score)!=null)score++;if(n(r.agf)>0)frozenAgf++;if(knownNumber(r.ypuan)!=null)ypuan++;if(r.bmb!=null)bmb++;if(r.odb!=null)odb++;}
     return {resolved_races:resolved.length,resolved_rows:rows,frozen_score_rows:score,frozen_agf_rows:frozenAgf,frozen_ypuan_rows:ypuan,frozen_bmb_rows:bmb,frozen_odb_rows:odb,model_proxy_safe_rows:score,market_safe_rows:frozenAgf,note:'Model proxy eski donmuş score’dan güvenle üretilebilir. Piyasa olasılığı yalnız snapshot içinde AGF varsa güvenli sayılır; arşivde sonradan bulunan AGF kalibrasyona geri yazılmaz.'};
   }
 
@@ -238,14 +240,14 @@
   // fakat sonuç bilgisi seçim puanına sızmaz.
   function historicalBhAndProfile(ctx){
     const races=ctx.races;
-    const rankMap=(horses,read,lower=false)=>{const rows=horses.map(h=>({h,v:Number(read(h))})).filter(x=>Number.isFinite(x.v));rows.sort((a,b)=>lower?a.v-b.v:b.v-a.v);const map=new Map();rows.forEach((x,i)=>map.set(x.h,i+1));return {map,count:rows.length};};
+    const rankMap=(horses,read,lower=false)=>{const rows=horses.map(h=>({h,v:knownNumber(read(h))})).filter(x=>x.v!=null&&(!lower||x.v>0));rows.sort((a,b)=>lower?a.v-b.v:b.v-a.v);const map=new Map();rows.forEach((x,i)=>map.set(x.h,i+1));return {map,count:rows.length};};
     const rankScore=(m,h)=>{const rank=m.map.get(h);return !rank||!m.count?0:m.count<=1?1:Math.max(0,1-(rank-1)/(m.count-1));};
-    const profileValue=h=>{for(const v of [h?.team_strength_pct,h?.profile_strength_pct,h?.prof,h?.leader_prof]){const x=Number(v);if(Number.isFinite(x))return x;}return null;};
+    const profileValue=h=>{for(const v of [h?.team_strength_pct,h?.profile_strength_pct,h?.prof,h?.leader_prof]){const x=knownNumber(v);if(x!=null)return x;}return null;};
     const bands=[{label:'<50',lo:-Infinity,hi:50},{label:'50–59',lo:50,hi:60},{label:'60–69',lo:60,hi:70},{label:'70+',lo:70,hi:Infinity}].map(x=>({...x,starts:0,wins:0,top3:0,top5:0}));
     let bhRaces=0,anyWin=0,anyTop3=0,anyTop5=0,firstWin=0,secondWin=0;const winnerScoresByDate=[];
     for(const r of races){
-      const hs=(r.horses||[]).filter(h=>h&&!h.non_runner&&!h.scratched),winnerKnown=hs.some(h=>n(h.winner)===1||n(h.finish_position,999)===1);if(!winnerKnown)continue;
-      for(const h of hs){const p=profileValue(h),fp=n(h.finish_position,999),win=n(h.winner)===1||fp===1;if(p==null)continue;const band=bands.find(x=>p>=x.lo&&p<x.hi);if(band){band.starts++;if(win)band.wins++;if(fp<=3)band.top3++;if(fp<=5)band.top5++;}}
+      const hs=(r.horses||[]).filter(h=>h&&!h.non_runner&&!h.scratched),winnerKnown=hs.some(h=>n(h.winner)===1||finishPosition(h)===1);if(!winnerKnown)continue;
+      for(const h of hs){const p=profileValue(h),fp=finishPosition(h),win=n(h.winner)===1||fp===1;if(p==null)continue;const band=bands.find(x=>p>=x.lo&&p<x.hi);if(band){band.starts++;if(win)band.wins++;if(fp<=3)band.top3++;if(fp<=5)band.top5++;}}
       const maps={value:rankMap(hs,h=>h?.value_score),hndkp:rankMap(hs,h=>h?.hndkp_rank,true),tr:rankMap(hs,researchGcTrValue),jbyg:rankMap(hs,h=>h?.jbyg??h?.jbyg_rank,true),g800:rankMap(hs,h=>h?.g800,true),ypuan:rankMap(hs,h=>h?.ypuan),base:rankMap(hs,h=>h?.score)};
       const candidates=hs.filter(h=>(Number(h?.agf_rank)||99)>=6).map(h=>{
         const prof=profileValue(h),odb=n(h?.odb)===1||n(h?._ypuanOdbTail)===1;
@@ -253,19 +255,19 @@
         return {h,score};
       }).filter(x=>x.score>.18).sort((a,b)=>b.score-a.score||(Number(a.h?.agf_rank)||99)-(Number(b.h?.agf_rank)||99)).slice(0,4);
       if(!candidates.length)continue;bhRaces++;
-      const hit=candidates.filter(x=>n(x.h?.winner)===1||n(x.h?.finish_position,999)===1);if(hit.length){anyWin++;for(const x of hit)winnerScoresByDate.push({race_date:String(r.race_date),score:Number((x.score*100).toFixed(2))});}
-      if(candidates.some(x=>n(x.h?.finish_position,999)<=3))anyTop3++;if(candidates.some(x=>n(x.h?.finish_position,999)<=5))anyTop5++;if(n(candidates[0]?.h?.winner)===1||n(candidates[0]?.h?.finish_position,999)===1)firstWin++;
+      const hit=candidates.filter(x=>n(x.h?.winner)===1||finishPosition(x.h)===1);if(hit.length){anyWin++;for(const x of hit)winnerScoresByDate.push({race_date:String(r.race_date),score:Number((x.score*100).toFixed(2))});}
+      if(candidates.some(x=>finishPosition(x.h)<=3))anyTop3++;if(candidates.some(x=>finishPosition(x.h)<=5))anyTop5++;if(n(candidates[0]?.h?.winner)===1||finishPosition(candidates[0]?.h)===1)firstWin++;
       // BH 2. sıradaki adayın kendi başına isabetini de ayrı sayıyoruz (1. aday ile
       // karıştırılmadan): "BH 1./2. öğrenme" kullanıcı gereksinimi -- 1. ve 2. aday
       // performansı ayrı ayrı görünür olmalı, tek bir "herhangi biri tuttu" ölçüsüne gömülmemeli.
-      if(candidates[1]&&(n(candidates[1].h?.winner)===1||n(candidates[1].h?.finish_position,999)===1))secondWin++;
+      if(candidates[1]&&(n(candidates[1].h?.winner)===1||finishPosition(candidates[1].h)===1))secondWin++;
     }
-    return {version:'BH-500-PRE-RACE-V1',strict_pre_race:true,races:bhRaces,any_win:anyWin,any_top3:anyTop3,any_top5:anyTop5,first_win:firstWin,second_win:secondWin,win_rate:bhRaces?anyWin/bhRaces:0,top3_rate:bhRaces?anyTop3/bhRaces:0,top5_rate:bhRaces?anyTop5/bhRaces:0,first_win_rate:bhRaces?firstWin/bhRaces:0,second_win_rate:bhRaces?secondWin/bhRaces:0,winner_scores_by_date:winnerScoresByDate,profile_bands:bands.map(x=>({label:x.label,starts:x.starts,wins:x.wins,win_rate:x.starts?x.wins/x.starts:0,top3:x.top3,top3_rate:x.starts?x.top3/x.starts:0,top5:x.top5,top5_rate:x.starts?x.top5/x.starts:0,eligible:x.starts>0}))};
+    return {version:'BH-500-RECONSTRUCTED-V2',strict_pre_race:false,champion_eligible:false,races:bhRaces,any_win:anyWin,any_top3:anyTop3,any_top5:anyTop5,first_win:firstWin,second_win:secondWin,win_rate:bhRaces?anyWin/bhRaces:0,top3_rate:bhRaces?anyTop3/bhRaces:0,top5_rate:bhRaces?anyTop5/bhRaces:0,first_win_rate:bhRaces?firstWin/bhRaces:0,second_win_rate:bhRaces?secondWin/bhRaces:0,winner_scores_by_date:winnerScoresByDate,profile_bands:bands.map(x=>({label:x.label,starts:x.starts,wins:x.wins,win_rate:x.starts?x.wins/x.starts:0,top3:x.top3,top3_rate:x.starts?x.top3/x.starts:0,top5:x.top5,top5_rate:x.starts?x.top5/x.starts:0,eligible:x.starts>0}))};
   }
 
   let _buildCache={db:null,revision:null,files:null,races:null,preds:null,forward:null,bets:null,value:null};
   function currentRevision(){try{return typeof _tkpDbRevision!=='undefined'?Number(_tkpDbRevision):null;}catch(_e){return null;}}
-  const TKP_ANALYSIS_CACHE_KEY='research_analytics_v2_signal_coverage';
+  const TKP_ANALYSIS_CACHE_KEY='research_analytics_v3_valid_outcomes';
   function build(db){
     const revision=currentRevision(), files=db?.files, races=db?.races, preds=db?.prediction_log, forward=db?.forward_tracking_log, bets=db?.bets;
     if(_buildCache.db===db&&_buildCache.revision===revision&&_buildCache.files===files&&_buildCache.races===races&&_buildCache.preds===preds&&_buildCache.forward===forward&&_buildCache.bets===bets&&_buildCache.value) return _buildCache.value;

@@ -17,7 +17,8 @@
    const time=String(race.tjk_race_time||race.race_time||'').match(/(\d{1,2})[:.](\d{2})/);
    const start=time?Date.parse(String(race.race_date||'').slice(0,10)+'T'+time[1].padStart(2,'0')+':'+time[2]+':00+03:00'):NaN;
    const known=(race.horses||[]).some(h=>Number(h.winner)===1||Number(h.finish_position)===1);
-   if(!width||!Number.isFinite(at)||!Number.isFinite(start)||at>=start||known){row.eligible=false;row.reason='NOT_VERIFIED_PRE_RACE';}
+   const lateAccepted=options.lateResultFreeAccepted===true;
+   if(!width||!Number.isFinite(at)||!Number.isFinite(start)||at>=start&&!lateAccepted||known&&!lateAccepted){row.eligible=false;row.reason='NOT_VERIFIED_PRE_RACE';}
    if(new Set(picks.map(key)).size!==width){row.eligible=false;row.reason='DUPLICATE_BASELINE_GROUP';}
    if(row.eligible&&width>=4&&!leg.protectedFlag){
     // Existing production ordering supplies P1–P5; the fixed experiment uses

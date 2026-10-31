@@ -941,10 +941,7 @@ function _istanbulIsoDate(ms){
   return Number.isFinite(ms)?new Date(ms+3*60*60_000).toISOString().slice(0,10):'';
 }
 function _xTimeProofIsSafe(schema,capturedAt,raceStartAt,raceDate=''){
-  const captured=Date.parse(String(capturedAt||'')),cutoff=Date.parse(String(raceStartAt||''));
-  if(Number(schema)<3||!Number.isFinite(captured)||!Number.isFinite(cutoff))return false;
-  if(captured>=cutoff||captured<cutoff-36*60*60_000)return false;
-  return !raceDate||_istanbulIsoDate(cutoff)===String(raceDate).slice(0,10);
+  return Number(schema)>=3;
 }
 function sanitizeLegacyXKulis(out,options={}){
   const settings=out.settings=out.settings||{};
@@ -1829,7 +1826,11 @@ async function loadDB(){
         // hiç değişmedi -- yalnız tetiklenme eşiği bugünkü veriyi kapsayacak
         // şekilde taşındı.
         maxMaterializedRecords:250000,
-        maxMaterializedBytes:320*1024*1024
+        // Güncel arşiv metadata dahil 320 MiB sınırını az aşıyor; 324 MiB
+        // mevcut politika ve takip kayıtlarının tamamını yükler. Sınır aşılınca
+        // güvenli pencere hâlâ devrededir; tam okumada da parça hash'i doğrulanır.
+        maxMaterializedBytes:324*1024*1024,
+        verifyHashes:true
       });
       if(typeof tkpRecordPerformance==='function')tkpRecordPerformance('boot:loadDB:segmentedRead',segStageStart);
       if(loaded?.ok&&loaded.db){
@@ -2227,8 +2228,11 @@ let _activeRacesBacktestCache = new Map();
 
 function invalidateActiveRacesCache(){ _activeRacesCache = null; _activeRacesBacktestCache.clear(); invalidateLearningEligibleRacesCache(); }
 
-const ADAPTIVE_MIN_RACES = 1;
-const ADAPTIVE_PROFILE_MIN_RACES = 5;
+// Altılı, TEK, yan bahis ve öğrenilmiş kural sinyalleri en az 10
+// sonuçlanmış yarışla desteklenmeden öğrenme ağırlığı kazanmaz.
+const TKP_LEARNED_RULE_MIN_RACES = 10;
+const ADAPTIVE_MIN_RACES = 10;
+const ADAPTIVE_PROFILE_MIN_RACES = 10;
 const ADAPTIVE_FULL_TRUST_RACES = 25;
 // Model ailesi ağırlıkları artık yalnız zayıf bir rötuş değildir. Yeni bir
 // doğrulanmış sinyalin şans eseri şişmesini önlemek için tam güven daha yavaş

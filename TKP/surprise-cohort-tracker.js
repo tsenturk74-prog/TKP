@@ -9,7 +9,7 @@
 (function(global){
   'use strict';
 
-  const VERSION='V1.1.240-SURPRISE-COHORT-SHADOW-1';
+  const VERSION='V1.1.240-SURPRISE-COHORT-AGF-RESEARCH-6';
   const LOG_KEY='surprise_cohort_tracking_log';
   const LIVE_CLASS='LIVE_PRE_RACE_LOCKED';
   const RESEARCH_CLASS='HISTORICAL_RESEARCH';
@@ -30,6 +30,30 @@
     return Number.isNaN(d.getTime())?'':d.toISOString();
   }
   function finiteNumber(value){const n=Number(value);return Number.isFinite(n)?n:null;}
+  function finishPosition(value){
+    if(value==null||typeof value==='boolean'||String(value).trim()==='')return null;
+    const n=Number(value);return Number.isSafeInteger(n)&&n>0?n:null;
+  }
+  const repairedLogs=new WeakSet();
+  function repairStoredOutcomes(log){
+    if(repairedLogs.has(log))return;
+    repairedLogs.add(log);let changed=false;
+    for(const rec of log){
+      if(!rec?.outcome?.candidate_sets)continue;
+      let repaired=false;
+      for(const values of Object.values(rec.outcome.candidate_sets)){
+        if(!Array.isArray(values))continue;
+        for(const value of values){
+          if(!value||finishPosition(value.finish_position)!==null)continue;
+          if(value.finish_position!==null||Number(value.win)||Number(value.top3)||Number(value.top5)){
+            value.finish_position=null;value.win=0;value.top3=0;value.top5=0;repaired=true;
+          }
+        }
+      }
+      if(repaired){rec.outcome_finish_repair_version='POSITIVE_INTEGER_FINISH_V1';changed=true;}
+    }
+    if(changed)queuePersistence();
+  }
   function cleanText(value){return String(value??'').trim();}
   function normalizeHorseNo(value){return cleanText(value).toLocaleUpperCase('tr-TR');}
   function sameHorse(left,right){
@@ -42,9 +66,8 @@
     try{return typeof global.isNonRunner==='function'&&global.isNonRunner(horse);}catch(_e){return /\(KOŞMAZ\)/i.test(String(horse?.horse_name||''));}
   }
   function hasResult(race){
-    try{return typeof global.raceHasConfirmedResult==='function'&&global.raceHasConfirmedResult(race?.horses||[]);}catch(_e){
-      return (race?.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
-    }
+    try{if(typeof global.raceHasConfirmedResult==='function')return global.raceHasConfirmedResult(race?.horses||[]);}catch(_e){}
+    return (race?.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
   }
   function canonicalTrack(value){
     try{return typeof global.canonicalHippodrome==='function'?global.canonicalHippodrome(value||''):cleanText(value).toLocaleUpperCase('tr-TR');}catch(_e){return cleanText(value).toLocaleUpperCase('tr-TR');}
@@ -89,6 +112,7 @@
     const out=target||currentDb();
     if(!out)return [];
     if(!Array.isArray(out[LOG_KEY]))out[LOG_KEY]=[];
+    repairStoredOutcomes(out[LOG_KEY]);
     return out[LOG_KEY];
   }
   function lookup(log,key){
@@ -127,15 +151,17 @@
       ||(Number(a?.agf_rank)||999)-(Number(b?.agf_rank)||999)
       ||TKP_TR_COLLATOR_NUM.compare(cleanText(a?.horse_no),cleanText(b?.horse_no)));
   }
-  function candidateSets(race){
+  function candidateSets(race,eventClass){
     const horses=(race?.horses||[]).filter(h=>h&&!nonRunner(h));
     let bh=[];
     try{
       const sourceDb=currentDb();
       const bhKey=typeof global.tkpBombHunterRaceKey==='function'?global.tkpBombHunterRaceKey(race):raceKey(race);
       const frozen=(sourceDb?.bomb_hunter_shadow_log||[]).slice().reverse().find(row=>row?.race_key===bhKey&&Array.isArray(row?.candidates)&&row.candidates.length);
-      if(frozen){
-        bh=frozen.candidates.slice(0,MAX_BH).map((row,index)=>{
+      if(eventClass===LIVE_CLASS&&typeof global.tkpBombHunterCandidates==='function'){
+        bh=global.tkpBombHunterCandidates(race).slice(0,MAX_BH).map((row,index)=>compactCandidate(row?.h,{rank:index+1,bh_score:finiteNumber(row?.score),reasons:Array.isArray(row?.reasons)?row.reasons.slice(0,4):[]}));
+      }else if(frozen){
+        bh=frozen.candidates.filter(row=>!(typeof global.tkpBombHunterWasPortfolioBackfill==='function'&&global.tkpBombHunterWasPortfolioBackfill(row))).slice(0,MAX_BH).map((row,index)=>{
           const horse=horses.find(h=>sameHorse(h?.horse_no,row?.horse_no))||row;
           return compactCandidate(horse,{rank:Number(row?.rank)||index+1,bh_score:finiteNumber(row?.score),reasons:Array.isArray(row?.reasons)?row.reasons.slice(0,4):[]});
         });
@@ -159,6 +185,14 @@
   }
   function createRecord(race,eventClass,now){
     const start=raceStartAt(race);
+    const candidates=candidateSets(race,eventClass);
+    if(eventClass===LIVE_CLASS){
+      candidates.AGF_FIELD=(race?.horses||[]).filter(h=>h&&!nonRunner(h)).map(h=>{
+        const raw=h?.agf_rank;
+        const rank=(raw==null||typeof raw==='boolean'||String(raw).trim()==='')?null:Number(raw);
+        return {horse_no:cleanText(h?.horse_no),agf_rank:Number.isSafeInteger(rank)&&rank>0?rank:null};
+      });
+    }
     const rec={
       version:VERSION,race_key:raceKey(race),event_class:eventClass,promotion_status:'SHADOW',automatic_promotion:false,
       race_date:cleanText(race?.race_date||race?.date),hippodrome:cleanText(race?.hippodrome),altili_no:Number(race?.altili_no)||1,
@@ -166,7 +200,7 @@
       file_id:race?.file_id??null,meeting_uid:cleanText(race?.meeting_uid),race_uid:cleanText(race?.race_uid),
       captured_at:nowIso(now),race_start_at:start?start.toISOString():'',
       pre_race_provenance:eventClass===LIVE_CLASS?'TIMESTAMPED_BEFORE_RACE':'RECONSTRUCTED_STORED_FIELDS_RESEARCH_ONLY',
-      candidates:candidateSets(race),agf_movement:{samples:[],sharp_candidates:[],status:'PRE_RACE_SAMPLE_PENDING'},
+      candidates,agf_movement:{samples:[],sharp_candidates:[],status:'PRE_RACE_SAMPLE_PENDING'},
       outcome:null,resolved_at:'',integrity:'OK'
     };
     rec.immutable_snapshot_hash=stableHash(JSON.stringify(snapshotPrimary(rec)));
@@ -260,7 +294,7 @@
     for(const [kind,candidates] of Object.entries(rec.candidates||{})){
       sets[kind]=(candidates||[]).map(candidate=>{
         const horse=(race?.horses||[]).find(h=>sameHorse(h?.horse_no,candidate?.horse_no))||null;
-        const finish=finiteNumber(horse?.finish_position)??(Number(horse?.winner)===1?1:null);
+        const finish=finishPosition(horse?.finish_position)??(Number(horse?.winner)===1?1:null);
         return {horse_no:cleanText(candidate?.horse_no),finish_position:finish,win:finish===1?1:0,top3:finish!==null&&finish<=3?1:0,top5:finish!==null&&finish<=5?1:0};
       });
     }
@@ -400,6 +434,100 @@
     }) : [];
     return {events:relevant.length,resolved_events:done.length,candidates,wins,top3,top5,sharp_movement_events:sharp,by_rank};
   }
+  let recoveryData=global.TKP_BH_AGF_RECOVERY||null,recoveryLoading=false;
+  function recoveredAgfField(rec){
+    if(!recoveryData&&!recoveryLoading&&typeof global.fetch==='function'){
+      recoveryLoading=true;
+      global.fetch('bh-agf-recovered.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(data=>{
+        if(data?.schema==='TKP_BH_PRESTART_ARCHIVE_AGF_V1'&&Array.isArray(data.records))recoveryData=data;
+        try{if(typeof global.tkpRefreshLearningCache==='function')global.tkpRefreshLearningCache(true);if(typeof global.renderActivePane==='function')global.renderActivePane();}catch(_e){}
+      }).catch(()=>{});
+    }
+    if(recoveryData?.schema!=='TKP_BH_PRESTART_ARCHIVE_AGF_V1'||!Array.isArray(recoveryData.records))return null;
+    const rows=recoveryData.records.filter(x=>x?.race_key===rec.race_key&&x?.snapshot_hash===rec.immutable_snapshot_hash);
+    if(rows.length!==1)return null;
+    const x=rows[0],at=Date.parse(x.archive_at),captured=Date.parse(rec.captured_at),start=Date.parse(rec.race_start_at);
+    if(x.captured_at!==rec.captured_at||x.race_start_at!==rec.race_start_at||!Number.isFinite(at)||!(at<=captured&&captured<start)||!/^[0-9a-f]{64}$/.test(x.archive_sha256||'')||!Array.isArray(x.field)||!x.field.length)return null;
+    const seen=new Set();for(const h of x.field){const no=String(h?.horse_no||'');if(!/^\d+$/.test(no)||seen.has(no)||!Number.isSafeInteger(h.agf_rank)||h.agf_rank<1)return null;seen.add(no);}
+    for(const rows of Object.values(rec.candidates||{}))for(const candidate of rows||[]){const h=x.field.find(z=>z.horse_no===String(candidate?.horse_no||'').split('-')[0]);const saved=Number(candidate?.agf_rank);if(h&&saved>0&&((saved<=5)!==(h.agf_rank<=5)))return null;}
+    return x.field;
+  }
+  function bhAgfOutsideFive(rows,target){
+    const out={eligible:0,hits:0,agf_6_8_hits:0,recovered_snapshot:0,missing_rank:0,unverified:0,missing_snapshot:0,invalid_snapshot:0,outside_bh_total:0,outside_bh_ranks:{}};
+    const latestRaces=new Map();
+    for(const r of target?.races||[]){const key=compositeKey(r),list=latestRaces.get(key)||[];list.push(r);latestRaces.set(key,list);}
+    const first=new Map();
+    for(const rec of rows){if(rec?.event_class!==LIVE_CLASS||!rec?.outcome)continue;const key=compositeKey(rec);const old=first.get(key);if(!old||String(rec.captured_at)<String(old.captured_at))first.set(key,rec);}
+    const programNo=x=>normalizeHorseNo(x).split('-')[0];
+    for(const [key,rec] of first){
+      if(rec.integrity!=='OK'||!validSnapshot(rec)||!(Date.parse(rec.captured_at)<Date.parse(rec.race_start_at))){out.invalid_snapshot++;continue;}
+      const matched=latestRaces.get(key)||[];
+      if(matched.length!==1||!['VERIFIED','VERIFIED_TJK_PAYOUT'].includes(matched[0].result_integrity_status)){out.unverified++;continue;}
+      const winners=(matched[0].horses||[]).filter(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
+      if(winners.length!==1||!programNo(winners[0].horse_no)||programNo(winners[0].horse_no)!==programNo(rec.outcome.winner_no)){out.unverified++;continue;}
+      let field=rec?.candidates?.AGF_FIELD;
+      if(!Array.isArray(field)){field=recoveredAgfField(rec);if(field)out.recovered_snapshot++;else{out.missing_snapshot++;continue;}}
+      const no=programNo(winners[0].horse_no),entry=field.find(h=>programNo(h.horse_no)===no),rank=entry?.agf_rank;
+      if(!Number.isSafeInteger(rank)||rank<1){out.missing_rank++;continue;}
+      if(!(rec.candidates?.BH||[]).slice(0,6).some(h=>programNo(h.horse_no)===no)){out.outside_bh_total++;out.outside_bh_ranks[rank]=(out.outside_bh_ranks[rank]||0)+1;}
+      if(rank<=5)continue;
+      out.eligible++;
+      if((rec.candidates.BH||[]).slice(0,6).some(h=>programNo(h.horse_no)===no))out.hits++;
+      if((rec.candidates.AGF_6_8||[]).slice(0,3).some(h=>programNo(h.horse_no)===no))out.agf_6_8_hits++;
+    }
+    return out;
+  }
+  function bhAgfResearch(rows,target){
+    const out={resolved:0,eligible:0,hits:0,agf_6_8_hits:0,reconstructed:0,missing_rank:0,unverified:0,invalid_snapshot:0,outside_bh_total:0,outside_bh_ranks:{}};
+    const races=new Map();for(const r of target?.races||[]){const key=compositeKey(r),a=races.get(key)||[];a.push(r);races.set(key,a);}
+    const chosen=new Map();for(const rec of rows){if(!rec?.outcome||!['LIVE_PRE_RACE_LOCKED','HISTORICAL_RESEARCH'].includes(rec.event_class))continue;const key=compositeKey(rec),old=chosen.get(key);if(!old||(old.event_class!==LIVE_CLASS&&rec.event_class===LIVE_CLASS))chosen.set(key,rec);}
+    const no=x=>normalizeHorseNo(x).split('-')[0];
+    for(const [key,rec] of chosen){
+      if(rec.integrity!=='OK'||!validSnapshot(rec)){out.invalid_snapshot++;continue;}
+      const matches=races.get(key)||[];if(matches.length!==1||!['VERIFIED','VERIFIED_TJK_PAYOUT'].includes(matches[0].result_integrity_status)){out.unverified++;continue;}
+      const winners=(matches[0].horses||[]).filter(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
+      if(winners.length!==1||!no(winners[0].horse_no)||no(winners[0].horse_no)!==no(rec.outcome.winner_no)){out.unverified++;continue;}
+      out.resolved++;if(rec.event_class===RESEARCH_CLASS)out.reconstructed++;
+      const raw=winners[0].agf_rank,rank=(raw==null||typeof raw==='boolean'||String(raw).trim()==='')?null:Number(raw);
+      if(!Number.isSafeInteger(rank)||rank<1){out.missing_rank++;continue;}
+      if(!(rec.candidates?.BH||[]).slice(0,6).some(h=>no(h.horse_no)===no(winners[0].horse_no))){out.outside_bh_total++;out.outside_bh_ranks[rank]=(out.outside_bh_ranks[rank]||0)+1;}
+      if(rank<=5)continue;
+      out.eligible++;if((rec.candidates?.BH||[]).slice(0,6).some(h=>no(h.horse_no)===no(winners[0].horse_no)))out.hits++;
+      if((rec.candidates?.AGF_6_8||[]).slice(0,3).some(h=>no(h.horse_no)===no(winners[0].horse_no)))out.agf_6_8_hits++;
+    }
+    return out;
+  }
+  function bhMissedResearchWinner(r,target){
+    if(!r||!['VERIFIED','VERIFIED_TJK_PAYOUT'].includes(r.result_integrity_status))return null;
+    const db0=target||currentDb();if(!db0)return null;
+    const key=compositeKey(r),matches=(db0.races||[]).filter(x=>compositeKey(x)===key);if(matches.length!==1)return null;
+    const winners=(r.horses||[]).filter(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);if(winners.length!==1)return null;
+    const winner=winners[0],raw=winner.agf_rank,rank=(raw==null||typeof raw==='boolean'||String(raw).trim()==='')?null:Number(raw);
+    if(!Number.isSafeInteger(rank)||rank<6)return null;
+    const rows=(db0.surprise_cohort_tracking_log||[]).filter(x=>x?.outcome&&['LIVE_PRE_RACE_LOCKED','HISTORICAL_RESEARCH'].includes(x.event_class)&&compositeKey(x)===key);
+    const rec=rows.find(x=>x.event_class===LIVE_CLASS)||rows[0];if(!rec||rec.integrity!=='OK'||!validSnapshot(rec))return null;
+    const no=x=>normalizeHorseNo(x).split('-')[0],n=no(winner.horse_no);if(!n||no(rec.outcome.winner_no)!==n)return null;
+    if((rec.candidates?.BH||[]).slice(0,6).some(h=>no(h.horse_no)===n))return null;
+    const signals=[];for(const kind of ['BMB','ODB'])if((rec.candidates?.[kind]||[]).some(h=>no(h.horse_no)===n))signals.push(kind);
+    if(Number(winner.tr_bmb_candidate)===1)signals.push('TR-BMB');
+    return {horse_no:cleanText(winner.horse_no),horse_name:cleanText(winner.horse_name),agf_rank:rank,signals};
+  }
+  function bhNewPoolStats(target){
+    const out={locked:0,eligible:0,first4:0,first6:0,missing_rank:0,unverified:0,invalid:0};
+    const engine=global.TKP_BET_TEMPLATE_ENGINE;if(!engine||typeof engine.raceKey!=='function'||typeof engine.validExpandedPool!=='function')return out;
+    const races=new Map();for(const r of target?.races||[]){const key=engine.raceKey(r),list=races.get(key)||[];list.push(r);races.set(key,list);}
+    const no=x=>normalizeHorseNo(x).split('-')[0],seen=new Set();
+    for(const rec of target?.surprise_condition_shadow_log||[]){
+      if(rec?.bh_pool_version!=='AGF6_EXPANDED_V1'||seen.has(rec.race_key))continue;seen.add(rec.race_key);out.locked++;
+      if(!engine.validExpandedPool(rec)){out.invalid++;continue;}
+      const matched=races.get(rec.race_key)||[];if(matched.length!==1||!['VERIFIED','VERIFIED_TJK_PAYOUT'].includes(matched[0].result_integrity_status)){out.unverified++;continue;}
+      const winners=(matched[0].horses||[]).filter(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);if(winners.length!==1){out.unverified++;continue;}
+      const n=no(winners[0].horse_no),saved=(rec.agf_field||[]).find(h=>no(h.horse_no)===n),rank=saved?.agf_rank;
+      if(!n||!Number.isSafeInteger(rank)||rank<1){out.missing_rank++;continue;}if(rank<=5)continue;
+      out.eligible++;if((rec.candidates||[]).slice(0,4).some(h=>no(h.horse_no)===n))out.first4++;if((rec.candidates||[]).slice(0,6).some(h=>no(h.horse_no)===n))out.first6++;
+    }
+    return out;
+  }
   function stats(target){
     const rows=logFor(target),kinds=['BH','BMB','ODB','AGF_6_8'];
     const live={},research={};
@@ -410,7 +538,7 @@
       const events=live[kind].resolved_events;
       return [kind,{events,state:events>=150?'REVIEW':'SHADOW',canActivate:false,automaticPromotion:false}];
     }));
-    return {version:VERSION,rows:rows.length,live,research,gates};
+    return {version:VERSION,rows:rows.length,live,research,gates,bh_agf_outside5:bhAgfOutsideFive(rows,target||currentDb()),bh_agf_research:bhAgfResearch(rows,target||currentDb()),bh_new_pool:bhNewPoolStats(target||currentDb())};
   }
   function pct(n,d){return d?`%${Math.round(100*n/d)}`:'-';}
   function esc(value){
@@ -427,8 +555,17 @@
   function trackingHtml(target){
     try{resolvePendingFromDb(target||currentDb());}catch(_e){}
     ensureAutomaticHistoricalResearch(target);
-    const archiveCount=archiveMeetingCount(target);
+    const archiveCount=archiveMeetingCount(target||currentDb());
     const data=stats(target);const labels={BH:'BH1–BH6',BMB:'BMB',ODB:'ODB',AGF_6_8:'AGF sıra 6–8'};
+    const metric=data.bh_agf_outside5;
+    const study=data.bh_agf_research,newPool=data.bh_new_pool;
+    const outsideRanks=Object.entries(study.outside_bh_ranks||{}).sort((a,b)=>Number(a[0])-Number(b[0])).map(([rank,count])=>`${rank}: ${count}`).join(' · ')||'Veri yok';
+    const shadowDb=target||currentDb(),shadow=global.TKP_PRODUCT_HIT_POLICY?.agfShadowReport?.(shadowDb?.settings?.bh_agf_coupon_shadow||[],shadowDb?.races||[])||{locked:0,complete:0,waiting:0,invalid:0,base6:0,alt6:0,baseLegs:0,altLegs:0,singles:0,baseSingles:0,altSingles:0};
+    const evidenceRanks=Object.entries(metric.outside_bh_ranks||{}).sort((a,b)=>Number(a[0])-Number(b[0])).map(([rank,count])=>`${rank}: ${count}`).join(' · ')||'Veri yok';
+    const records=(shadowDb?.settings?.bh_agf_coupon_shadow||[]).filter(x=>global.TKP_PRODUCT_HIT_POLICY?.validAgfShadow?.(x)).slice(-10).reverse();
+    const details=records.map(x=>`<p class="tkpForwardReasonTrackingLine"><b>${esc(x.id)} · ${Number(x.cost)} TL</b><br>${x.base.map((p,i)=>`${i+1}. ayak: ${esc(p.join('/'))} → ${esc(x.alternative[i].join('/'))}`).join(' · ')}</p>`).join('');
+    const outsideHtml=`<p class="tkpForwardReasonTrackingLine"><b>BH dışı kazananlar · AGF sırası (araştırma, ${study.outside_bh_total} kazanan):</b> ${outsideRanks}. Son kayıtlı AGF veya adaylar sonuç sonrası değişmiş olabilir; bu dağılım yarış öncesi başarı değildir.</p><p class="tkpForwardReasonTrackingLine"><b>BH dışı · yarış öncesi AGF kanıtı (${metric.outside_bh_total} kazanan):</b> ${evidenceRanks} · tam AGF kaydı eksik ${metric.missing_snapshot}.</p><p class="tkpForwardReasonTrackingLine"><b>AGF kupon karşılaştırması · aynı maliyet:</b> ${shadow.complete} tamamlanan / ${shadow.locked} kilit · 6/6 mevcut ${shadow.base6}, aday ${shadow.alt6} · ayak mevcut ${shadow.baseLegs}, aday ${shadow.altLegs} · TEK mevcut ${shadow.baseSingles}/${shadow.singles}, aday ${shadow.altSingles}/${shadow.singles} · bekleyen ${shadow.waiting} · geçersiz ${shadow.invalid}. Aday izlenir; mevcut kupon otomatik değiştirilmez.</p><details><summary>Son 10 karşılaştırma · mevcut → AGF adayı</summary>${details||'<p>Henüz karşılaştırma kaydı yok.</p>'}</details>`;
+    const metricHtml=`${outsideHtml}<p class="tkpForwardReasonTrackingLine">Yeni BH düzeni · AGF ilk 5 dışı kazananlarda ilk 6: <b>${newPool.first6}/${newPool.eligible} (${pct(newPool.first6,newPool.eligible)})</b> · ${newPool.locked} aday kilidi · sonuç bekleyen/doğrulanmayan ${newPool.unverified} · AGF sırası eksik ${newPool.missing_rank} · bozuk kilit ${newPool.invalid}. İlk 6 için %90 hedeftir, garanti değildir.</p><p class="tkpForwardReasonTrackingLine">BH ilk 6 · zaman şartı olmadan araştırma: <b>${study.hits}/${study.eligible} (${pct(study.hits,study.eligible)})</b> · AGF 6–8: ${study.agf_6_8_hits}/${study.eligible} · ${study.resolved} doğrulanmış koşu · ${study.reconstructed} yeniden kurulan aday kaydı · AGF sırası eksik: ${study.missing_rank}. Bu hesap kayıtlı son AGF sırasını kullanır; AGF veya adaylar sonuçtan sonra değişmiş olabilir.</p><p class="tkpForwardReasonTrackingLine">Yarış öncesi kanıtla AGF ilk 5 dışı kazananlarda BH ilk 6: <b>${metric.hits}/${metric.eligible} (${pct(metric.hits,metric.eligible)})</b> · AGF 6–8 karşılaştırması: ${metric.agf_6_8_hits}/${metric.eligible} (${pct(metric.agf_6_8_hits,metric.eligible)}) · TJK arşivinden önceki AGF gözlemi: ${metric.recovered_snapshot} · Tam AGF kaydı eksik: ${metric.missing_snapshot} · Sırası eksik: ${metric.missing_rank} · Sonucu doğrulanamayan: ${metric.unverified} · Geçersiz kilit: ${metric.invalid_snapshot}. Arşiv gözlemleri kilit zamanından daha eski olabilir; karşılaştırma seçimleri değiştirmez.</p>`;
     const row=(kind)=>{
       const live=data.live[kind],research=data.research[kind],gate=data.gates[kind];
       const liveRate=live.candidates?pct(live.wins,live.candidates):'-';
@@ -441,7 +578,7 @@
       const sharp=(rec?.agf_movement?.sharp_candidates||[]).map(x=>`${esc(x.horse_no)} ${x.agf_delta==null?'':'%'+x.agf_delta}`).join(' · ')||'-';
       return `<tr><td>${rec.event_class===LIVE_CLASS?'CANLI':'ARAŞTIRMA'}</td><td>${esc(rec.race_date||'-')}</td><td>${esc(rec.hippodrome||'-')}</td><td class="num">${Number(rec.leg)||'-'}</td><td>${fmt('BH')}</td><td>${fmt('BMB')}</td><td>${fmt('ODB')}</td><td>${fmt('AGF_6_8')}</td><td>${sharp}</td><td>${winner}</td></tr>`;
     }).join('');
-    return `<div class="card tkpSurpriseCohortTracker" style="border-left:5px solid #7c3aed;margin:10px 0;"><h2 style="margin:0 0 5px;">🧪 Sürpriz Sinyal Takibi · BH / BMB / ODB / AGF 6–8</h2><p class="muted" style="margin:0 0 8px;">Adaylar yalnız yarış sonucu yokken ve doğrulanabilir başlangıç saatinden önce kilitlenir. AGF hareketi için en az iki zaman damgalı yarış-öncesi örnek gerekir. Bu kart <b>SHADOW / REVIEW</b> izleme aracıdır; kuponu veya puanı otomatik değiştirmez. AGF 9–10 kesinlikle bu kümeye dahil değildir.</p><div class="tableWrap compactBacktest"><table><thead><tr><th>Küme</th><th class="num">Canlı kilit</th><th class="num">Çözülen</th><th class="num">Aday</th><th class="num">Kazanma</th><th class="num">Keskin AGF</th><th class="num">${archiveCount} arşiv araştırma</th><th>Durum</th></tr></thead><tbody>${['BH','BMB','ODB','AGF_6_8'].map(row).join('')}</tbody></table></div><p class="muted" style="margin:8px 0 6px;font-size:11px;">Canlıda her kümede 150 benzersiz çözülen olay olsa bile yalnız <b>REVIEW</b> olur; otomatik terfi yoktur. Araştırma satırları geçmişte sonuç bilindiği için canlı başarı kanıtı sayılmaz.</p><span class="badge">Geçmiş araştırma otomatik bağlanır · ${archiveCount} toplantı</span><div class="tableWrap compactBacktest" style="margin-top:8px;"><table><thead><tr><th>Sınıf</th><th>Tarih</th><th>Pist</th><th class="num">Ayak</th><th>BH</th><th>BMB</th><th>ODB</th><th>AGF 6–8</th><th>Keskin AGF hareketi</th><th>Kazanan</th></tr></thead><tbody>${recent||'<tr><td colspan="10" class="empty">Henüz doğrulanabilir yarış-öncesi cohort snapshotı yok.</td></tr>'}</tbody></table></div></div>`;
+    return `<div class="card tkpForwardReasonTrackingText tkpSurpriseCohortTracker" style="border-left:5px solid #7c3aed;margin:10px 0;"><h2 style="margin:0 0 5px;">🧪 Sürpriz Sinyal Takibi · BH / BMB / ODB / AGF 6–8</h2>${metricHtml}<p class="tkpForwardReasonTrackingLine" style="margin:0 0 8px;">Adaylar yalnız yarış sonucu yokken ve doğrulanabilir başlangıç saatinden önce kilitlenir. AGF hareketi için en az iki zaman damgalı yarış-öncesi örnek gerekir. Bu kart <b>SHADOW / REVIEW</b> izleme aracıdır; kuponu veya puanı otomatik değiştirmez. AGF 9–10 kesinlikle bu kümeye dahil değildir.</p><div class="tableWrap compactBacktest"><table><thead><tr><th>Küme</th><th class="num">Canlı kilit</th><th class="num">Çözülen</th><th class="num">Aday</th><th class="num">Kazanma</th><th class="num">Keskin AGF</th><th class="num">${archiveCount} arşiv araştırma</th><th>Durum</th></tr></thead><tbody>${['BH','BMB','ODB','AGF_6_8'].map(row).join('')}</tbody></table></div><p class="tkpForwardReasonTrackingLine" style="margin:8px 0 6px;font-size:11px;">Canlıda her kümede 150 benzersiz çözülen olay olsa bile yalnız <b>REVIEW</b> olur; otomatik terfi yoktur. Araştırma satırları geçmişte sonuç bilindiği için canlı başarı kanıtı sayılmaz.</p><span class="badge">Geçmiş araştırma otomatik bağlanır · ${archiveCount} toplantı</span><div class="tableWrap compactBacktest" style="margin-top:8px;"><table><thead><tr><th>Sınıf</th><th>Tarih</th><th>Pist</th><th class="num">Ayak</th><th>BH</th><th>BMB</th><th>ODB</th><th>AGF 6–8</th><th>Keskin AGF hareketi</th><th>Kazanan</th></tr></thead><tbody>${recent||'<tr><td colspan="10" class="empty">Henüz doğrulanabilir yarış-öncesi cohort snapshotı yok.</td></tr>'}</tbody></table></div></div>`;
   }
   async function backfillUi(){
     const target=currentDb();const races=Array.isArray(target?.races)?target.races:[];
@@ -464,6 +601,7 @@
   // yanlışlıkla açılış migrasyonuna bağlamaz.
   global.tkpScheduleSurpriseCohortHistoricalBackfill=scheduleHistoricalBackfill;
   global.tkpSurpriseCohortStats=stats;
+  global.tkpBhMissedResearchWinner=bhMissedResearchWinner;
   global.tkpSurpriseCohortTrackingHTML=trackingHtml;
   global.tkpSurpriseCohortBackfillHistoricalUI=backfillUi;
 })(typeof window!=='undefined'?window:globalThis);

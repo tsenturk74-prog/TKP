@@ -1905,6 +1905,29 @@ function tkpSelectSixWindow(totalRaces, markerStarts, requestedAlt=2){
   }
   return {startIdx:Math.max(0,total-6),selection_mode:'LAST_SIX_FALLBACK',official_altili_no:null,official_altili_count:clean.length};
 }
+// At isim hucresi: ad duz metin; ekipman <sup class="tooltipp"> icinde ve aciklamasi href'siz <a class="tooltiptextt">.
+// Bu aciklama baglantilari at adi sayilmaz. Gercek ad baglantisi yoksa null doner.
+function tkpHorseNameLink(nameCell){
+  if(!nameCell)return null;
+  const direct=nameCell.querySelector('a.atisimlink');if(direct)return direct;
+  const bad=a=>!!a.closest('sup,.tooltipp')||/tooltiptext/i.test(a.getAttribute('class')||'')||/ifade eder/i.test((a.getAttribute('title')||'')+' '+(a.textContent||''));
+  return [...nameCell.querySelectorAll('a')].find(a=>!bad(a)&&String(a.textContent||'').replace(/\s+/g,' ').trim().length>1)||null;
+}
+// Ad metnini hucreden alir; ekipman rozetleri/aciklamalari/simgeler cikarilir (Koşmaz notu korunur).
+function tkpHorseNameTextFromCell(nameCell){
+  const c=nameCell.cloneNode(true);
+  c.querySelectorAll('sup,.tooltipp,.tooltiptextt,.aciklamaFancy,img,svg').forEach(e=>e.remove());
+  return String(c.textContent||'').replace(/\s+/g,' ').trim();
+}
+// Ekipman aciklama cumlesi ad icinde kalirsa temizler (son savunma).
+function tkpCleanHorseNameText(name,nameCell){
+  const LEG=/[^.]{0,60}?(?:ifade eder)\.?/gi;
+  const sp=t=>String(t||'').replace(/\s+/g,' ').trim();
+  let out=sp(String(name||'').replace(LEG,' '));
+  if(out)return out;
+  try{out=tkpHorseNameTextFromCell(nameCell);}catch(_e){}
+  return out;
+}
 function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
   let doc = new DOMParser().parseFromString(htmlText, 'text/html');
   // Günlük kullanımda kolektörün TJK koşu-içi İdman/Jokey/Antrenör kanıtını oku.
@@ -1937,6 +1960,17 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
   const raceRoot = (programEl && programEl.querySelector) ? programEl : doc;
   const raceDivs = [...raceRoot.querySelectorAll('div[id^="kosubilgisi-"]')];
   if (!raceDivs.length) throw new Error('TJK sayfasında koşu tablosu (kosubilgisi) bulunamadı.');
+  // TJK bazı toplantı HTML'lerinde ilk koşuyu hiç yayımlamaz; bu yüzden tablo
+  // sırasını 1'den başlatmak mutlak koşu numarasını kaydırır. Her tablo kodunu
+  // yarış sekmesindeki "N. Koşu" etiketiyle eşleştir; X saatleri ve Y.PUAN
+  // kaynak eşleşmeleri aynı resmi koşu numarasını kullansın.
+  const raceNoByCode=new Map();
+  for(const raceDiv of raceDivs){
+    const code=String(raceDiv?.id||'').replace(/^kosubilgisi-+/i,'').trim();
+    const nav=code?doc.getElementById(`anc${code}`):null;
+    const match=String(nav?.textContent||'').replace(/\s+/g,' ').match(/(?:^|\s)(\d{1,2})\s*\.?\s*Koşu\b/i);
+    if(code&&match){const raceNo=Number(match[1]);if(Number.isInteger(raceNo)&&raceNo>0)raceNoByCode.set(code,raceNo);}
+  }
 
   // "6'LI GANYAN Bu koşudan başlar" işareti, koşunun at tablosu ("kosubilgisi- / kosubilgisi--")
   // İÇİNDE değil, onunla KARDEŞ olan "bahisTipiGridContainer" bölümünde yer alır --
@@ -1963,6 +1997,11 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
   const startIdx=sixWindow.startIdx;
   const raceSlice = raceDivs.slice(startIdx, startIdx + 6);
   if (raceSlice.length < 6) throw new Error(`Altılı Ganyan başlangıcından itibaren 6 koşu yok (sadece ${raceSlice.length} koşu bulundu).`);
+  const absRaceNoFor=(raceDiv,index)=>{
+    const code=String(raceDiv?.id||'').replace(/^kosubilgisi-+/i,'').trim();
+    return Number(raceNoByCode.get(code))||startIdx+index+1;
+  };
+  const selectionStartRaceNo=absRaceNoFor(raceSlice[0],0);
 
   function parseConfig(h3El){
     if (!h3El) return {condition:'', distance:null, surface:'', breed:''};
@@ -2029,7 +2068,7 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
   let races = [];
   raceSlice.forEach((raceDiv, idx) => {
     const leg = idx + 1;
-    const absRaceNo=startIdx+idx+1;
+    const absRaceNo=absRaceNoFor(raceDiv,idx);
     const raceCode=String(raceDiv?.id||'').replace(/^kosubilgisi-+/i,'').trim();
     const tjkRaceTime=tjkProgramRaceTime(absRaceNo,raceDiv);
     // Bu koşuya ait üst bilgi (race-config: şart/mesafe/pist) bu div'den ÖNCEKİ
@@ -2052,7 +2091,18 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
       const nameCell = tr.querySelector('.gunluk-GunlukYarisProgrami-AtAdi');
       const hcCell = tr.querySelector('.gunluk-GunlukYarisProgrami-Hc');
       const startCell = tr.querySelector('.gunluk-GunlukYarisProgrami-StartId');
-      const agfCell = tr.querySelector('.gunluk-GunlukYarisProgrami-AGFORAN');
+      // TJK zaman zaman AGF hücresinin sınıfını değiştiriyor. Önce bilinen
+      // şemayı kullan; yoksa yalnız AGF/6'lı Ganyan olarak etiketlenmiş ve
+      // yüzde içeren hücreyi seç. Satırdaki rastgele yüzdeyi AGF sanma.
+      const agfCell = tr.querySelector('.gunluk-GunlukYarisProgrami-AGFORAN')
+        || [...tr.querySelectorAll('td')].find(cell => {
+          const meta = [cell.className, cell.getAttribute('data-label'), cell.getAttribute('aria-label'),
+            cell.getAttribute('title'), ...[...cell.querySelectorAll('[title],[aria-label]')]
+              .flatMap(el => [el.getAttribute('title'), el.getAttribute('aria-label')])]
+            .filter(Boolean).join(' ');
+          return /AGF|6\s*['’]?\s*L[IİıiÜü]\s*GANYAN/i.test(meta)
+            && /%\s*\d{1,3}(?:[.,]\d+)?/.test(`${cell.textContent||''} ${meta}`);
+        }) || null;
       const kiloCell = tr.querySelector('.gunluk-GunlukYarisProgrami-Kilo');
       const derceCell = tr.querySelector('.gunluk-GunlukYarisProgrami-DERECE');
       const son6Cell = tr.querySelector('.gunluk-GunlukYarisProgrami-Son6Yaris');
@@ -2064,7 +2114,7 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
       // eşleştirir. Eksik tek alan yüzünden at satırı düşürülmez.
       if (!nameCell) continue;
       const no = norm(noCell?.textContent || tr.getAttribute('data-start-no') || tr.getAttribute('data-sira') || '');
-      const nameLink = nameCell.querySelector('a');
+      const nameLink = tkpHorseNameLink(nameCell);
       // Koşu SONUÇLANMIŞSA, TJK at isminin hemen yanına gerçek dereceyi ekler:
       // <a>AT ADI<span title="AT ADI bu koşuyu 4. olarak bitirmiştir.">(4)</span></a>
       // Bu span isme dahil edilmeden ÖNCE ayrıca okunup finish_position/winner
@@ -2082,8 +2132,9 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
         }
         name = norm(clone.textContent);
       } else {
-        name = norm(nameCell.textContent);
+        name = norm(tkpHorseNameTextFromCell(nameCell));
       }
+      name = tkpCleanHorseNameText(name, nameCell);
       if (!name) continue;
       // Koşmayan/çekilen at tespiti: TJK'de bu genelde üstü çizili satır ya da
       // "ÇEKİLDİ" notuyla işaretlenir. Bulunursa isme " (KOŞMAZ)" eklenir --
@@ -2196,7 +2247,7 @@ function parseTjkProgramHTML(htmlText, filename, altiliNo=1, preferredHip=''){
 
   const dayName=tkpDayNameFromISO(date);
   const displayFilename=hip ? `${hip==='DEL MAR'?'DELMAR':hip} HTML` : 'HTML';
-  return { file:{sequence_no:null, filename: displayFilename, race_date:date, hippodrome:canonicalHippodrome(hip), altili_no:2, altili_count:Math.max(1,sixWindow.official_altili_count), selection_mode:sixWindow.selection_mode, selection_start_race:startIdx+1, official_altili_no:sixWindow.official_altili_no, official_altili_count:sixWindow.official_altili_count}, races:races.map(r=>({...r,altili_no:2,selection_mode:sixWindow.selection_mode,selection_start_race:startIdx+1})) };
+  return { file:{sequence_no:null, filename: displayFilename, race_date:date, hippodrome:canonicalHippodrome(hip), altili_no:2, altili_count:Math.max(1,sixWindow.official_altili_count), selection_mode:sixWindow.selection_mode, selection_start_race:selectionStartRaceNo, official_altili_no:sixWindow.official_altili_no, official_altili_count:sixWindow.official_altili_count}, races:races.map(r=>({...r,altili_no:2,selection_mode:sixWindow.selection_mode,selection_start_race:selectionStartRaceNo})) };
 }
 
 // --- TJK (tjk.org) "Yarış Sonuçları" sayfası ayrıştırıcısı ---
@@ -2427,14 +2478,14 @@ function parseTjkResultsHTML(htmlText, filename, altiliNo=1, scope={}){
         || cells.find(c=>/SONUCNO|SONUÇNO|DERECE/i.test(String(c.className||'')))
         || cells.find(c=>finishPositionFromResultCell(c)!=null);
       if (!noCell || !nameCell) continue;
-      const nameLink = nameCell.querySelector('a');
+      const nameLink = tkpHorseNameLink(nameCell);
       // KÖK FIX: "StartId" hücresi TJK Sonuç sayfasında GERÇEK at/program numarası
       // DEĞİLDİR (sonuç sırasına yakın ama güvenilmez bir iç sıra numarası) -- gerçek
       // program numarası, at isminin hemen yanında "(N)" olarak tekrar yazılır ve bu,
       // Program/Jokey Performans sayfalarındaki numarayla BİREBİR eşleşir. Eskiden bu
       // "(N)" gürültü sanılıp silinir, StartId kullanılırdı; bu da sonuç birleşiminde
       // atların yanlış numarayla (dolayısıyla yanlış atla) eşleşmesine yol açıyordu.
-      const rawNameFull = norm((nameLink ? nameLink.textContent : nameCell.textContent) || '');
+      const rawNameFull = tkpCleanHorseNameText(norm((nameLink ? nameLink.textContent : tkpHorseNameTextFromCell(nameCell)) || ''), nameCell);
       const resultIdentity=tkpOfficialResultHorseIdentity(rawNameFull,norm(noCell.textContent));
       const no = resultIdentity.no;
       // KULVAR/START NO: "St" sütununun (title="Start No") başlığı bunu doğruluyor --
@@ -3259,7 +3310,9 @@ function parseLiderformExpertHTML(htmlText){
 // Kullanıcı tercihi: eski ODS/VALUE kurallarıyla aynı toplam puan ölçeği.
 // Yorumcu tercih puanları toplanır; kaynak sayısına bölünmez. Aynı kartın
 // kopyaları ve aynı yazarın geniş kuponu önceden tekilleştirilir.
-const TKP_YPUAN_POLICY='R19.42_IDENTITY_INDEPENDENT_TOTAL';
+const TKP_YPUAN_POLICY='R19.45_CONSENSUS_150_CAP';
+const TKP_YPUAN_MIN=0.5;
+const TKP_YPUAN_MAX=150;
 
 // Yerli yarışların tarihsel Y.PUAN ölçeğini değiştirmeden yabancı yorumcu
 // toplamını ayır: yabancı kaynak sayısı az olduğu için ham toplam 2/2,5/3'e
@@ -3270,13 +3323,34 @@ function tkpForeignYpuanRace(race){
   if(city)return !domestic.test(city);
   return Array.isArray(race?.horses)&&race.horses.some(h=>h?.atr_source==='At The Races');
 }
-// Yabancı: ham toplam puan, kaynak sayısına ve sabit 3'e bölünmez.
-// Yerli: orijinal kademeli ölçek korunur.
+function tkpBoundYpuan(value){
+  const n=Number(value);
+  if(!Number.isFinite(n))return null;
+  if(n<=0)return 0;
+  return Math.round(Math.max(TKP_YPUAN_MIN,Math.min(TKP_YPUAN_MAX,n))*100)/100;
+}
+
+// Yerli yorumcu puanı toplam değil, yorumcu başına normalize edilmiş ortak güçtür.
+// Böylece 5 yorumcunun beşi TEK verdiğinde her biri 20 puanlık karşılığa gelir ve
+// toplam 100 olur; 6 yorumcuda karşılık yaklaşık 16,67, toplam yine 100'dür.
+// Bu, az yorumcu varken puanın 14'e düşmesi sorununu çözer; kaynak azlığının
+// güven etkisi ise Y.PUAN'a yapay çarpan eklemek yerine tabloda açıkça gösterilir.
+function tkpYpuanContributorCount(race){
+  const n=Math.round(Number(race?.ypuan_contributor_count));
+  return Number.isFinite(n)&&n>0?n:0;
+}
 function tkpYpuanScaleFromRaw(rawVal,race){
   const x=Number(rawVal);
   if(!Number.isFinite(x))return null;
-  if(tkpForeignYpuanRace(race))return Math.max(0,x);
-  return x<=100?x/2:(x<=200?50+(x-100)/2.5:90+(x-200)/3);
+  if(tkpForeignYpuanRace(race))return tkpBoundYpuan(x);
+  const contributorCount=tkpYpuanContributorCount(race);
+  // Sayısı hiç kaydedilmemiş eski satırın ham toplamını agresifçe şişirme.
+  // Yeni/normal kayıtta sayı her zaman vardır ve aşağıdaki ortak güç ölçeği uygulanır.
+  if(!contributorCount){
+    const legacy=x<=100?x/2:(x<=200?50+(x-100)/2.5:90+(x-200)/3);
+    return tkpBoundYpuan(legacy);
+  }
+  return tkpBoundYpuan(x*100/(14*contributorCount));
 }
 // Eski içe aktarımlar (ör. R16.83 ara sürümü, dosya 510-517) ham toplamı ölçeksiz yazmıştı:
 // ypuan_raw boş, ypuan=ham toplam (örn. 336). Güncel mantıkla aynı ölçek uygulanır; ham değer
@@ -3288,18 +3362,33 @@ function tkpBackfillYpuanScale(dbLike){
   for(const r of x.races){
     let touched=false;
     for(const h of (r?.horses||[])){
-      if(!h||h.ypuan_raw!=null)continue;
+      if(!h)continue;
       if(!String(h.ypuan_source||'').startsWith('COMMENTATOR'))continue;
-      const raw=Number(h.ypuan);
+      const hasRaw=h.ypuan_raw!==null&&h.ypuan_raw!==undefined&&h.ypuan_raw!=='';
+      const raw=Number(hasRaw?h.ypuan_raw:h.ypuan);
       if(!Number.isFinite(raw)||raw<=0)continue;
-      h.ypuan_raw=raw;h.ypuan=tkpYpuanScaleFromRaw(raw,r);horses++;touched=true;
+      const scaled=tkpYpuanScaleFromRaw(raw,r);
+      let rowChanged=false;
+      if(!hasRaw){h.ypuan_raw=raw;rowChanged=true;}
+      if(Number(h.ypuan)!==scaled){h.ypuan=scaled;horses++;rowChanged=true;}
+      if(rowChanged)touched=true;
     }
     if(touched){r.ypuan_policy=TKP_YPUAN_POLICY;races++;changed=true;}
   }
   if(changed&&x.settings){x.settings.ypuan_scale_backfill_last={at:new Date().toISOString(),races,horses};}
   return changed;
 }
-if(typeof globalThis!=='undefined'){globalThis.tkpBackfillYpuanScale=tkpBackfillYpuanScale;globalThis.tkpYpuanScaleFromRaw=tkpYpuanScaleFromRaw;}
+async function tkpRepairAndPersistYpuanScale(dbLike){
+  const x=dbLike||(typeof db!=='undefined'?db:null);
+  if(!tkpBackfillYpuanScale(x))return false;
+  if(typeof globalThis.tkpPersistCollections==='function'){
+    const saved=await globalThis.tkpPersistCollections(['races'],{metaPatch:{settings:x?.settings||{}},label:'ypuan-scarcity-recalibration'});
+    return saved!==false;
+  }
+  if(typeof globalThis.saveDB==='function'){await globalThis.saveDB(false);return true;}
+  return false;
+}
+if(typeof globalThis!=='undefined'){globalThis.tkpBackfillYpuanScale=tkpBackfillYpuanScale;globalThis.tkpRepairAndPersistYpuanScale=tkpRepairAndPersistYpuanScale;globalThis.tkpYpuanScaleFromRaw=tkpYpuanScaleFromRaw;}
 
 function readyCouponAuthorRaceRows(cardsList,{liveOnly=false}={}){
   const rows=new Map(),ready=(cardsList||[]).filter(c=>(c?.readyCoupon===true||READY_COUPON_SOURCES.has(String(c?.source||c?.kind||'').toLowerCase()))&&(!liveOnly||c?._tkp_live_pre_race===true));
@@ -4384,7 +4473,7 @@ function tkpMeetingHipKey(value){
   if(!raw)return '';
   // Normalize provider country annotations without changing persisted historical keys.
   // Strip only known standalone country labels; unknown venue words are retained.
-  const countries=/\b(?:IRLANDA|IRELAND|IRISH|KANADA|CANADA|ABD|USA|UNITED STATES|UNITED STATES OF AMERICA|AMERIKA|AMERICA|INGILTERE|ENGLAND|UNITED KINGDOM|GREAT BRITAIN|BRITAIN|UK|FRANSA|FRANCE|ALMANYA|GERMANY|ITALYA|ITALY|AVUSTRALYA|AUSTRALIA|JAPONYA|JAPAN|GUNEY AFRIKA|SOUTH AFRICA|YENI ZELANDA|NEW ZEALAND|HONG KONG|SILI|CHILE|ARJANTIN|ARGENTINA|BREZILYA|BRAZIL|URUGUAY|BAE|UAE)\b/g;
+  const countries=/\b(?:IRLANDA|IRELAND|IRISH|KANADA|CANADA|ABD|USA|UNITED STATES|UNITED STATES OF AMERICA|AMERIKA|AMERICA|INGILTERE|ENGLAND|UNITED KINGDOM|GREAT BRITAIN|BRITAIN|UK|FRANSA|FRANCE|ALMANYA|GERMANY|ITALYA|ITALY|AVUSTRALYA|AUSTRALIA|JAPONYA|JAPAN|GUNEY AFRIKA|SOUTH AFRICA|YENI ZELANDA|NEW ZEALAND|HONG KONG|SILI|CHILE|ARJANTIN|ARGENTINA|BREZILYA|BRAZIL|URUGUAY|BAE|UAE|MALEZYA|MALAYSIA)\b/g;
   const ascii=raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .replace(/ı/g,'i').toUpperCase().replace(/İ/g,'I')
     .replace(/Ş/g,'S').replace(/Ğ/g,'G').replace(/Ü/g,'U').replace(/Ö/g,'O').replace(/Ç/g,'C');
@@ -4398,6 +4487,8 @@ function tkpMeetingHipKey(value){
   // The trailing 2 is a meeting/session label, NOT a different racecourse.
   // Date, six-race scope and altili number are checked independently below.
   if(/^(?:CONCEPCION|CLUBHIPICODECONCEPCION|CLUBHIPICOCONCEPCION)(?:[12])?$/.test(compact))return 'CONCEPCION';
+  // Selector: SELANGOR 2; bulletin: SELANGOR MALEZYA. Trailing 2 = meeting/session label.
+  if(/^SELANGOR(?:[12])?$/.test(compact))return 'SELANGOR';
   if(compact==='SANTAANITA'||compact==='SANTAANITAPARK')return 'SANTAANITA';
   const canonical=canonicalHippodrome(clean);
   if(!canonical||canonical==='BİLİNMİYOR')return '';

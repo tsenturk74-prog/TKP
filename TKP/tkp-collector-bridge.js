@@ -54,6 +54,7 @@ function tkpMisliImportSummary(job,payload){
  // Collector tarafından HTTP(S) üzerinden sunuluyorsak API aynı süreç/origin'dedir.
  // Sabit 3762, alternatif portta açılan UI'yi yanlış/eski bir Collector'a bağlıyordu.
  const API=/^https?:$/i.test(location.protocol)?location.origin:'http://127.0.0.1:3762';
+ const TKPC_IMPORT_REVISION='TJK_ABSOLUTE_RACE_NUMBER_V1';
  const $=s=>document.querySelector(s);
  let activeJobId='',activePollTimer=null,stopRequested=false,busy=false;
  // V1.1.317: Tarihsel sonuç/destek taramasında her toplantı sonrası aktif sekmeyi
@@ -241,7 +242,7 @@ function tkpMisliImportSummary(job,payload){
       <button id="tkpcXScan" type="button" style="font-weight:800;background:#111827;color:white">𝕏 Son yorumları tara</button>
       <button id="tkpcXRefresh" type="button" style="font-weight:750;background:#fef3c7;border-color:#d97706;color:#78350f">↻ X'i zorla yenile</button>
     </div>
-    <div style="font-size:11px;color:#475569;margin-top:6px">X yalnız bu bölümdeki tarama düğmesine bastığında açılır; otomatik zamanlama kapalıdır. Önce yazdığınız hesapların sayfaları, ardından Takip Edilenler ve Sana Özel akışı taranır. Boşa dönen tek tek at adı X araması kapalıdır; eşleşme toplanan sayfa paylaşımlarında yerel yapılır. X bulguları analizde gösterilir; doğrulanmadan kuponu değiştirmez. Yarış başlamış olsa da sonradan gelen yorumlar ayak tablolarına uygulanır (kullanıcı ayarı · veri sızıntısı riski bilinçli açık).</div>
+    <div style="font-size:11px;color:#475569;margin-top:6px">X taraması bu düğmeyle veya Verileri Topla akışıyla çalışır; otomatik zamanlama kapalıdır. Önce yazdığınız hesapların sayfaları, ardından Takip Edilenler ve Sana Özel akışı taranır. Boşa dönen tek tek at adı X araması kapalıdır; eşleşme toplanan sayfa paylaşımlarında yerel yapılır. Yarış sonrası yorumlar tarihsel/gölge kanıt olarak saklanır; kuponu, puanı veya öğrenmeyi değiştirmez.</div>
     <div id="tkpcXStatus" style="font-size:12px;margin-top:6px"></div><div id="tkpcXPreview" style="margin-top:8px"></div>
   </details>
   <div id="tkpcSimilarSettings" style="display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-top:9px;padding:9px;border:1px solid #ddd6fe;border-radius:8px;background:#faf8ff">
@@ -476,32 +477,23 @@ function tkpMisliImportSummary(job,payload){
   // TJK yarış saatleri Türkiye yerel saatidir; bilgisayar saat diliminden bağımsız UTC+03.
   const value=new Date(`${date}T${time}:00+03:00`);return Number.isFinite(value.getTime())?value.toISOString():'';
  }
- function xRaceHasResult(race){
-  if(!race)return false;
-  if(Number(race?.has_confirmed_results)===1||Number(race?.result_confirmed)===1)return true;
-  const horses=Array.isArray(race?.horses)?race.horses:[];
-  return horses.some(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
- }
- function xFutureRaceEntries(){
-  const now=Date.now();
+ function xRaceEntriesForScan(){
   return xRaces().map((race,index)=>({race,index,start:xRaceDateTime(race,index)}))
-    // V1.1.101: sonuç gelmiş (kirlenmiş) bir ayak ASLA taranmaz — "hatalı veri kabul etmesin".
-    // KULLANICI (zaman kavramı olmasın): başlamış ama SONUÇSUZ ayaklar da taranır; çalıştığı için
-    // geç toplanabiliyor. Zaman şartı (start>now) kaldırıldı; sonuç-koruması (!xRaceHasResult)
-    // korundu. Backtest uygunluğu ayrıca snapshot_time_verified / pre_race_only ile gate'lenir.
-    .filter(item=>!xRaceHasResult(item.race)&&item.start);
+    // Yarış saati eşleştirme içindir; koşu başlamış/sonuçlanmış olması X verisini
+    // toplamaya engel değildir. Sonradan gelen gönderiler gölge/tarihsel kanıt kalır.
+    .filter(item=>item.start);
  }
  function xRaceStartAt(){
-  const future=xFutureRaceEntries();
-  if(future.length) return future.sort((a,b)=>Date.parse(a.start)-Date.parse(b.start))[0].start;
+  const entries=xRaceEntriesForScan();
+  if(entries.length) return entries.sort((a,b)=>Date.parse(a.start)-Date.parse(b.start))[0].start;
   // Yarış saatleri programda yoksa yalnız ilk yarış öncesi yedek manuel saat kullanılabilir.
   const races=xRaces();return races.length?xRaceDateTime(races[0],0):'';
  }
  function xTargetLegs(){
-  return xFutureRaceEntries().map(item=>Number(item.race?.leg)||item.index+1).filter(Boolean);
+  return xRaceEntriesForScan().map(item=>Number(item.race?.leg)||item.index+1).filter(Boolean);
  }
  function xRaceStartMap(){
-  const out={};for(const item of xFutureRaceEntries()) out[String(Number(item.race?.leg)||item.index+1)]=item.start;return out;
+  const out={};for(const item of xRaceEntriesForScan()) out[String(Number(item.race?.leg)||item.index+1)]=item.start;return out;
  }
  // KULLANICI KURALI: "İlk 5 giren işaretlendiyse ve verilerde eksiklik yoksa" sonuç
  // zaten tam sayılır -- TJK Sonuç/Accurate yeniden açılmaz. Eksik/erken bir ayak
@@ -630,17 +622,26 @@ function tkpMisliImportSummary(job,payload){
  }
  function xSearchTerms(races){return xSearchPlan(races).searchTerms;}
  function xScanRequestBody({forceRefresh=false,manualRequest=false}={}){
-  const all=xRaces(),future=xFutureRaceEntries(),races=future.length?future.map(item=>item.race):all,mode='shadow',plan=xSearchPlan(races),validationRoster=xSearchPlan(all,{validationOnly:true}).roster;
-  const latestStart=future.map(item=>item.start).filter(value=>Number.isFinite(Date.parse(value))).sort((a,b)=>Date.parse(b)-Date.parse(a))[0]||xRaceStartAt();
+   const all=xRaces(),entries=xRaceEntriesForScan(),races=entries.length?entries.map(item=>item.race):all,mode='live',plan=xSearchPlan(races),validationRoster=xSearchPlan(all,{validationOnly:true}).roster;
+   const latestStart=entries.map(item=>item.start).filter(value=>Number.isFinite(Date.parse(value))).sort((a,b)=>Date.parse(b)-Date.parse(a))[0]||xRaceStartAt();
   // Kullanıcının takip akışı ayrı bir veri katmanıdır. Yerel ayardan kalmış
   // "yalnız hesaplar" seçimi, takip edilen sayfalardaki yarış yorumlarını sessizce
   // atlıyordu; X taraması artık her zaman dört kaynağı birlikte kullanır.
-  return {date:all[0]?.race_date||$('#tkpcDate').value,hippodrome:all[0]?.hippodrome||$('#tkpcHip').value,altiliNo:Number(all[0]?.altili_no)||2,handles:xHandles(),searchTerms:plan.searchTerms,horseSearchTerms:plan.horseSearchTerms,raceRoster:validationRoster,sourceMode:'both',maxPosts:500,timeoutMs:23000,raceStartAt:latestStart,targetLegs:xTargetLegs(),raceStartMap:xRaceStartMap(),applyMode:mode,cacheMaxAgeMs:15*60*1000,forceRefresh:Boolean(forceRefresh),manualRequest:Boolean(manualRequest),preferFeedPageSearch:true,disableHorseSearchFallback:true};
+   const meetingDate=String(all[0]?.race_date||$('#tkpcDate').value||'');
+   return {date:meetingDate,hippodrome:all[0]?.hippodrome||$('#tkpcHip').value,altiliNo:Number(all[0]?.altili_no)||2,handles:xHandles(),searchTerms:plan.searchTerms,horseSearchTerms:plan.horseSearchTerms,raceRoster:validationRoster,sourceMode:'both',maxPosts:500,timeoutMs:23000,raceStartAt:latestStart,targetLegs:xTargetLegs(),raceStartMap:xRaceStartMap(),applyMode:'live',historicalMode:(Number.isFinite(Date.parse(latestStart))&&Date.now()>=Date.parse(latestStart))||meetingDate<tkpcTurkeyToday(),cacheMaxAgeMs:15*60*1000,forceRefresh:Boolean(forceRefresh),manualRequest:Boolean(manualRequest),preferFeedPageSearch:true,disableHorseSearchFallback:true};
  }
  async function registerXSchedule(){
   // X otomatik planlama kapalıdır. Manuel X taraması scanXKulis() ile çalışır.
   window.__tkpXAutoDisabled=true;
   return false;
+ }
+ // Normal "Verileri Topla" isteği X'i de tarihsel/gölge katmana alır; yarışın
+ // başlaması veya sonuçlanması bu veri toplama kararını etkilemez.
+ function tkpcShouldCollectHistoricalX(job,options={}){
+  if(job?.resultOnly===true||options?.resultOnly===true||options?.finalAgf===true||options?.historicalSupportUpdate===true||options?.historicalTop5Only===true)return false;
+  const sources=[...(job?.sources||[])].map(source=>String(source||'').toLowerCase()).filter(Boolean);
+  if(sources.length&&sources.every(source=>source==='tjk_result'||source==='accurace'))return false;
+  return true;
  }
  // KÖK EKLEME (2026-08-21, kullanıcı talebi — bilinçli risk kabulü): scanXKulis()'in
  // "HARD MANUAL GUARD"ı ve imzası (v11166 regresyon kilidi) DEĞİŞTİRİLMEDİ; bunun yerine
@@ -654,15 +655,17 @@ function tkpMisliImportSummary(job,payload){
  // sunucu bunlar olmadan 400 döner, böylece yanlışlıkla "canlı" gibi işlenemez.
  async function scanXKulisHistorical(meta,races){
   if(!Array.isArray(races)||!races.length)return {ok:false,reason:'no_races'};
-  if(typeof window.tkpApplyHistoricalXKulisPayload!=='function')return {ok:false,reason:'engine_missing'};
-  const startAt=xRaceDateTime(races[0],0);
-  if(!startAt)return {ok:false,reason:'no_start_time'};
+  if(typeof window.tkpApplyXKulisPayload!=='function')return {ok:false,reason:'engine_missing'};
+  const raceStartMap={};
+  for(let index=0;index<races.length;index++){const start=xRaceDateTime(races[index],index);if(start)raceStartMap[String(Number(races[index]?.leg)||index+1)]=start;}
+  const startAt=Object.values(raceStartMap).sort((a,b)=>Date.parse(a)-Date.parse(b))[0]||'';
   const plan=xSearchPlan(races);
-  const body={date:meta.date,hippodrome:meta.hippodrome,altiliNo:2,handles:xHandles(),searchTerms:plan.searchTerms,horseSearchTerms:plan.horseSearchTerms,raceRoster:plan.roster,sourceMode:'both',maxPosts:400,timeoutMs:23000,raceStartAt:startAt,targetLegs:[],raceStartMap:{},applyMode:'historical',historicalMode:true,historicalWindowHours:36,cacheMaxAgeMs:15*60*1000,forceRefresh:false,manualRequest:true,preferFeedPageSearch:true,disableHorseSearchFallback:true};
+  const body={date:meta.date,hippodrome:meta.hippodrome,altiliNo:Number(races[0]?.altili_no)||2,handles:xHandles(),searchTerms:plan.searchTerms,horseSearchTerms:plan.horseSearchTerms,raceRoster:plan.roster,sourceMode:'both',maxPosts:400,timeoutMs:23000,raceStartAt:startAt,targetLegs:[],raceStartMap,applyMode:'live',historicalMode:true,historicalWindowHours:36,cacheMaxAgeMs:15*60*1000,forceRefresh:false,manualRequest:true,preferFeedPageSearch:true,disableHorseSearchFallback:true};
   try{
    const j=await tkpcResilientFetchJson(API+'/api/v1/x/scan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)},{maxAttempts:1,label:`${meta.date} ${tkpcDisplayHip(meta.hippodrome)} X`});
    if(!j?.ok)throw new Error(j?.error||'X taraması başarısız');
-   const report=window.tkpApplyHistoricalXKulisPayload(j,races)||{};
+   const unique=new Map();for(const post of [...(j.posts||[]),...(j.latePosts||[])])unique.set(post.url||[post.author,post.datetime,post.text].join('|'),post);j.posts=[...unique.values()];
+   const report=window.tkpApplyXKulisPayload(j,{mode:'live',racesOverride:races})||{};
    return {ok:true,matched:Number(report?.matched)||0,applied:Number(report?.applied)||0,posts:Number(j?.posts?.length)||0};
   }catch(e){console.warn('[TKP] tarihsel X tarama uyarısı',meta,e);return {ok:false,error:String(e?.message||e)};}
  }
@@ -710,9 +713,7 @@ function tkpMisliImportSummary(job,payload){
   if(window.__tkpXScanRunning)return false;const races=xRaces();if(!races.length){out.textContent='⚠️ Önce tahmini hazırla.';return false;}
   const scanContext=tkpcXContextSignature(races);
   if(typeof window.tkpApplyXKulisPayload!=='function'){out.textContent='❌ X kulis motoru yüklenemedi.';return;}
-  const mode='shadow',start=xRaceStartAt(),future=xFutureRaceEntries();
-  if(mode==='live'&&!start){out.textContent='⚠️ Canlı X etkisi için henüz başlamamış bir koşunun saati gerekli. TJK saatleri yoksa ilk yarış için yedek saati gir.';return false;}
-  if(mode==='live'&&!future.length){out.textContent='⛔ Programdaki tüm saatli koşular başlamış. Sonradan veri uygulanmadı.';return false;}
+   const mode='live';
   window.__tkpXScanRunning=true;if(btn)btn.disabled=true;if(refresh)refresh.disabled=true;out.textContent=`⏳ X ${forceRefresh?'zorla yenileniyor':'açılıyor ve yorumlar taranıyor'}; Takip/Sana Özel/yorumcu sayfaları taranıyor, boşa dönen tek tek at araması kapalı…`;
   try{
    const body=xScanRequestBody({forceRefresh,manualRequest:true});
@@ -734,17 +735,15 @@ function tkpMisliImportSummary(job,payload){
    const removedHandles=tkpcUpdateXHandleHealth(settings,j);
    if(settings){const failed=new Set(j.stats.failedHandleNames||[]),successful=new Set((j.stats.attemptedHandleNames||[]).filter(h=>!failed.has(h)));settings.x_scan_retry_handles=[...new Set([...pending,...plan.planned])].filter(h=>body.handles.includes(h)&&!successful.has(h));settings.x_scan_cursor=plan.nextCursor;settings.x_scan_last_summary={passes:passes.length,remaining:plan.remaining,retryPending:settings.x_scan_retry_handles.length,stats:j.stats,warnings:j.warnings};tkpcCommitXWatchlist(settings,'x-watchlist-scan-progress');}
    // Sunucu yalnız tarama parametrelerini kullanır; uygulama kapsamı istemci tarafında
-   // tekrar eklenir. Başlamış ayaklara aynı payload hiçbir şekilde uygulanmaz.
+   // tekrar eklenir. Yarış sonrası yorumlar puan/kupon etkisi almaz, tarihsel kanıt olarak saklanır.
    j.targetLegs=body.targetLegs;j.raceStartMap=body.raceStartMap;
    if(settings){settings.x_scan_retry_handles=settings.x_scan_retry_handles.filter(h=>!settings.x_disabled_handles?.[h.toLowerCase()]);tkpcCommitXWatchlist(settings,'x-watchlist-health-filter');}
    const rawRaces=races;
    if(tkpcXContextSignature(xRaces())!==scanContext){out.textContent='⚠️ X taraması önceki yarış için tamamlandı ve kayıtlandı; yeni seçilen yarışa uygulanmadı.';return false;}
    // Ağ/browse turu bittiğinde ağır eşleşmeye aynı task içinde dalma; önce UI'ye bir kare ver.
    await new Promise(resolve=>setTimeout(resolve,0));
-   // V1.1.336 (kullanıcı talebi · veri sızıntısı bilinçli): Sunucunun ayırdığı
-   // yarış-sonrası (geç) yorumlar da uygulanan posts setine katılır (tekrarsız).
-   // Nihai uygulama kararı x-kulis-engine'deki TKP_X_APPLY_LATE_POSTS bayrağındadır;
-   // bayrak kapalıysa motor bu yorumları zaten yine kesme korumasıyla eler.
+   // Sunucunun ayırdığı yarış-sonrası yorumlar tekrarsız biçimde kayıt paketine
+   // eklenir; puanlama katmanı bunları tarihsel/gölge kanıt olarak saklar.
    if(Array.isArray(j.latePosts)&&j.latePosts.length){
      const keyOf=p=>p.url||[p.author,p.datetime,p.text].join('|');
      const seen=new Set((j.posts||[]).map(keyOf));
@@ -782,8 +781,8 @@ function tkpMisliImportSummary(job,payload){
     await new Promise(resolve=>setTimeout(resolve,0));$('#buildBudgetCoupon')?.click();
    }
    const st=j.stats||{};
-   // Yarış başladıktan sonra atılan gönderiler: tahmine/öğrenmeye KATILMAZ (veri sızıntısı olur),
-   // yalnız ayrı kayıt olarak saklanır ve altta listelenir.
+   // Yarış başladıktan sonra atılan gönderiler: tahmin/öğrenme puanını değiştirmez;
+   // ayrı tarihsel kayıt olarak saklanır ve altta listelenir.
    const latePosts=Array.isArray(j.latePosts)?j.latePosts:[];
    if(latePosts.length&&settings){
     try{
@@ -807,11 +806,11 @@ function tkpMisliImportSummary(job,payload){
    const attempted=Array.isArray(st.attemptedHandleNames)?new Set(st.attemptedHandleNames.map(x=>String(x).toLowerCase())):null;
    const unopened=attempted?(body.handles||[]).filter(x=>!attempted.has(String(x).toLowerCase())):[];
    out.textContent=`✅ ${j.posts?.length||0} yorum ${j.cached?'kayıtlı veriden kullanıldı; X yeniden açılmadı':'tarandı'} · hesap: ${Number(st.requestedHandles??j.handles?.length)||0} tanımlı / ${Number(st.attemptedHandles)||0} profil açıldı / ${Number(st.matchedAuthors)||0} eşleşen yazar${unopened.length?` · açılmayan: ${unopened.map(x=>'@'+x).join(', ')}`:''} · ${report.matched} at eşleşti · ${Number(report.applied)||0} atta gerçek X etkisi oluştu · ${st.horseSearchSkipped?'tekil at araması atlandı; sayfa/takip akışı kullanıldı · ':''}${mode==='live'?(Number(report.applied)>0?`${body.targetLegs?.length||0} başlamamış ayak için Y.PUAN/kuponlar güncellendi`:'eşleşmeler nötr kaldı; tahmin puanı değiştirilmedi'):'tahmin değiştirilmedi'}.`;
-   if(latePosts.length)out.textContent+=` ⏱️ ${latePosts.length} yarış sonrası X yorumu ayak tablolarına uygulandı ve ayrı kayda alındı (kullanıcı ayarı).`;
+   if(latePosts.length)out.textContent+=` ⏱️ ${latePosts.length} geç saatte bulunan X yorumu canlı toplantı akışına eklendi.`;
    out.textContent+=` ${chainState.passes.filter(p=>p.ok!==false).length}/${chainState.passes.length} tur yanıt verdi${plan.remaining?` · taramaya kalan ${plan.remaining} hesap`:''}; aynı gönderiler tek sayıldı.`;
    if(discovered.length)out.textContent+=` Akıştan ${discovered.length} yeni yorumcu izlemeye eklendi: ${discovered.map(h=>'@'+h).join(', ')}. Başarı şartları korunuyor.`;
    if(report.quality)out.textContent+=` Veri kontrolü: ${report.quality.accepted} geçerli / ${report.quality.duplicates} tekrar / ${report.quality.rejected} elenen kayıt.`;
-   if(report.blockedReason)out.textContent='⚠️ Yarış öncesi geçerli zaman kanıtı bulunamadı; mevcut güvenli X kaydı korundu. '+out.textContent;
+   if(report.blockedReason)out.textContent='⚠️ X gönderileri ayrı tarihsel kayıt olarak korunuyor; tahmin etkisi için yarış öncesi zaman kanıtı yok. '+out.textContent;
    if(removedHandles.length){xHandles();out.textContent+=` Bulunamadığı doğrulanan hesaplar izleme listesinden çıkarıldı: ${removedHandles.map(h=>'@'+h).join(', ')}.`;}
    if(Number(st.imagesFound)>0)out.textContent+=` Görsel işlemleri: ${Number(st.imagesFound)||0} bulundu / ${Number(st.imagesRead)||0} okundu / ${Number(st.imageRowsVerified)||0} ayak tarih ve programla eşleşti / ${Number(st.imagesSkipped)||0} atlandı / ${Number(st.imageErrors)||0} okuma hatası. Belirsiz sayılar kullanılmadı.`;
    if(j.partial||j.warnings?.length)out.textContent+=` ⚠️ Kısmi tarama · okunamayan hesaplar: ${(st.failedHandleNames||[]).map(x=>'@'+x).join(', ')||'yok'} · ${j.warnings?.length||0} kaynak/görsel uyarısı.`;
@@ -857,7 +856,7 @@ async function autoTjkFinalCheck(){
   // oturum için canlı otomasyonu açıkça etkinleştirirse timer buraya girebilir.
   if(window.__tkpLiveAutomationEnabled!==true||window.__tkpTjkFinalAutoDisabled===true)return false;
   if(window.__tkpTjkFinalRunning||activeJobId)return false;
-  const future=xFutureRaceEntries().sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));if(!future.length)return false;
+  const future=xRaceEntriesForScan().filter(item=>Date.parse(item.start)>Date.now()).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));if(!future.length)return false;
   const mins=(Date.parse(future[0].start)-Date.now())/60000;if(mins<=0||mins>30)return false;
   const races=xRaces(),date=races[0]?.race_date||$('#tkpcDate')?.value,hip=races[0]?.hippodrome||$('#tkpcHip')?.value;if(!date||!hip||isForeignHip(hip)||String(date)!==tkpcTurkeyToday()||!races.some(r=>String(r?.program_source||'').toUpperCase()==='TJK_PROGRAM'&&String(r?.tjk_race_time||'').trim()))return false;
   // Kullanıcı kuralı: Son AGF + KOŞMAZ için yalnız BİR kez, toplantının ilk yaklaşan
@@ -890,7 +889,7 @@ async function autoTjkFinalCheck(){
   return false;
 
   if(window.__tkpLiveAutomationEnabled!==true||window.__tkpTipsterFinalRunning||window.__tkpTjkFinalRunning||activeJobId)return false;
-  const future=xFutureRaceEntries().sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));if(!future.length)return false;
+  const future=xRaceEntriesForScan().filter(item=>Date.parse(item.start)>Date.now()).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));if(!future.length)return false;
   const mins=(Date.parse(future[0].start)-Date.now())/60000;if(mins<=25||mins>40)return false;
   const races=xRaces(),date=races[0]?.race_date||$('#tkpcDate')?.value,hip=races[0]?.hippodrome||$('#tkpcHip')?.value;if(!date||!hip||String(date)!==tkpcTurkeyToday())return false;
   const key=`tkp_tipster_t40|${date}|${hip}|${Number(races[0]?.altili_no)||2}`;try{if(localStorage.getItem(key)==='done')return false;}catch{}
@@ -927,6 +926,11 @@ async function autoTjkFinalCheck(){
    const finalImport=await previewAndImport(j.job.id,job,{finalAgf:true});
    // previewAndImport normal ana program içe aktarma yolunu kullanır; böylece değişen AGF,
    // koşmayanlar, bütün bağlı tablo/cache/kuponlar tek veri kaynağından yenilenir.
+   const importedAgfCount=xRaces().reduce((count,race)=>count+(race.horses||[]).filter(h=>h?.agf!==null&&h?.agf!==undefined&&String(h.agf).trim()!==''&&Number.isFinite(Number(h.agf))&&Number(h.agf)>0).length,0);
+   if(!importedAgfCount){
+    status('⚠️ TJK Program dosyası alındı; ancak içe aktarılan atlarda geçerli AGF yüzdesi bulunamadı. AGF yenilemesi doğrulanamadı; resmi sayfa yapısı/AGF hücresi kontrol edilmeli.');
+    return false;
+   }
    status(finalImport?.reused
     ?'✅ Son AGF kontrol edildi · AGF/KOŞMAZ değişmedi; kayıtlı tahmin, tablolar ve üç kupon açıldı, yeniden hesaplanmadı.'
     :'✅ Son AGF tamamlandı · değişen AGF/KOŞMAZ işlendi · tahmin, ayak tabloları, üç kupon ve portföy güncellendi.');return true;
@@ -2009,11 +2013,15 @@ function historicalSupportSourcesForRaces(races){
    ?j.files.filter(f=>String(f?.source||'').trim().toLowerCase()==='tjk_result'||/^TJK_SONUC\.html$/i.test(String(f?.name||'')))
    :[];
   const incomingHashes=collectorFileHashes(j.files),existingRecord=!resultMode&&!options.historicalRaces?.length?collectorMeetingRecord(job.meeting):null;
-  if(existingRecord&&sameCollectorHashes(existingRecord.collector_source_hashes,incomingHashes)&&!tkpYpuanPolicyRequiresImport(existingRecord,j.files)){
+  if(existingRecord&&existingRecord.collector_import_revision===TKPC_IMPORT_REVISION&&sameCollectorHashes(existingRecord.collector_source_hashes,incomingHashes)&&!tkpYpuanPolicyRequiresImport(existingRecord,j.files)){
    let opened=false;
    try{if(typeof renderSavedPredictionByFileId==='function')opened=Boolean(await renderSavedPredictionByFileId(existingRecord.id));}catch(error){console.warn('Kayıtlı toplantı açma uyarısı',error);}
-   status(`✅ Veri aynı · siteler açılmadı, dosyalar ve yarış kaydı yeniden yazılmadı${opened?' · kayıtlı tahmin açıldı':''}.`);
-   return {reused:true,recordId:existingRecord.id};
+   const currentRaces=Array.isArray(window.__lastPredictionPayload?.races)?window.__lastPredictionPayload.races:[];
+   let historicalXReport=null;
+   if(tkpcShouldCollectHistoricalX(job,options)&&currentRaces.length)historicalXReport=await scanXKulisHistorical(job.meeting,currentRaces);
+   const xNote=historicalXReport?(historicalXReport.ok?` · X ${historicalXReport.posts} post / ${historicalXReport.matched} at tarihsel kayda alındı`:` · X uyarısı: ${String(historicalXReport.error||historicalXReport.reason||'alınamadı').slice(0,90)}`):'';
+   status(`✅ Yarış verisi aynı · kaynak dosyaları yeniden yazılmadı${opened?' · kayıtlı tahmin açıldı':''}${xNote}.`);
+   return {reused:true,recordId:existingRecord.id,historicalXReport};
   }
   const importCheckpoint=options.backupBeforeImport?await backupTkpDb():null;
   let historicalMerge={horseMerged:0};
@@ -2188,6 +2196,8 @@ function historicalSupportSourcesForRaces(races){
   if(trPuan.length&&(coverageNow('tr_ganyan')<payloadRaces||trHorseMissing)){window.__tkpLastLayerImportResult=null;await triggerInput($('#accurateFolderFile'),trPuan);}
   const scope=job.scope&&job.scope.raceFrom?`${job.scope.raceFrom}-${job.scope.raceTo}`:'TJK otomatik';
   const races=Array.isArray(window.__lastPredictionPayload?.races)?window.__lastPredictionPayload.races:[];
+  let historicalXReport=null;
+  if(tkpcShouldCollectHistoricalX(job,options)&&races.length)historicalXReport=await scanXKulisHistorical(job.meeting,races);
   const coverage=key=>races.filter(r=>(r.horses||[]).some(h=>h?.[key]!==null&&h?.[key]!==undefined&&h?.[key]!=='' )).length;
   const jbygLegs=coverage('jbyg'),galopLegs=coverage('g800'),trLegs=coverage('tr_ganyan'),ypuanLegs=coverage('ypuan');
   const support=historicalSupportCoverage(races),by=job.quality?.bySource||{},missing=[],requestedSources=new Set(job.sources||[]);
@@ -2266,22 +2276,25 @@ function historicalSupportSourcesForRaces(races){
   if(requested.has('hkjc')) foreignBits.push(`HKJC ${coverage('foreign_context_score')}/${payloadRaces}`);
   if(requested.has('racenet')) foreignBits.push(`Racenet ${coverage('foreign_context_score')}/${payloadRaces}`);
   const foreignSourceLabel=foreignMeeting&&foreignBits.length?` · dış kaynak ${foreignBits.join(' · ')}`:'';
+  const historicalXNote=historicalXReport
+   ?(historicalXReport.ok?` · X ${historicalXReport.posts} post / ${historicalXReport.matched} at işlendi`:` · X uyarısı: ${String(historicalXReport.error||historicalXReport.reason||'alınamadı').slice(0,90)}`)
+   :'';
   const importedRecord=collectorMeetingRecord(job.meeting);
   if(importedRecord&&Object.keys(incomingHashes).length){
-   importedRecord.collector_source_hashes={...(importedRecord.collector_source_hashes||{}),...incomingHashes};importedRecord.collector_imported_at=new Date().toISOString();
+   importedRecord.collector_source_hashes={...(importedRecord.collector_source_hashes||{}),...incomingHashes};importedRecord.collector_imported_at=new Date().toISOString();importedRecord.collector_import_revision=TKPC_IMPORT_REVISION;
    const report=window.__lastPredictionPayload?.ypuan_import_report;
    if(report?.policy&&String(report.date)===String(job.meeting?.date)){importedRecord.ypuan_policy=report.policy;importedRecord.ypuan_import_report=report;}
    try{if(typeof saveDB==='function')await saveDB(false);}catch(error){console.warn('Toplayıcı hash kaydı yazılamadı',error);}
   }
   const liderformLabel=liderformRequested?` · Liderform ${liderformFiles}/${liderformExpected} uzman`:'';
-  status(`${missing.length?'⚠️ Kısmi veri ·':'✅'} ${payloadRaces} ayak oluşturuldu · 2. Altılı ${scope}${foreignMeeting?` · toplam Y.PUAN ${ypuanLegs}/${payloadRaces}`:` · TR PUAN ${trLegs}/${payloadRaces} · toplam Y.PUAN ${ypuanLegs}/${payloadRaces}`} · kupon dosyası ${readyCount}/${readySites.length} · eşleşen kaynak ${matchedReadyCount}/${readySites.length}${misliSummary}${liderformLabel}${foreignSourceLabel} · ${jbygLabel}${optionalNote}`);
+  status(`${missing.length?'⚠️ Kısmi veri ·':'✅'} ${payloadRaces} ayak oluşturuldu · 2. Altılı ${scope}${foreignMeeting?` · toplam Y.PUAN ${ypuanLegs}/${payloadRaces}`:` · TR PUAN ${trLegs}/${payloadRaces} · toplam Y.PUAN ${ypuanLegs}/${payloadRaces}`} · kupon dosyası ${readyCount}/${readySites.length} · eşleşen kaynak ${matchedReadyCount}/${readySites.length}${misliSummary}${liderformLabel}${foreignSourceLabel}${historicalXNote} · ${jbygLabel}${optionalNote}`);
   // R17 AutoGluon canlı skorlama importu ASLA bekletmez. Sidecar yoksa R16.94
   // kesintisiz devam eder; challenger yalnız promotion gate geçmişse sıralamayı etkiler.
   try{if(typeof window.tkpR17ScheduleLiveScore==='function')window.tkpR17ScheduleLiveScore(races,{delayMs:50});}catch(_e){}
   // R18.2 analytics runs independently; failed/blocked promotion never changes Champion output.
   try{if(typeof window.tkpR18ScheduleLiveScore==='function')window.tkpR18ScheduleLiveScore(races,{delayMs:90,budget:1500});}catch(_e){}
   importCommitted=true;
-  return {recordId:importedRecord?.id||null,payloadRaces,jbygLegs,galopLegs,trLegs,ypuanLegs};
+  return {recordId:importedRecord?.id||null,payloadRaces,jbygLegs,galopLegs,trLegs,ypuanLegs,historicalXReport};
   }catch(error){
    // V1.1.282 FINAL HARDENING: önce batch kuyruğunu İPTAL et, sonra checkpoint'e
    // dön. Böylece yarım mutasyon hiçbir koşulda endDbBatch/saveDB ile tekrar yazılmaz.

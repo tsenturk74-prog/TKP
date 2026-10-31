@@ -105,6 +105,7 @@ function refresh(){
  if(typeof g.renderCouponCard==='function')for(const role of ['main','alt','surprise'])g.renderCouponCard(role);
  // R19.47.50: SÜRPRİZ ÖNERİ (Bomba Avcısı) panelini de tazele; sonuç gelince beklemeden dolsun.
  if(typeof g.__tkpRefreshBombHunterPane==='function'){try{g.__tkpRefreshBombHunterPane();}catch(_e){}}
+ if(typeof g.__tkpRefreshShortGanyanPane==='function'){try{g.__tkpRefreshShortGanyanPane();}catch(_e){}}
  refreshOverview();
 }
 let timer=0;

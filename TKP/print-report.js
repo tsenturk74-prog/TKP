@@ -113,7 +113,7 @@
         const key=typeof tkpBombHunterRaceKey==='function'?tkpBombHunterRaceKey(r):'';
         const log=(typeof db!=='undefined'&&Array.isArray(db?.bomb_hunter_shadow_log))?db.bomb_hunter_shadow_log:[];
         const frozen=key?log.find(z=>z?.race_key===key):null;
-        if(frozen?.candidates?.length) candidates=frozen.candidates.slice();
+        if(frozen?.candidates?.length) candidates=typeof tkpBombHunterThreeFromRows==='function'?tkpBombHunterThreeFromRows(r,frozen.candidates):frozen.candidates.slice();
         else {
           const resultKnown=(r.horses||[]).some(h=>Number(h?.winner)===1||Number(h?.finish_position)===1);
           if(!resultKnown && typeof tkpBombHunterCandidates==='function') candidates=tkpBombHunterCandidates(r).map((z,i)=>({rank:i+1,horse_no:String(z.h?.horse_no||''),horse_name:z.h?.horse_name||'',score:Number(z.score)||0,reasons:z.reasons||[]}));

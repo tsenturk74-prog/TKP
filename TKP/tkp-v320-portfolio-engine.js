@@ -174,7 +174,7 @@ function bestCounts(orders,maxCombos,maxK=10,fixedSingles=null,sharedMode=false,
   return best;
 }
 function couponUnit(coupon){const u=n(coupon?.unit,0);return u>0?u:1;}
-function userCap(coupon,fallback=3000){for(const v of [coupon?.userCapTL,coupon?.maxBudgetTL,coupon?.inputCapTL,coupon?.budgetTL]){const x=n(v,0);if(x>0)return Math.max(700,Math.min(2000,x));}return fallback;}
+function userCap(coupon,fallback=3000){for(const v of [coupon?.userCapTL,coupon?.maxBudgetTL,coupon?.inputCapTL,coupon?.budgetTL]){const x=n(v,0);if(x>0)return Math.max(700,Math.min(3000,x));}return fallback;}
 function allocationTarget(coupon,profile){
   const cap=userCap(coupon,profile.targetBudgetTL),difficultyTarget=n(coupon?.budgetTL,0);
   return difficultyTarget>0?Math.min(cap,Math.max(Math.min(1000,cap),difficultyTarget)):cap;
